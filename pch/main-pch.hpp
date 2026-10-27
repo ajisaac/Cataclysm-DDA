@@ -90,6 +90,4 @@
 #   include "platform_win.h"
 #endif
 
-#if defined(TILES)
-#   include <sdl_wrappers.h>
-#endif
+#include <sdl_wrappers.h>

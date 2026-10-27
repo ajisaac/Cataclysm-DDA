@@ -890,8 +890,6 @@ ifeq ($(TILES), 1)
     endif
   endif
 
-  DEFINES += -DTILES
-
   ifeq ($(TARGETSYSTEM),WINDOWS)
     ifndef DYNAMIC_LINKING
       # These differ depending on what SDL2 is configured to use.

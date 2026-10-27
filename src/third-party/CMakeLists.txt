@@ -89,109 +89,107 @@ target_link_libraries(
         )
 
 # ImGUI
-if (TILES)
-        if (USE_SDL3)
-            set(_imgui_backend_sources
-                imgui/imgui_impl_sdl3.cpp
-                imgui/imgui_impl_sdl3.h
-                imgui/imgui_impl_sdlrenderer3.cpp
-                imgui/imgui_impl_sdlrenderer3.h
-                )
-        else ()
-            set(_imgui_backend_sources
-                imgui/imgui_impl_sdl2.cpp
-                imgui/imgui_impl_sdl2.h
-                imgui/imgui_impl_sdlrenderer2.cpp
-                imgui/imgui_impl_sdlrenderer2.h
-                )
-        endif ()
-        set(_imgui_freetype_sources "")
-        set(_imgui_freetype_libraries "")
-        if (NOT ANDROID)
-            find_package(Freetype REQUIRED)
-            set(_imgui_freetype_sources
-                imgui/imgui_freetype.cpp
-                imgui/imgui_freetype.h
-                )
-            set(_imgui_freetype_libraries Freetype::Freetype)
-        endif ()
-        add_library(
-                imgui
-                STATIC
-                imgui/imconfig.h
-                imgui/imgui.cpp
-                imgui/imgui.h
-                imgui/imgui_demo.cpp
-                imgui/imgui_draw.cpp
-                ${_imgui_freetype_sources}
-                ${_imgui_backend_sources}
-                imgui/imgui_internal.h
-                imgui/imgui_stdlib.cpp
-                imgui/imgui_stdlib.h
-                imgui/imgui_tables.cpp
-                imgui/imgui_widgets.cpp
-                imgui/imstb_rectpack.h
-                imgui/imstb_textedit.h
-                imgui/imstb_truetype.h
-                )
-
-        target_include_directories(
-                imgui
-                SYSTEM
-                PUBLIC
-                ${CMAKE_CURRENT_SOURCE_DIR}
-                )
-
-        if (NOT USE_SDL3)
-            target_include_directories(
-                    imgui
-                    SYSTEM
-                    PRIVATE
-                    ${SDL2_INCLUDE_DIR}/..
-                    )
-        endif ()
-
-        target_compile_options(
-                imgui
-                PRIVATE
-                -w
-                )
-
-        if (USE_SDL3)
-            if (ANDROID)
-                target_link_libraries(imgui PUBLIC SDL3::SDL3)
-            elseif (NOT DYNAMIC_LINKING)
-                target_link_libraries(imgui PUBLIC
-                    $<IF:$<TARGET_EXISTS:SDL3::SDL3-static>,SDL3::SDL3-static,SDL3::SDL3>
-                    ${_imgui_freetype_libraries}
-                )
-            else()
-                target_link_libraries(imgui PUBLIC
-                    SDL3::SDL3
-                    ${_imgui_freetype_libraries}
-                )
-            endif ()
-        else ()
-            if (NOT DYNAMIC_LINKING)
-                target_link_libraries(imgui PUBLIC
-                    SDL2::SDL2-static
-                    ${_imgui_freetype_libraries}
-                )
-            else()
-                target_link_libraries(imgui PUBLIC
-                    SDL2::SDL2
-                    ${_imgui_freetype_libraries}
-                )
-            endif ()
-        endif ()
-
-
-        target_link_libraries(
-                third-party
-                INTERFACE
-                imgui
-                )
+if (USE_SDL3)
+    set(_imgui_backend_sources
+        imgui/imgui_impl_sdl3.cpp
+        imgui/imgui_impl_sdl3.h
+        imgui/imgui_impl_sdlrenderer3.cpp
+        imgui/imgui_impl_sdlrenderer3.h
+        )
+else ()
+    set(_imgui_backend_sources
+        imgui/imgui_impl_sdl2.cpp
+        imgui/imgui_impl_sdl2.h
+        imgui/imgui_impl_sdlrenderer2.cpp
+        imgui/imgui_impl_sdlrenderer2.h
+        )
 endif ()
+set(_imgui_freetype_sources "")
+set(_imgui_freetype_libraries "")
+if (NOT ANDROID)
+    find_package(Freetype REQUIRED)
+    set(_imgui_freetype_sources
+        imgui/imgui_freetype.cpp
+        imgui/imgui_freetype.h
+        )
+    set(_imgui_freetype_libraries Freetype::Freetype)
+endif ()
+add_library(
+        imgui
+        STATIC
+        imgui/imconfig.h
+        imgui/imgui.cpp
+        imgui/imgui.h
+        imgui/imgui_demo.cpp
+        imgui/imgui_draw.cpp
+        ${_imgui_freetype_sources}
+        ${_imgui_backend_sources}
+        imgui/imgui_internal.h
+        imgui/imgui_stdlib.cpp
+        imgui/imgui_stdlib.h
+        imgui/imgui_tables.cpp
+        imgui/imgui_widgets.cpp
+        imgui/imstb_rectpack.h
+        imgui/imstb_textedit.h
+        imgui/imstb_truetype.h
+        )
+
+target_include_directories(
+        imgui
+        SYSTEM
+        PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+
+if (NOT USE_SDL3)
+    target_include_directories(
+            imgui
+            SYSTEM
+            PRIVATE
+            ${SDL2_INCLUDE_DIR}/..
+            )
+endif ()
+
+target_compile_options(
+        imgui
+        PRIVATE
+        -w
+        )
+
+if (USE_SDL3)
+    if (ANDROID)
+        target_link_libraries(imgui PUBLIC SDL3::SDL3)
+    elseif (NOT DYNAMIC_LINKING)
+        target_link_libraries(imgui PUBLIC
+            $<IF:$<TARGET_EXISTS:SDL3::SDL3-static>,SDL3::SDL3-static,SDL3::SDL3>
+            ${_imgui_freetype_libraries}
+        )
+    else()
+        target_link_libraries(imgui PUBLIC
+            SDL3::SDL3
+            ${_imgui_freetype_libraries}
+        )
+    endif ()
+else ()
+    if (NOT DYNAMIC_LINKING)
+        target_link_libraries(imgui PUBLIC
+            SDL2::SDL2-static
+            ${_imgui_freetype_libraries}
+        )
+    else()
+        target_link_libraries(imgui PUBLIC
+            SDL2::SDL2
+            ${_imgui_freetype_libraries}
+        )
+    endif ()
+endif ()
+
+
+target_link_libraries(
+        third-party
+        INTERFACE
+        imgui
+        )
 
 # We use snmalloc in header only mode
 file(GLOB SNMALLOC_HEADERS snmalloc/**/*)

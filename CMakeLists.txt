@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-option(TILES "Build graphical tileset version." "ON")
-option(USE_SDL3 "Build against SDL3 instead of SDL2 (requires TILES)." "${TILES}")
+# SDL tiles is the only renderer -- the curses build was removed. Kept as an
+# option so that an explicit -DTILES=OFF fails loudly instead of being ignored.
+option(TILES "Build graphical tileset version (required)." "ON")
+option(USE_SDL3 "Build against SDL3 instead of SDL2." "ON")
 if (USE_SDL3)
     set(VCPKG_MANIFEST_FEATURES "sdl3")
-elseif (TILES)
+else()
     set(VCPKG_MANIFEST_FEATURES "sdl2")
 endif()
 project(CataclysmDDA)
@@ -92,9 +94,7 @@ endif ()
 if ("${CMAKE_SYSTEM_NAME}" MATCHES "Darwin")
     set(_OS_DARWIN_ 1)
     add_definitions(-DMACOSX)
-    if (TILES)
-        add_definitions(-DOSX_SDL2_LIBS)
-    endif ()
+    add_definitions(-DOSX_SDL2_LIBS)
 endif ()
 
 include(CheckCXXCompilerFlag)
@@ -309,7 +309,7 @@ endif ()
 find_package(ZLIB REQUIRED)
 
 # Check for build types and libraries
-if (TILES AND USE_SDL3)
+if (USE_SDL3)
     message(STATUS "Searching for SDL3 library --")
     # SDL_SetGPURenderState and SDL_GetGPURendererDevice were added in SDL 3.4.0;
     # the GPU shader path requires that floor.
@@ -335,10 +335,10 @@ if (TILES AND USE_SDL3)
         message(FATAL_ERROR
                 "USE_SDL3=ON requires SDL3_image to be installed.")
     endif ()
-    add_definitions(-DTILES -DUSE_SDL3)
+    add_definitions(-DUSE_SDL3)
 endif ()
 
-if (TILES AND NOT USE_SDL3)
+if (NOT USE_SDL3)
     # Find SDL, SDL_ttf & SDL_image for graphical install
     message(STATUS "Searching for SDL2 library --")
     if (NOT CMAKE_FIND_PACKAGE_PREFER_CONFIG)
@@ -378,7 +378,6 @@ if (TILES AND NOT USE_SDL3)
                  Please install the SDL2_image development libraries, \
                  See doc/c++/COMPILING-CMAKE.md for details and more info.")
     endif ()
-    add_definitions(-DTILES)
 endif ()
 
 if (SOUND AND USE_SDL3)
@@ -494,14 +493,12 @@ if (RELEASE)
         ${CMAKE_SOURCE_DIR}/LICENSE-OFL-Terminus-Font.txt
         ${CMAKE_SOURCE_DIR}/VERSION.txt
         TYPE DOC)
-    if (TILES)
-        if (USE_PREFIX_DATA_DIR)
-            install(DIRECTORY ${CMAKE_SOURCE_DIR}/gfx
-                TYPE DATA)
-        else()
-            install(DIRECTORY ${CMAKE_SOURCE_DIR}/gfx
-                DESTINATION .)
-        endif()
+    if (USE_PREFIX_DATA_DIR)
+        install(DIRECTORY ${CMAKE_SOURCE_DIR}/gfx
+            TYPE DATA)
+    else()
+        install(DIRECTORY ${CMAKE_SOURCE_DIR}/gfx
+            DESTINATION .)
     endif()
 endif()
 

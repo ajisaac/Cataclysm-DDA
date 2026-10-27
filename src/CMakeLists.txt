@@ -47,242 +47,238 @@ add_custom_command(
         COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/version.cmake
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-# Build tiles version if requested
-if (TILES)
-    add_library(
-            cataclysm-tiles-common OBJECT
-            ${CATACLYSM_DDA_SOURCES}
-            ${CATACLYSM_DDA_HEADERS})
-    target_include_directories(cataclysm-tiles-common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+# The SDL tiles build -- the only build; the curses version was removed.
+add_library(
+        cataclysm-tiles-common OBJECT
+        ${CATACLYSM_DDA_SOURCES}
+        ${CATACLYSM_DDA_HEADERS})
+target_include_directories(cataclysm-tiles-common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
-    target_link_libraries(cataclysm-tiles-common PUBLIC third-party)
+target_link_libraries(cataclysm-tiles-common PUBLIC third-party)
 
-    if (WIN32)
-        add_definitions(-DUSE_WINMAIN)
-        add_executable(
-                cataclysm-tiles WIN32
-                ${MAIN_CPP}
-                ${MESSAGES_CPP}
-                ${RESOURCE_RC})
-        if(MSYS2)
-            set(_KEEP $<$<CONFIG:RelWithDebInfo,Debug>:objcopy
-            --only-keep-debug
-            $<TARGET_FILE:cataclysm-tiles>
-            $<TARGET_FILE:cataclysm-tiles>.debug
-            >)
-            set(_STRIP $<$<CONFIG:RelWithDebInfo,Debug>:objcopy
-            --strip-unneeded
-            --add-gnu-debuglink=$<TARGET_FILE:cataclysm-tiles>.debug
-            $<TARGET_FILE:cataclysm-tiles>
-            >)
-            add_custom_command(TARGET cataclysm-tiles POST_BUILD
-                COMMAND "${_KEEP}"
-                COMMAND "${_STRIP}"
-                COMMAND_EXPAND_LISTS
-            )
-        else()
-            # Use only our RT_MANIFEST from resource.rc
-            target_link_options(cataclysm-tiles PRIVATE
-                "LINKER:/MANIFEST:NO"
-            )
-        endif()
-    else ()
-        add_executable(cataclysm-tiles
-                ${MAIN_CPP}
-                ${MESSAGES_CPP})
-    endif ()
-
-    add_dependencies(cataclysm-tiles-common get_version)
-
-    target_link_libraries(cataclysm-tiles PRIVATE cataclysm-tiles-common)
-    target_compile_definitions(cataclysm-tiles-common PUBLIC TILES )
-    if(NOT "${CMAKE_EXPORT_COMPILE_COMMANDS}")
-        target_precompile_headers(cataclysm-tiles-common PUBLIC
-            "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/pch/main-pch.hpp>")
-    endif ()
-    if (LOCALIZE)
-        target_include_directories(cataclysm-tiles-common PUBLIC
-                ${LIBINTL_INCLUDE_DIR}
-                ${ICONV_INCLUDE_DIR})
-        target_link_libraries(cataclysm-tiles-common PUBLIC
-                ${LIBINTL_LIBRARIES}
-                ${ICONV_LIBRARIES})
-    endif ()
-
-    if (CMAKE_USE_PTHREADS_INIT)
-        target_compile_options(cataclysm-tiles-common PUBLIC "-pthread")
-    endif ()
-
-    if (CMAKE_THREAD_LIBS_INIT)
-        target_link_libraries(cataclysm-tiles-common PUBLIC ${CMAKE_THREAD_LIBS_INIT})
-    endif ()
-
-    if (USE_SDL3)
-        if (NOT DYNAMIC_LINKING)
-            if (TARGET SDL3::SDL3-static)
-                set(_SDL3 SDL3::SDL3-static)
-            else ()
-                set(_SDL3 SDL3::SDL3)
-            endif ()
-            if (TARGET SDL3_image::SDL3_image-static)
-                set(_SDL3_IMAGE SDL3_image::SDL3_image-static)
-            else ()
-                set(_SDL3_IMAGE SDL3_image::SDL3_image)
-            endif ()
-            if (TARGET SDL3_ttf::SDL3_ttf-static)
-                set(_SDL3_TTF SDL3_ttf::SDL3_ttf-static)
-            else ()
-                set(_SDL3_TTF SDL3_ttf::SDL3_ttf)
-            endif ()
-            target_link_libraries(cataclysm-tiles-common PUBLIC
-                ${_SDL3}
-                ${_SDL3_IMAGE}
-                ${_SDL3_TTF}
-            )
-        else()
-            target_link_libraries(cataclysm-tiles-common PUBLIC
-                SDL3::SDL3
-                SDL3_image::SDL3_image
-                SDL3_ttf::SDL3_ttf
-            )
-        endif ()
-    else ()
-        if (NOT DYNAMIC_LINKING)
-            target_link_libraries(cataclysm-tiles-common PUBLIC
-                SDL2::SDL2-static
-                SDL2_image::SDL2_image-static
-                SDL2_ttf::SDL2_ttf-static
-            )
-        else()
-            target_link_libraries(cataclysm-tiles-common PUBLIC
-                SDL2::SDL2
-                SDL2_image::SDL2_image
-                SDL2_ttf::SDL2_ttf
-            )
-        endif ()
-    endif ()
-    if (SOUND)
-        if (USE_SDL3)
-            if (NOT DYNAMIC_LINKING AND TARGET SDL3_mixer::SDL3_mixer-static)
-                target_link_libraries(cataclysm-tiles-common PUBLIC
-                    SDL3_mixer::SDL3_mixer-static
-                )
-            else()
-                target_link_libraries(cataclysm-tiles-common PUBLIC
-                    SDL3_mixer::SDL3_mixer
-                )
-            endif()
-        else ()
-            if (NOT DYNAMIC_LINKING)
-                target_link_libraries(cataclysm-tiles-common PUBLIC
-                    SDL2_mixer::SDL2_mixer-static
-                )
-            else()
-                target_link_libraries(cataclysm-tiles-common PUBLIC
-                    SDL2_mixer::SDL2_mixer
-                )
-            endif()
-        endif ()
-        add_definitions(-DSDL_SOUND)
-    endif ()
-
-    if (WIN32)
-        # Global settings for Windows targets (at end)
-        target_link_libraries(cataclysm-tiles-common PUBLIC gdi32.lib)
-        target_link_libraries(cataclysm-tiles-common PUBLIC winmm.lib)
-        target_link_libraries(cataclysm-tiles-common PUBLIC imm32.lib)
-        target_link_libraries(cataclysm-tiles-common PUBLIC ole32.lib)
-        target_link_libraries(cataclysm-tiles-common PUBLIC oleaut32.lib)
-        target_link_libraries(cataclysm-tiles-common PUBLIC version.lib)
-        target_link_libraries(cataclysm-tiles-common PUBLIC setupapi.lib)
-        if (SOUND)
-            target_link_libraries(cataclysm-tiles-common PUBLIC shlwapi.lib)
-            target_link_libraries(cataclysm-tiles-common PUBLIC dwrite.lib)
-        endif()
-        if (BACKTRACE)
-            target_link_libraries(cataclysm-tiles-common PUBLIC dbghelp.lib)
-            if (LIBBACKTRACE)
-                target_link_libraries(cataclysm-tiles-common PUBLIC backtrace)
-            endif ()
-        endif ()
-    elseif (APPLE)
-        target_link_libraries(cataclysm-tiles-common PUBLIC "-framework CoreFoundation")
-    endif ()
-
-    if (LIBBACKTRACE)
-        target_link_libraries(cataclysm-tiles-common PUBLIC backtrace)
-    endif ()
-
-    if (RELEASE)
-        install(TARGETS cataclysm-tiles RUNTIME)
-    endif ()
-
-    if (TARGET ZLIB::ZLIB)
-        target_link_libraries(cataclysm-tiles-common PUBLIC ZLIB::ZLIB)
+if (WIN32)
+    add_definitions(-DUSE_WINMAIN)
+    add_executable(
+            cataclysm-tiles WIN32
+            ${MAIN_CPP}
+            ${MESSAGES_CPP}
+            ${RESOURCE_RC})
+    if(MSYS2)
+        set(_KEEP $<$<CONFIG:RelWithDebInfo,Debug>:objcopy
+        --only-keep-debug
+        $<TARGET_FILE:cataclysm-tiles>
+        $<TARGET_FILE:cataclysm-tiles>.debug
+        >)
+        set(_STRIP $<$<CONFIG:RelWithDebInfo,Debug>:objcopy
+        --strip-unneeded
+        --add-gnu-debuglink=$<TARGET_FILE:cataclysm-tiles>.debug
+        $<TARGET_FILE:cataclysm-tiles>
+        >)
+        add_custom_command(TARGET cataclysm-tiles POST_BUILD
+            COMMAND "${_KEEP}"
+            COMMAND "${_STRIP}"
+            COMMAND_EXPAND_LISTS
+        )
     else()
-        target_link_libraries(cataclysm-tiles-common PUBLIC ${ZLIB_LIBRARIES})
-    endif()
-
-    if (USE_SDL3)
-        # Compile GLSL shaders to per-backend artifacts (.spv / .dxil / .msl)
-        # for the GPU shader path. Pattern mirrors lang/CMakeLists.txt locale
-        # build. Default the format set to the local GPU backend so that
-        # builds without shadercross succeed (variant_pass goes inert at
-        # runtime if the expected artifact format is missing). Override
-        # CATA_SHADER_FORMATS when shipping a multi-platform bindist.
-        set(_SHADERS_DIR ${CMAKE_SOURCE_DIR}/data/shaders)
-        if (NOT DEFINED CATA_SHADER_FORMATS)
-            if (APPLE)
-                set(CATA_SHADER_FORMATS "msl")
-            elseif (WIN32)
-                set(CATA_SHADER_FORMATS "dxil")
-            else()
-                set(CATA_SHADER_FORMATS "spv")
-            endif()
-        endif()
-        # Stamp filename encodes the format set so switching CATA_SHADER_FORMATS
-        # invalidates the stamp and triggers a rebuild. Hyphen-separated to
-        # avoid commas in filenames; matches the Makefile and MSVC prebuild.
-        string(REPLACE "," "-" _SHADER_STAMP_TAG "${CATA_SHADER_FORMATS}")
-        set(_SHADERS_STAMP ${_SHADERS_DIR}/build-${_SHADER_STAMP_TAG}.stamp)
-        file(GLOB _SHADER_SOURCES "${_SHADERS_DIR}/*.frag" "${_SHADERS_DIR}/*.vert")
-        find_package(Python3 COMPONENTS Interpreter REQUIRED)
-        # shadercross (needed for msl/dxil) is not packaged by most package
-        # managers, so accept a locally built copy -- e.g. an SDL_shadercross
-        # checkout beside this repo -- instead of requiring it on PATH.
-        # Override with -DSDL_SHADERCROSS_EXECUTABLE=/path/to/shadercross.
-        find_program(SDL_SHADERCROSS_EXECUTABLE
-                NAMES shadercross
-                HINTS
-                    ENV SDL_SHADERCROSS_ROOT
-                    ${CMAKE_SOURCE_DIR}/../SDL_shadercross
-                PATH_SUFFIXES build build/Release bin
+        # Use only our RT_MANIFEST from resource.rc
+        target_link_options(cataclysm-tiles PRIVATE
+            "LINKER:/MANIFEST:NO"
         )
-        if (SDL_SHADERCROSS_EXECUTABLE)
-            message(STATUS "Using shadercross: ${SDL_SHADERCROSS_EXECUTABLE}")
-            # build_shaders.py prefers $SDL_SHADERCROSS over a PATH lookup.
-            set(_SHADER_TOOL_ENV ${CMAKE_COMMAND} -E env
-                    "SDL_SHADERCROSS=${SDL_SHADERCROSS_EXECUTABLE}")
-        else ()
-            set(_SHADER_TOOL_ENV "")
-        endif ()
-        add_custom_command(
-                OUTPUT ${_SHADERS_STAMP}
-                COMMAND ${_SHADER_TOOL_ENV} ${Python3_EXECUTABLE}
-                    ${CMAKE_SOURCE_DIR}/tools/build_shaders.py
-                    --shader-dir ${_SHADERS_DIR}
-                    --formats ${CATA_SHADER_FORMATS}
-                    --stamp ${_SHADERS_STAMP}
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-                DEPENDS ${_SHADER_SOURCES}
-                        ${CMAKE_SOURCE_DIR}/tools/build_shaders.py
-                COMMENT "Compiling shader artifacts (${CATA_SHADER_FORMATS})"
-        )
-        add_custom_target(compile_shaders ALL DEPENDS ${_SHADERS_STAMP})
-        add_dependencies(cataclysm-tiles-common compile_shaders)
     endif()
-
+else ()
+    add_executable(cataclysm-tiles
+            ${MAIN_CPP}
+            ${MESSAGES_CPP})
 endif ()
+
+add_dependencies(cataclysm-tiles-common get_version)
+
+target_link_libraries(cataclysm-tiles PRIVATE cataclysm-tiles-common)
+if(NOT "${CMAKE_EXPORT_COMPILE_COMMANDS}")
+    target_precompile_headers(cataclysm-tiles-common PUBLIC
+        "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/pch/main-pch.hpp>")
+endif ()
+if (LOCALIZE)
+    target_include_directories(cataclysm-tiles-common PUBLIC
+            ${LIBINTL_INCLUDE_DIR}
+            ${ICONV_INCLUDE_DIR})
+    target_link_libraries(cataclysm-tiles-common PUBLIC
+            ${LIBINTL_LIBRARIES}
+            ${ICONV_LIBRARIES})
+endif ()
+
+if (CMAKE_USE_PTHREADS_INIT)
+    target_compile_options(cataclysm-tiles-common PUBLIC "-pthread")
+endif ()
+
+if (CMAKE_THREAD_LIBS_INIT)
+    target_link_libraries(cataclysm-tiles-common PUBLIC ${CMAKE_THREAD_LIBS_INIT})
+endif ()
+
+if (USE_SDL3)
+    if (NOT DYNAMIC_LINKING)
+        if (TARGET SDL3::SDL3-static)
+            set(_SDL3 SDL3::SDL3-static)
+        else ()
+            set(_SDL3 SDL3::SDL3)
+        endif ()
+        if (TARGET SDL3_image::SDL3_image-static)
+            set(_SDL3_IMAGE SDL3_image::SDL3_image-static)
+        else ()
+            set(_SDL3_IMAGE SDL3_image::SDL3_image)
+        endif ()
+        if (TARGET SDL3_ttf::SDL3_ttf-static)
+            set(_SDL3_TTF SDL3_ttf::SDL3_ttf-static)
+        else ()
+            set(_SDL3_TTF SDL3_ttf::SDL3_ttf)
+        endif ()
+        target_link_libraries(cataclysm-tiles-common PUBLIC
+            ${_SDL3}
+            ${_SDL3_IMAGE}
+            ${_SDL3_TTF}
+        )
+    else()
+        target_link_libraries(cataclysm-tiles-common PUBLIC
+            SDL3::SDL3
+            SDL3_image::SDL3_image
+            SDL3_ttf::SDL3_ttf
+        )
+    endif ()
+else ()
+    if (NOT DYNAMIC_LINKING)
+        target_link_libraries(cataclysm-tiles-common PUBLIC
+            SDL2::SDL2-static
+            SDL2_image::SDL2_image-static
+            SDL2_ttf::SDL2_ttf-static
+        )
+    else()
+        target_link_libraries(cataclysm-tiles-common PUBLIC
+            SDL2::SDL2
+            SDL2_image::SDL2_image
+            SDL2_ttf::SDL2_ttf
+        )
+    endif ()
+endif ()
+if (SOUND)
+    if (USE_SDL3)
+        if (NOT DYNAMIC_LINKING AND TARGET SDL3_mixer::SDL3_mixer-static)
+            target_link_libraries(cataclysm-tiles-common PUBLIC
+                SDL3_mixer::SDL3_mixer-static
+            )
+        else()
+            target_link_libraries(cataclysm-tiles-common PUBLIC
+                SDL3_mixer::SDL3_mixer
+            )
+        endif()
+    else ()
+        if (NOT DYNAMIC_LINKING)
+            target_link_libraries(cataclysm-tiles-common PUBLIC
+                SDL2_mixer::SDL2_mixer-static
+            )
+        else()
+            target_link_libraries(cataclysm-tiles-common PUBLIC
+                SDL2_mixer::SDL2_mixer
+            )
+        endif()
+    endif ()
+    add_definitions(-DSDL_SOUND)
+endif ()
+
+if (WIN32)
+    # Global settings for Windows targets (at end)
+    target_link_libraries(cataclysm-tiles-common PUBLIC gdi32.lib)
+    target_link_libraries(cataclysm-tiles-common PUBLIC winmm.lib)
+    target_link_libraries(cataclysm-tiles-common PUBLIC imm32.lib)
+    target_link_libraries(cataclysm-tiles-common PUBLIC ole32.lib)
+    target_link_libraries(cataclysm-tiles-common PUBLIC oleaut32.lib)
+    target_link_libraries(cataclysm-tiles-common PUBLIC version.lib)
+    target_link_libraries(cataclysm-tiles-common PUBLIC setupapi.lib)
+    if (SOUND)
+        target_link_libraries(cataclysm-tiles-common PUBLIC shlwapi.lib)
+        target_link_libraries(cataclysm-tiles-common PUBLIC dwrite.lib)
+    endif()
+    if (BACKTRACE)
+        target_link_libraries(cataclysm-tiles-common PUBLIC dbghelp.lib)
+        if (LIBBACKTRACE)
+            target_link_libraries(cataclysm-tiles-common PUBLIC backtrace)
+        endif ()
+    endif ()
+elseif (APPLE)
+    target_link_libraries(cataclysm-tiles-common PUBLIC "-framework CoreFoundation")
+endif ()
+
+if (LIBBACKTRACE)
+    target_link_libraries(cataclysm-tiles-common PUBLIC backtrace)
+endif ()
+
+if (RELEASE)
+    install(TARGETS cataclysm-tiles RUNTIME)
+endif ()
+
+if (TARGET ZLIB::ZLIB)
+    target_link_libraries(cataclysm-tiles-common PUBLIC ZLIB::ZLIB)
+else()
+    target_link_libraries(cataclysm-tiles-common PUBLIC ${ZLIB_LIBRARIES})
+endif()
+
+if (USE_SDL3)
+    # Compile GLSL shaders to per-backend artifacts (.spv / .dxil / .msl)
+    # for the GPU shader path. Pattern mirrors lang/CMakeLists.txt locale
+    # build. Default the format set to the local GPU backend so that
+    # builds without shadercross succeed (variant_pass goes inert at
+    # runtime if the expected artifact format is missing). Override
+    # CATA_SHADER_FORMATS when shipping a multi-platform bindist.
+    set(_SHADERS_DIR ${CMAKE_SOURCE_DIR}/data/shaders)
+    if (NOT DEFINED CATA_SHADER_FORMATS)
+        if (APPLE)
+            set(CATA_SHADER_FORMATS "msl")
+        elseif (WIN32)
+            set(CATA_SHADER_FORMATS "dxil")
+        else()
+            set(CATA_SHADER_FORMATS "spv")
+        endif()
+    endif()
+    # Stamp filename encodes the format set so switching CATA_SHADER_FORMATS
+    # invalidates the stamp and triggers a rebuild. Hyphen-separated to
+    # avoid commas in filenames; matches the Makefile and MSVC prebuild.
+    string(REPLACE "," "-" _SHADER_STAMP_TAG "${CATA_SHADER_FORMATS}")
+    set(_SHADERS_STAMP ${_SHADERS_DIR}/build-${_SHADER_STAMP_TAG}.stamp)
+    file(GLOB _SHADER_SOURCES "${_SHADERS_DIR}/*.frag" "${_SHADERS_DIR}/*.vert")
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # shadercross (needed for msl/dxil) is not packaged by most package
+    # managers, so accept a locally built copy -- e.g. an SDL_shadercross
+    # checkout beside this repo -- instead of requiring it on PATH.
+    # Override with -DSDL_SHADERCROSS_EXECUTABLE=/path/to/shadercross.
+    find_program(SDL_SHADERCROSS_EXECUTABLE
+            NAMES shadercross
+            HINTS
+                ENV SDL_SHADERCROSS_ROOT
+                ${CMAKE_SOURCE_DIR}/../SDL_shadercross
+            PATH_SUFFIXES build build/Release bin
+    )
+    if (SDL_SHADERCROSS_EXECUTABLE)
+        message(STATUS "Using shadercross: ${SDL_SHADERCROSS_EXECUTABLE}")
+        # build_shaders.py prefers $SDL_SHADERCROSS over a PATH lookup.
+        set(_SHADER_TOOL_ENV ${CMAKE_COMMAND} -E env
+                "SDL_SHADERCROSS=${SDL_SHADERCROSS_EXECUTABLE}")
+    else ()
+        set(_SHADER_TOOL_ENV "")
+    endif ()
+    add_custom_command(
+            OUTPUT ${_SHADERS_STAMP}
+            COMMAND ${_SHADER_TOOL_ENV} ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tools/build_shaders.py
+                --shader-dir ${_SHADERS_DIR}
+                --formats ${CATA_SHADER_FORMATS}
+                --stamp ${_SHADERS_STAMP}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            DEPENDS ${_SHADER_SOURCES}
+                    ${CMAKE_SOURCE_DIR}/tools/build_shaders.py
+            COMMENT "Compiling shader artifacts (${CATA_SHADER_FORMATS})"
+    )
+    add_custom_target(compile_shaders ALL DEPENDS ${_SHADERS_STAMP})
+    add_dependencies(cataclysm-tiles-common compile_shaders)
+endif()
 
 if (MINGW AND NOT RELEASE)
     # Try to Install shared libraries for dev builds
@@ -300,60 +296,58 @@ if (MINGW AND NOT RELEASE)
             ${RuntimeLib_STDC_PP_6}
             ${RuntimeLib_WINPTHREAD_1}
             ${RuntimeLib_zlib})
-    if (TILES)
-        # SDL2 can have a varius deps. Here you are the MSYS2 ones...
-        find_library(RuntimeLib_SDL2  "SDL2")
-        find_library(RuntimeLib_SDL2_IMG  "SDL2_image")
-        find_library(RuntimeLib_png  "libpng16-16")
-        find_library(RuntimeLib_jpeg  "libjpeg-8")
-        find_library(RuntimeLib_jbig  "libjbig-0")
-        find_library(RuntimeLib_tiff  "libtiff-5")
-        find_library(RuntimeLib_webp  "libwebp-5")
-        find_library(RuntimeLib_lzma  "liblzma-5")
-        find_library(RuntimeLib_bz2  "libbz2-1")
-        find_library(RuntimeLib_hb  "libharfbuzz-0")
-        find_library(RuntimeLib_SDL2_TTF  "SDL2_ttf")
-        find_library(RuntimeLib_ft  "libfreetype-6")
-        find_library(RuntimeLib_glib  "libglib-2.0-0")
-        set(RuntimeLib_SDL
-                ${RuntimeLib_SDL2}
-                ${RuntimeLib_SDL2_IMG}
-                ${RuntimeLib_png}
-                ${RuntimeLib_jpeg}
-                ${RuntimeLib_jbig}
-                ${RuntimeLib_tiff}
-                ${RuntimeLib_webp}
-                ${RuntimeLib_lzma}
-                ${RuntimeLib_bz2}
-                ${RuntimeLib_hb}
-                ${RuntimeLib_SDL2_TTF}
-                ${RuntimeLib_ft}
-                ${RuntimeLib_glib})
-        if (SOUND AND NOT USE_SDL3)
-            find_library(RuntimeLib_SDL_SND  "SDL2_mixer")
-            find_library(RuntimeLib_flac  "libFLAC-8")
-            find_library(RuntimeLib_ogg  "libogg-0")
-            find_library(RuntimeLib_flu  "libfluidsynth-1")
-            find_library(RuntimeLib_port  "libportaudio-2")
-            find_library(RuntimeLib_snd  "libsndfile-1")
-            find_library(RuntimeLib_vorb  "libvorbis-0")
-            find_library(RuntimeLib_vorb_enc  "libvorbisenc-2")
-            find_library(RuntimeLib_vorb_f  "libvorbisfile-3")
-            find_library(RuntimeLib_mod  "libmodplug-1")
-            find_library(RuntimeLib_mpeg  "smpeg2")
-            set(RuntimeLib_SDL_SOUND
-                    ${RuntimeLib_SDL_SND}
-                    ${RuntimeLib_flac}
-                    ${RuntimeLib_ogg}
-                    ${RuntimeLib_flu}
-                    ${RuntimeLib_port}
-                    ${RuntimeLib_snd}
-                    ${RuntimeLib_vorb}
-                    ${RuntimeLib_vorb_enc}
-                    ${RuntimeLib_vorb_f}
-                    ${RuntimeLib_mod}
-                    ${RuntimeLib_mpeg})
-        endif ()
+    # SDL2 can have a varius deps. Here you are the MSYS2 ones...
+    find_library(RuntimeLib_SDL2  "SDL2")
+    find_library(RuntimeLib_SDL2_IMG  "SDL2_image")
+    find_library(RuntimeLib_png  "libpng16-16")
+    find_library(RuntimeLib_jpeg  "libjpeg-8")
+    find_library(RuntimeLib_jbig  "libjbig-0")
+    find_library(RuntimeLib_tiff  "libtiff-5")
+    find_library(RuntimeLib_webp  "libwebp-5")
+    find_library(RuntimeLib_lzma  "liblzma-5")
+    find_library(RuntimeLib_bz2  "libbz2-1")
+    find_library(RuntimeLib_hb  "libharfbuzz-0")
+    find_library(RuntimeLib_SDL2_TTF  "SDL2_ttf")
+    find_library(RuntimeLib_ft  "libfreetype-6")
+    find_library(RuntimeLib_glib  "libglib-2.0-0")
+    set(RuntimeLib_SDL
+            ${RuntimeLib_SDL2}
+            ${RuntimeLib_SDL2_IMG}
+            ${RuntimeLib_png}
+            ${RuntimeLib_jpeg}
+            ${RuntimeLib_jbig}
+            ${RuntimeLib_tiff}
+            ${RuntimeLib_webp}
+            ${RuntimeLib_lzma}
+            ${RuntimeLib_bz2}
+            ${RuntimeLib_hb}
+            ${RuntimeLib_SDL2_TTF}
+            ${RuntimeLib_ft}
+            ${RuntimeLib_glib})
+    if (SOUND AND NOT USE_SDL3)
+        find_library(RuntimeLib_SDL_SND  "SDL2_mixer")
+        find_library(RuntimeLib_flac  "libFLAC-8")
+        find_library(RuntimeLib_ogg  "libogg-0")
+        find_library(RuntimeLib_flu  "libfluidsynth-1")
+        find_library(RuntimeLib_port  "libportaudio-2")
+        find_library(RuntimeLib_snd  "libsndfile-1")
+        find_library(RuntimeLib_vorb  "libvorbis-0")
+        find_library(RuntimeLib_vorb_enc  "libvorbisenc-2")
+        find_library(RuntimeLib_vorb_f  "libvorbisfile-3")
+        find_library(RuntimeLib_mod  "libmodplug-1")
+        find_library(RuntimeLib_mpeg  "smpeg2")
+        set(RuntimeLib_SDL_SOUND
+                ${RuntimeLib_SDL_SND}
+                ${RuntimeLib_flac}
+                ${RuntimeLib_ogg}
+                ${RuntimeLib_flu}
+                ${RuntimeLib_port}
+                ${RuntimeLib_snd}
+                ${RuntimeLib_vorb}
+                ${RuntimeLib_vorb_enc}
+                ${RuntimeLib_vorb_f}
+                ${RuntimeLib_mod}
+                ${RuntimeLib_mpeg})
     endif ()
     install(FILES ${RuntimeLib_GCC_ALL}
             ${RuntimeLib_LOCALIZE}

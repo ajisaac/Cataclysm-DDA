@@ -3,6 +3,10 @@ cmake_minimum_required(VERSION 3.20)
 # option so that an explicit -DTILES=OFF fails loudly instead of being ignored.
 option(TILES "Build graphical tileset version (required)." "ON")
 option(USE_SDL3 "Build against SDL3 instead of SDL2." "ON")
+# Experimental: fetches and builds RmlUi, and draws a probe box over the UI.
+# On while the spike is in progress; -DRMLUI=OFF compiles it out entirely
+# (src/rml_ui.cpp falls back to no-op stubs).
+option(RMLUI "Build the experimental RmlUi overlay (requires USE_SDL3)." "ON")
 if (USE_SDL3)
     set(VCPKG_MANIFEST_FEATURES "sdl3")
 else()
@@ -182,6 +186,14 @@ endif ()
 
 # The curses (text-only) backend was removed: ncurses_def.cpp, wincurse.cpp and
 # the ImTui ImGui-on-ncurses backend are gone, so SDL tiles is the only renderer.
+if (RMLUI AND NOT USE_SDL3)
+    message(FATAL_ERROR
+            "RMLUI=ON currently requires USE_SDL3=ON: the render interface in \
+             src/rml_render_sdl.cpp uses SDL3-only calls \
+             (SDL_RenderGeometryRaw with SDL_FColor, SDL_SetRenderClipRect, \
+             SDL_BLENDMODE_BLEND_PREMULTIPLIED).")
+endif ()
+
 if (NOT TILES)
     message(FATAL_ERROR
             "The curses (text-only) build has been removed from this fork. \
@@ -239,6 +251,7 @@ endif ()
 message(STATUS "GIT_BINARY                    : ${GIT_EXECUTABLE}")
 message(STATUS "DYNAMIC_LINKING               : ${DYNAMIC_LINKING}")
 message(STATUS "TILES                         : ${TILES}")
+message(STATUS "RMLUI                         : ${RMLUI}")
 message(STATUS "USE_SDL3                      : ${USE_SDL3}")
 message(STATUS "SOUND                         : ${SOUND}")
 message(STATUS "BACKTRACE                     : ${BACKTRACE}")

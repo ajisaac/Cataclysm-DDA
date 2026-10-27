@@ -77,6 +77,7 @@
 #include "sdl_wrappers.h"
 #include "sdl_font.h"
 #include "tileset_loader.h"
+#include "rml_ui.h"
 #include "sdl_gamepad.h"
 #if defined(SDL_SOUND)
 #include "sound_backend.h"
@@ -793,6 +794,7 @@ static void WinCreate()
 #endif
 
     imclient = std::make_unique<cataimgui::client>( renderer, window, geometry );
+    rml_ui::init( renderer, WindowWidth, WindowHeight );
 
     renderer_coordinator.seed_renderer_policy( renderer_name );
 
@@ -820,6 +822,7 @@ static void WinDestroy()
 #if defined(__ANDROID__)
     touch_joystick.reset();
 #endif
+    rml_ui::shutdown();
     imclient.reset();
     shutdown_sound();
     tilecontext.reset();
@@ -1059,6 +1062,10 @@ void refresh_display()
     draw_virtual_joystick();
 #endif
     draw_gamepad_radial_menu();
+    // Window-space overlay: drawn after the display_buffer blit so it is at
+    // native resolution rather than integer-scaled with the tile grid, and so
+    // its coordinates match the WindowWidth/WindowHeight context dimensions.
+    rml_ui::render();
     RenderPresent( renderer );
 }
 
@@ -4170,6 +4177,7 @@ static bool apply_resize_layout( int w, int h )
     WindowWidth = w;
     WindowHeight = h;
     refresh_drawable_dims();
+    rml_ui::resize( w, h );
 #if defined(__ANDROID__)
     ( void )logical_changed;
     return false;

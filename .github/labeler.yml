@@ -500,4 +500,3 @@ labels:
     matcher:
       files:
         - "src/third-party/imgui/**"
-        - "src/third-party/imtui/**"

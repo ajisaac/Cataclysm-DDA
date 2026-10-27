@@ -375,8 +375,7 @@ class nc_color
 
         operator ImVec4() const; // NOLINT(google-explicit-constructor): the conversion is not expensive
 
-        // Most of the functions here are implemented in ncurses_def.cpp
-        // (for ncurses builds) *and* in cursesport.cpp (for other builds).
+        // Most of the functions here are implemented in cursesport.cpp.
 
         static nc_color from_color_pair_index( int index );
         int to_color_pair_index() const;

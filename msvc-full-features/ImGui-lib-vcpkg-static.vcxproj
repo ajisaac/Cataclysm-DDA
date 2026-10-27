@@ -60,9 +60,6 @@
     <ClInclude Include="..\src\third-party\imgui\imgui_stdlib.h" />
     <ClInclude Include="..\src\third-party\imgui\imstb_textedit.h" />
     <ClInclude Include="..\src\third-party\imgui\imstb_truetype.h" />
-    <ClInclude Include="..\src\third-party\imtui\imtui-impl-ncurses.h" />
-    <ClInclude Include="..\src\third-party\imtui\imtui-impl-text.h" />
-    <ClInclude Include="..\src\third-party\imtui\imtui.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\third-party\imgui\imgui.cpp" />
@@ -74,12 +71,6 @@
     <ClCompile Include="..\src\third-party\imgui\imgui_stdlib.cpp" />
     <ClCompile Include="..\src\third-party\imgui\imgui_tables.cpp" />
     <ClCompile Include="..\src\third-party\imgui\imgui_widgets.cpp" />
-    <ClCompile Include="..\src\third-party\imtui\imtui-impl-ncurses.cpp">
-      <ExcludedFromBuild Condition="!$(Configuration.Contains(NoTiles))">true</ExcludedFromBuild>
-    </ClCompile>
-    <ClCompile Include="..\src\third-party\imtui\imtui-impl-text.cpp">
-      <ExcludedFromBuild Condition="!$(Configuration.Contains(NoTiles))">true</ExcludedFromBuild>
-    </ClCompile>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>

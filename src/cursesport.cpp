@@ -209,10 +209,8 @@ void catacurses::doupdate()
 void catacurses::wredrawln( const window &/*win*/, int /*beg_line*/, int /*num_lines*/ )
 {
     /**
-     * This is a no-op for non-curses implementations. wincurse.cpp doesn't
-     * use windows console for rendering, and sdltiles.cpp doesn't either.
-     * If we had a console-based windows implementation, we'd need to do
-     * something here to force the line to redraw.
+     * This is a no-op: sdltiles.cpp does not render through a Windows
+     * console, so there is no console line to force a redraw on.
      */
 }
 

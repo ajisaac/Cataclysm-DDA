@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-option(TILES "Build graphical tileset version." "OFF")
+option(TILES "Build graphical tileset version." "ON")
 option(USE_SDL3 "Build against SDL3 instead of SDL2 (requires TILES)." "${TILES}")
 if (USE_SDL3)
     set(VCPKG_MANIFEST_FEATURES "sdl3")
@@ -111,9 +111,30 @@ endif()
 #SET(CMAKE_SHARED_LIBRARY_C_FLAGS "${CMAKE_SHARED_LIBRARY_C_FLAGS} -m32")
 #SET(CMAKE_SHARED_LIBRARY_CXX_FLAGS "${CMAKE_SHARED_LIBRARY_CXX_FLAGS} -m32")
 
+# -mcx16 enables CMPXCHG16B (128-bit compare and swap), which snmalloc's ABA
+# protection requires. It is an x86 compiler flag and breaks ARM/aarch64 builds.
 if (NOT MSVC)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mcx16")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcx16")
+    if (APPLE AND CMAKE_OSX_ARCHITECTURES)
+        set(CX16_ARCHS ${CMAKE_OSX_ARCHITECTURES})
+    else ()
+        set(CX16_ARCHS ${CMAKE_SYSTEM_PROCESSOR})
+    endif ()
+    list(LENGTH CX16_ARCHS CX16_ARCH_COUNT)
+    set(CX16_FLAGS "")
+    foreach (CX16_ARCH IN LISTS CX16_ARCHS)
+        if (CX16_ARCH MATCHES "^([xX]86_64|amd64|AMD64|i[3-6]86)$")
+            if (CX16_ARCH_COUNT GREATER 1)
+                # Universal build: apply the flag only to the x86 slice.
+                string(APPEND CX16_FLAGS " -Xarch_${CX16_ARCH} -mcx16")
+            else ()
+                string(APPEND CX16_FLAGS " -mcx16")
+            endif ()
+        endif ()
+    endforeach ()
+    if (CX16_FLAGS)
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}${CX16_FLAGS}")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}${CX16_FLAGS}")
+    endif ()
 endif()
 
 include(ListImportedTargets)
@@ -281,8 +302,8 @@ if ("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_BINARY_DIR}")
 endif ()
 
 #set(THREADS_USE_PTHREADS_WIN32 True)
-set(CMAKE_THREAD_PREFER_PTHREAD True)
-find_package(Threads REQUIRED)
+#set(CMAKE_THREAD_PREFER_PTHREAD True)
+#find_package(Threads REQUIRED)
 
 find_package(ZLIB REQUIRED)
 
@@ -404,6 +425,24 @@ if (CURSES)
         endif()
         set(CURSES_FOUND True)
     else ()
+        if (APPLE AND NOT CURSES_LIBRARY)
+            # macOS ships only the narrow libncurses, which CURSES_NEED_WIDE
+            # rejects. Homebrew provides libncursesw but is keg-only, so it is
+            # not on CMake's default search path and needs an explicit hint.
+            find_program(HOMEBREW_EXECUTABLE brew)
+            if (HOMEBREW_EXECUTABLE)
+                execute_process(
+                    COMMAND ${HOMEBREW_EXECUTABLE} --prefix ncurses
+                    OUTPUT_VARIABLE HOMEBREW_NCURSES_PREFIX
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET
+                )
+                if (HOMEBREW_NCURSES_PREFIX AND IS_DIRECTORY "${HOMEBREW_NCURSES_PREFIX}")
+                    message(STATUS "Using Homebrew ncurses at ${HOMEBREW_NCURSES_PREFIX}")
+                    list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_NCURSES_PREFIX}")
+                endif ()
+            endif ()
+        endif ()
         find_package(Curses)
     endif ()
     if (NOT (CURSES_FOUND OR TARGET unofficial::pdcurses::pdcurses))

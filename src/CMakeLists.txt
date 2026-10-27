@@ -247,9 +247,28 @@ if (TILES)
         set(_SHADERS_STAMP ${_SHADERS_DIR}/build-${_SHADER_STAMP_TAG}.stamp)
         file(GLOB _SHADER_SOURCES "${_SHADERS_DIR}/*.frag" "${_SHADERS_DIR}/*.vert")
         find_package(Python3 COMPONENTS Interpreter REQUIRED)
+        # shadercross (needed for msl/dxil) is not packaged by most package
+        # managers, so accept a locally built copy -- e.g. an SDL_shadercross
+        # checkout beside this repo -- instead of requiring it on PATH.
+        # Override with -DSDL_SHADERCROSS_EXECUTABLE=/path/to/shadercross.
+        find_program(SDL_SHADERCROSS_EXECUTABLE
+                NAMES shadercross
+                HINTS
+                    ENV SDL_SHADERCROSS_ROOT
+                    ${CMAKE_SOURCE_DIR}/../SDL_shadercross
+                PATH_SUFFIXES build build/Release bin
+        )
+        if (SDL_SHADERCROSS_EXECUTABLE)
+            message(STATUS "Using shadercross: ${SDL_SHADERCROSS_EXECUTABLE}")
+            # build_shaders.py prefers $SDL_SHADERCROSS over a PATH lookup.
+            set(_SHADER_TOOL_ENV ${CMAKE_COMMAND} -E env
+                    "SDL_SHADERCROSS=${SDL_SHADERCROSS_EXECUTABLE}")
+        else ()
+            set(_SHADER_TOOL_ENV "")
+        endif ()
         add_custom_command(
                 OUTPUT ${_SHADERS_STAMP}
-                COMMAND ${Python3_EXECUTABLE}
+                COMMAND ${_SHADER_TOOL_ENV} ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/tools/build_shaders.py
                     --shader-dir ${_SHADERS_DIR}
                     --formats ${CATA_SHADER_FORMATS}

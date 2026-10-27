@@ -170,7 +170,6 @@ BINDIST_DIR = $(BUILD_PREFIX)bindist
 BUILD_DIR = $(CURDIR)
 SRC_DIR = src
 IMGUI_DIR = $(SRC_DIR)/third-party/imgui
-IMTUI_DIR = $(SRC_DIR)/third-party/imtui
 LOCALIZE = 1
 ASTYLE_BINARY = astyle
 
@@ -1142,9 +1141,6 @@ ifeq ($(SDL), 1)
 	else
 		IMGUI_SOURCES += $(IMGUI_DIR)/imgui_impl_sdl2.cpp $(IMGUI_DIR)/imgui_impl_sdlrenderer2.cpp
 	endif
-else
-	IMGUI_SOURCES += $(IMTUI_DIR)/imtui-impl-ncurses.cpp $(IMTUI_DIR)/imtui-impl-text.cpp
-	DEFINES += -DIMTUI
 endif
 
 SOURCES += $(IMGUI_SOURCES)

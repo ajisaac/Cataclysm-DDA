@@ -18,21 +18,24 @@ struct point;
  * types from this namespace only. The @ref input_manager and @ref input_context
  * should be used for user input.
  *
- * There are currently (Nov 2017) two implementations for most of this interface:
- * - ncurses (mostly in ncurses_def.cpp). The interface originates from there,
- *   so it's mostly just forwarding to ncurses functions of the same name.
- * - our own curses library @ref cata_cursesport (mostly in cursesport.cpp),
- *   cursesport.h contains the structures and some functions specific to that.
+ * There is a single implementation: our own curses library
+ * @ref cata_cursesport, in cursesport.cpp, which renders a character cell grid
+ * through SDL. cursesport.h holds the structures and the functions specific to
+ * it, and the system-specific entry points (init_interface, endwin, set_title)
+ * live in sdltiles.cpp.
  *
- * A few (system specific) functions are implemented in three versions:
- * - ncurses (ncurses_def.cpp),
- * - Windows curses (no SDL, using @ref cata_cursesport, see wincurses.cpp), and
- * - SDL curses (using @ref cata_cursesport, see sdltiles.cpp).
+ * The terminal backends were removed in the real-time conversion: ncurses
+ * (ncurses_def.cpp) and Windows console curses (wincurse.cpp) are both gone, as
+ * is the ImTui ImGui-on-ncurses backend. SDL is now required.
  *
- * As this interface is derived from ncurses, refer to documentation of that.
+ * This interface is still shaped like ncurses because it originated as a
+ * forwarding layer over it, so ncurses documentation remains the best reference
+ * for the semantics of these functions. It stays in its own namespace for that
+ * historical reason.
  *
- * The interface is in a separate namespace we can link with the ncurses library,
- * which exports its functions globally.
+ * Note that this is NOT terminal curses -- it is a cell-grid abstraction over
+ * SDL. Removing the abstraction itself is a separate, larger piece of work; see
+ * design/01-architecture-as-is.md.
  */
 namespace catacurses
 {

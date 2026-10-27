@@ -19,7 +19,6 @@ set(CMAKE_TLS_VERIFY ON)
 
 # Build options
 include(CMakeDependentOption)
-option(CURSES "Build curses version." "ON")
 option(SOUND "Support for in-game sounds & music." "OFF")
 option(BACKTRACE "Support for printing stack backtraces on crash" "ON")
 option(LIBBACKTRACE "Print backtrace with libbacktrace." "OFF")
@@ -181,9 +180,12 @@ else ()
     endif ()
 endif ()
 
-# Can't compile curses and tiles build's at same time
-if (TILES)
-    set(CURSES OFF)
+# The curses (text-only) backend was removed: ncurses_def.cpp, wincurse.cpp and
+# the ImTui ImGui-on-ncurses backend are gone, so SDL tiles is the only renderer.
+if (NOT TILES)
+    message(FATAL_ERROR
+            "The curses (text-only) build has been removed from this fork. \
+             TILES is required -- configure with -DTILES=ON.")
 endif ()
 
 # Can't use both home and xdg directories
@@ -238,7 +240,6 @@ message(STATUS "GIT_BINARY                    : ${GIT_EXECUTABLE}")
 message(STATUS "DYNAMIC_LINKING               : ${DYNAMIC_LINKING}")
 message(STATUS "TILES                         : ${TILES}")
 message(STATUS "USE_SDL3                      : ${USE_SDL3}")
-message(STATUS "CURSES                        : ${CURSES}")
 message(STATUS "SOUND                         : ${SOUND}")
 message(STATUS "BACKTRACE                     : ${BACKTRACE}")
 message(STATUS "LOCALIZE                      : ${LOCALIZE}")
@@ -355,7 +356,6 @@ if (TILES AND NOT USE_SDL3)
         message(FATAL_ERROR
                 "This project requires SDL2 to be installed to compile in graphical mode.  \
                  Please install the SDL2 development libraries, \
-                 or try compiling without -DTILES=1 for a text-only compilation. \
                  See doc/c++/COMPILING-CMAKE.md for details and more info.")
     endif ()
 
@@ -366,7 +366,6 @@ if (TILES AND NOT USE_SDL3)
         message(FATAL_ERROR
                 "This project requires SDL2_ttf to be installed to compile in graphical mode. \
                  Please install the SDL2_ttf development libraries, \
-                 or try compiling without -DTILES=1 for a text-only compilation. \
                  See doc/c++/COMPILING-CMAKE.md for details and more info.")
     endif ()
 
@@ -377,84 +376,9 @@ if (TILES AND NOT USE_SDL3)
         message(FATAL_ERROR
                 "This project requires SDL2_image to be installed to compile in graphical mode. \
                  Please install the SDL2_image development libraries, \
-                 or try compiling without -DTILES=1 for a text-only compilation. \
                  See doc/c++/COMPILING-CMAKE.md for details and more info.")
     endif ()
     add_definitions(-DTILES)
-endif ()
-
-if (CURSES)
-    # Find the ncurses library for a text based compile
-    message(STATUS "Searching for Curses library --")
-    set(CURSES_NEED_NCURSES TRUE)
-    set(CURSES_NEED_WIDE TRUE)
-    if (WIN32 AND VCPKG_MANIFEST_MODE)
-        find_package(unofficial-pdcurses CONFIG)
-        if(TARGET unofficial::pdcurses::pdcurses)
-            get_target_property(_IMPORTED_CONFIGURATIONS unofficial::pdcurses::pdcurses
-                IMPORTED_CONFIGURATIONS
-            )
-            if (RELEASE AND "Release" IN_LIST _IMPORTED_CONFIGURATIONS)
-                get_target_property(_IMPORTED_LOCATION unofficial::pdcurses::pdcurses
-                IMPORTED_IMPLIB_RELEASE)
-            elseif("Debug" IN_LIST _IMPORTED_CONFIGURATIONS)
-                get_target_property(_IMPORTED_LOCATION unofficial::pdcurses::pdcurses
-                IMPORTED_IMPLIB_DEBUG)
-            endif()
-            set_target_properties(unofficial::pdcurses::pdcurses PROPERTIES
-                IMPORTED_LOCATION ${_IMPORTED_LOCATION})
-            set(USE_PDCURSES TRUE)
-        endif()
-    elseif(MSYS2)
-        if(True) # GNU NCURSES: mingw-w64-ucrt-x86_64-ncurses
-            add_library(pdcurses STATIC IMPORTED)
-            set_target_properties(pdcurses PROPERTIES
-                IMPORTED_LOCATION $ENV{MSYSTEM_PREFIX}/lib/libncursesw.a
-                INTERFACE_INCLUDE_DIRECTORIES $ENV{MSYSTEM_PREFIX}/include/ncursesw
-            )
-            set(USE_PDCURSES FALSE)
-        else() # PDCursesMOD: mingw-w64-ucrt-x86_64-pdcurses
-            add_library(pdcurses STATIC IMPORTED)
-            set_target_properties(pdcurses PROPERTIES
-                IMPORTED_LOCATION $ENV{MSYSTEM_PREFIX}/lib/libpdcurses_wingui.a
-                INTERFACE_INCLUDE_DIRECTORIES $ENV{MSYSTEM_PREFIX}/include/pdcurses
-                INTERFACE_COMPILE_DEFINITIONS
-                "PDC_WIDE;PDC_FORCE_UTF8;PDC_NCMOUSE;PDC_RGB;CHTYPE_32"
-            )
-            set(USE_PDCURSES TRUE)
-        endif()
-        set(CURSES_FOUND True)
-    else ()
-        if (APPLE AND NOT CURSES_LIBRARY)
-            # macOS ships only the narrow libncurses, which CURSES_NEED_WIDE
-            # rejects. Homebrew provides libncursesw but is keg-only, so it is
-            # not on CMake's default search path and needs an explicit hint.
-            find_program(HOMEBREW_EXECUTABLE brew)
-            if (HOMEBREW_EXECUTABLE)
-                execute_process(
-                    COMMAND ${HOMEBREW_EXECUTABLE} --prefix ncurses
-                    OUTPUT_VARIABLE HOMEBREW_NCURSES_PREFIX
-                    OUTPUT_STRIP_TRAILING_WHITESPACE
-                    ERROR_QUIET
-                )
-                if (HOMEBREW_NCURSES_PREFIX AND IS_DIRECTORY "${HOMEBREW_NCURSES_PREFIX}")
-                    message(STATUS "Using Homebrew ncurses at ${HOMEBREW_NCURSES_PREFIX}")
-                    list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_NCURSES_PREFIX}")
-                endif ()
-            endif ()
-        endif ()
-        find_package(Curses)
-    endif ()
-    if (NOT (CURSES_FOUND OR TARGET unofficial::pdcurses::pdcurses))
-        message(FATAL_ERROR
-                "This project requires ncurses to be installed to be compiled in text-only mode. \
-                 Please install the ncurses development libraries, \
-                 or try compiling with -DTILES=1 for a graphical compilation. \
-                 See doc/c++/COMPILING-CMAKE.md for details and more info")
-    endif ()
-    if (NOT DYNAMIC_LINKING)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DNCURSES_STATIC")
-    endif ()
 endif ()
 
 if (SOUND AND USE_SDL3)

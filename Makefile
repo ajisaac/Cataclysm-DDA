@@ -32,9 +32,9 @@
 #  make CCACHE=1
 # Release (turn on optimizations)
 #  make RELEASE=1
-# Tiles (uses SDL rather than ncurses)
+# Tiles (SDL; required -- the curses build has been removed)
 #  make TILES=1
-# Sound (requires SDL, so TILES must be enabled)
+# Sound (requires SDL)
 #  make TILES=1 SOUND=1
 # Disable gettext, on some platforms the dependencies are hard to wrangle.
 #  make LOCALIZE=0
@@ -150,6 +150,14 @@ OTHERS += -fsigned-char
 
 VERSION = 0.J
 
+# The curses (text-only) backend was removed: ncurses_def.cpp, wincurse.cpp and
+# the ImTui ImGui-on-ncurses backend are gone, so SDL tiles is the only renderer.
+# Default it on, so a bare `make` still works.
+TILES ?= 1
+ifneq ($(TILES), 1)
+  $(error The curses (text-only) build has been removed from this fork. TILES=1 is required)
+endif
+
 TARGET_NAME = cataclysm
 TILES_TARGET_NAME = $(TARGET_NAME)-tiles
 ifeq ($(NATIVE), emscripten)
@@ -158,11 +166,7 @@ endif
 
 TARGET = $(BUILD_PREFIX)$(TARGET_NAME)
 TILESTARGET = $(BUILD_PREFIX)$(TILES_TARGET_NAME)
-ifeq ($(TILES), 1)
-  APPTARGET = $(TILESTARGET)
-else
-  APPTARGET = $(TARGET)
-endif
+APPTARGET = $(TILESTARGET)
 W32TILESTARGET = $(BUILD_PREFIX)$(TILES_TARGET_NAME).exe
 W32TARGET = $(BUILD_PREFIX)$(TARGET_NAME).exe
 CHKJSON_BIN = $(BUILD_PREFIX)chkjson
@@ -657,15 +661,6 @@ ifeq ($(NATIVE), osx)
       $(error "SDL framework not found")
     endif
   endif
-  ifeq ($(LOCALIZE), 1)
-    ifneq ($(TILES), 1)
-      CXXFLAGS += -D_XOPEN_SOURCE_EXTENDED
-      ifeq ($(MACPORTS), 1)
-        CXXFLAGS += -I$(shell ncursesw6-config --includedir)
-        LDFLAGS += -L$(shell ncursesw6-config --libdir)
-      endif
-    endif
-  endif
   BINDIST_CMD = tar -s"@^$(BINDIST_DIR)@cataclysmdda-$(VERSION)@" -czvf $(BINDIST) $(BINDIST_DIR)
 endif
 
@@ -922,43 +917,6 @@ ifeq ($(TILES), 1)
   else
     TARGET = $(TILESTARGET)
     ODIR = $(ODIRTILES)
-  endif
-else
-  NCURSES_PREFIX = ncursesw
-  # ONLY when not cross-compiling, check for pkg-config or ncurses5-config
-  # When doing a cross-compile, we can't rely on the host machine's -configs
-  ifeq ($(CROSS),)
-      ifeq ($(OSXCROSS),)
-        ifneq ($(shell pkg-config --libs $(NCURSES_PREFIX) 2>/dev/null),)
-          HAVE_PKGCONFIG = 1
-        endif
-        ifneq ($(shell which $(NCURSES_PREFIX)5-config 2>/dev/null),)
-          HAVE_NCURSES5CONFIG = 1
-        endif
-      endif
-  endif
-
-  # Link to ncurses if we're using a non-tiles, Linux build
-  ifeq ($(HAVE_PKGCONFIG),1)
-    CXXFLAGS += $(subst -I,-isystem ,$(shell $(PKG_CONFIG) --cflags $(NCURSES_PREFIX)))
-    LDFLAGS += $(shell $(PKG_CONFIG) --libs $(NCURSES_PREFIX))
-  else
-    ifeq ($(HAVE_NCURSES5CONFIG),1)
-      CXXFLAGS += $(shell $(NCURSES_PREFIX)5-config --cflags)
-      LDFLAGS += $(shell $(NCURSES_PREFIX)5-config --libs)
-    else
-      ifneq ($(TARGETSYSTEM),WINDOWS)
-        LDFLAGS += -l$(NCURSES_PREFIX)
-      endif
-
-      ifdef OSXCROSS
-        LDFLAGS += -L$(LIBSDIR)/$(NCURSES_PREFIX)/lib
-        CXXFLAGS += -I$(LIBSDIR)/$(NCURSES_PREFIX)/include
-      endif # OSXCROSS
-    endif # HAVE_NCURSES5CONFIG
-  endif # HAVE_PKGCONFIG
-  ifeq ($(MSYS),1)
-    CXXFLAGS += -DNCURSES_INTERNALS
   endif
 endif # TILES
 

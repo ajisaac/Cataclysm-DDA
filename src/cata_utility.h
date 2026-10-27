@@ -751,7 +751,7 @@ int bucket_index_from_weight_list( const std::vector<int> &weights );
 
 /**
  * Set the game window title.
- * Implemented in `stdtiles.cpp`, `wincurse.cpp`, and `ncurses_def.cpp`.
+ * Implemented in `sdltiles.cpp`.
  */
 void set_title( const std::string &title );
 

@@ -51,15 +51,4 @@ if (BUILD_TESTING)
         catch_discover_tests(cata_test-tiles
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     endif ()
-
-    if (CURSES)
-        add_executable(cata_test ${CATACLYSM_DDA_TEST_SOURCES})
-        if (LOCALIZE)
-            add_dependencies(cata_test test_mo)
-        endif()
-        target_link_libraries(cata_test PRIVATE cataclysm-common)
-        add_test(NAME test
-                COMMAND cata_test --rng-seed time
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    endif ()
 endif ()

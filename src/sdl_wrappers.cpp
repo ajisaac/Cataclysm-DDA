@@ -1,4 +1,3 @@
-#if defined(TILES) || defined(SDL_SOUND)
 
 #include "sdl_wrappers.h"
 
@@ -41,8 +40,6 @@ void throwErrorIf( const bool condition, const char *const message )
     }
     throw std::runtime_error( std::string( message ) + ": " + SDL_GetError() );
 }
-
-#if defined(TILES)
 
 #if SDL_MAJOR_VERSION >= 3
 // Helper to convert SDL_Rect* to SDL_FRect for SDL3 render functions.
@@ -1549,5 +1546,3 @@ float GetFingerY( const SDL_Event &ev, const int windowHeight )
     return ev.tfinger.y * windowHeight;
 }
 
-#endif // defined(TILES)
-#endif // defined(TILES) || defined(SDL_SOUND)

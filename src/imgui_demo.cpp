@@ -28,22 +28,11 @@ cataimgui::bounds imgui_demo_ui::get_bounds()
 static void draw_lorem( const std::shared_ptr<cataimgui::Paragraph> &stuff )
 {
 
-#ifdef TUI
-    ImGui::SetNextWindowPos( { 0, 0 }, ImGuiCond_Once );
-    ImGui::SetNextWindowSize( { 60, 40 }, ImGuiCond_Once );
-#else
     ImGui::SetNextWindowSize( { 620, 900 }, ImGuiCond_Once );
-#endif
     if( ImGui::Begin( "test" ) ) {
-#ifdef TUI
-        static float wrap_width = 50.0f;
-        ImGui::SliderFloat( "Wrap width", &wrap_width, 1, 60, "%.0f" );
-        float marker_size = 0.0f;
-#else
         static float wrap_width = 200.0f;
         ImGui::SliderFloat( "Wrap width", &wrap_width, -20, 600, "%.0f" );
         float marker_size = ImGui::GetTextLineHeight();
-#endif
 
 #define WRAP_START()                                                           \
     ImDrawList *draw_list = ImGui::GetWindowDrawList();                        \

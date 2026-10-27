@@ -957,14 +957,9 @@ action_id handle_action_menu( map &here )
                 // debug _is_a menu.
                 entry->txt += "…";
             }
-#if !defined(TILES)
-            REGISTER_ACTION( ACTION_TOGGLE_FULLSCREEN );
-#endif
-#if defined(TILES)
             REGISTER_ACTION( ACTION_TOGGLE_PIXEL_MINIMAP );
             REGISTER_ACTION( ACTION_RELOAD_TILESET );
             REGISTER_ACTION( ACTION_TOGGLE_PREVENT_OCCLUSION );
-#endif // TILES
             REGISTER_ACTION( ACTION_TOGGLE_PANEL_ADM );
             REGISTER_ACTION( ACTION_DISPLAY_SCENT );
             REGISTER_ACTION( ACTION_DISPLAY_SCENT_TYPE );
@@ -1044,12 +1039,10 @@ action_id handle_action_menu( map &here )
             REGISTER_ACTION( ACTION_CONTROL_VEHICLE );
             REGISTER_ACTION( ACTION_ITEMACTION );
             REGISTER_ACTION( ACTION_TOGGLE_THIEF_MODE );
-#if defined(TILES)
             if( use_tiles ) {
                 REGISTER_ACTION( ACTION_ZOOM_OUT );
                 REGISTER_ACTION( ACTION_ZOOM_IN );
             }
-#endif
         }
 
         if( category != "back" ) {

@@ -1,4 +1,3 @@
-#if defined(TILES)
 
 #include <algorithm>
 #include <cstdint>
@@ -995,4 +994,3 @@ TEST_CASE( "renderer_coordinator_retries_from_any_phase", "[tiles][renderer_reco
     }
 }
 
-#endif // TILES

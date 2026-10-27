@@ -7,7 +7,6 @@
 #include "text_snippets.h"
 #include "ui_manager.h"
 
-#if defined(TILES)
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui/imgui.h"
 #undef IMGUI_DEFINE_MATH_OPERATORS
@@ -18,25 +17,16 @@
 #include "cata_imgui.h"
 #include "text_snippets.h"
 #include "worldfactory.h"
-#else
-#include "cursesdef.h"
-#endif // TILES
 
 namespace
 {
 struct ui_state {
     ui_adaptor *ui;
     background_pane *bg;
-#ifdef TILES
     ImVec2 window_size;
     ImVec2 splash_size;
     SDL_Texture_Ptr splash;
     cata_path chosen_load_img;
-#else
-    size_t splash_width = 0;
-    std::vector<std::string> splash;
-    std::string blanks;
-#endif
     float hint_height;
     float loading_msg_height;
     // height of all the text that will be shown below the splash screen, tip + loading msg
@@ -54,7 +44,6 @@ static ui_state *gLUI = nullptr;
 
 static void redraw()
 {
-#ifdef TILES
     ImGui::SetNextWindowSize( ImGui::GetMainViewport()->Size );
     ImGui::SetNextWindowPos( {0, 0}, ImGuiCond_Always );
     ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
@@ -100,21 +89,6 @@ static void redraw()
     ImGui::End();
     ImGui::PopStyleVar();
 
-#else
-    point cursor( ( TERMX - static_cast<int>( gLUI->splash_width ) ) / 2, 0 );
-    nc_color white = c_white;
-    for( const std::string &line : gLUI->splash ) {
-        if( !line.empty() && line[0] == '#' ) {
-            continue;
-        }
-        print_colored_text( catacurses::stdscr, cursor, white,
-                            white, line );
-        cursor.y++;
-    }
-    mvwprintz( catacurses::stdscr, point( 0, TERMY - 1 ), c_black, gLUI->blanks );
-    center_print( catacurses::stdscr, TERMY - 1, c_white, string_format( "%s %s",
-                  gLUI->context.c_str(), gLUI->step.c_str() ) );
-#endif
 }
 
 static void resize()
@@ -135,7 +109,6 @@ static void update_state( const std::string &context, const std::string &step )
             resize();
         } );
 
-#ifdef TILES
         // padding will eat some of it, but we cannot access padding without imgui window
         // so eyeball a bit off the main viewport to compensate
         const ImVec2 screen_size = ImGui::GetMainViewport()->Size * 0.98f;
@@ -217,20 +190,6 @@ static void update_state( const std::string &context, const std::string &step )
             gLUI->splash = CreateTextureFromSurface( get_sdl_renderer(), surf );
         }
         gLUI->window_size = gLUI->splash_size + ImVec2{ 0.0f, 2.0f * ImGui::GetTextLineHeightWithSpacing() };
-#else
-        std::string splash = PATH_INFO::title( get_holiday_from_time() );
-        if( get_option<bool>( "ENABLE_ASCII_TITLE" ) ) {
-            splash = read_whole_file( splash ).value_or( _( "Cataclysm: Dark Days Ahead" ) );
-        }
-        gLUI->splash = string_split( splash, '\n' );
-        gLUI->blanks = std::string( TERMX, ' ' );
-        for( const std::string &line : gLUI->splash ) {
-            if( !line.empty() && line[0] == '#' ) {
-                continue;
-            }
-            gLUI->splash_width = std::max( gLUI->splash_width, remove_color_tags( line ).length() );
-        }
-#endif
     }
     gLUI->context = std::string( context );
     gLUI->step = std::string( step );
@@ -251,10 +210,8 @@ void loading_ui::show( const std::string &context, const std::string &step )
 void loading_ui::done()
 {
     if( gLUI != nullptr ) {
-#ifdef TILES
         // Need to manually clear the screen due to using direct ImGui calls
         clear_sdl_window();
-#endif
         delete gLUI->ui;
         delete gLUI->bg;
         delete gLUI;
@@ -264,9 +221,7 @@ void loading_ui::done()
 
 void loading_ui::release_gpu_resources()
 {
-#ifdef TILES
     if( gLUI != nullptr ) {
         gLUI->splash.reset();
     }
-#endif
 }

@@ -7,8 +7,6 @@
 #include "cuboid_rectangle.h"
 #include "point.h"
 
-#if defined(TILES)
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -6858,8 +6856,6 @@ SDL_Window *get_sdl_window()
 {
     return ::window.get();
 }
-
-#endif // TILES
 
 bool window_contains_point_relative( const catacurses::window &win, const point &p )
 {

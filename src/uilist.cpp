@@ -30,13 +30,12 @@
 #include "options.h"
 #endif
 
-#if defined(TILES) && !defined(__ANDROID__)
+#if !defined(__ANDROID__)
 #include "sdl_wrappers.h"
 #endif
 
 void uilist_impl::draw_controls()
 {
-#if defined(TILES)
     hide_if_hidden();
     using cata::options::mouse;
     bool cursor_shown = IsCursorVisible();
@@ -45,7 +44,6 @@ void uilist_impl::draw_controls()
     } else {
         ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     }
-#endif
     if( !parent.text.empty() ) {
         cataimgui::draw_colored_text( parent.text );
         ImGui::Separator();
@@ -1056,7 +1054,6 @@ void uilist::query_once( input_context &ctxt, int timeout,
 }
 
 ///@}
-#if defined(TILES)
 void uilist::set_hide( bool val )
 {
     create_or_get_ui()->hide_ui = val;
@@ -1066,7 +1063,6 @@ void uilist::hide_if_hidden()
 {
     create_or_get_ui()->hide_if_hidden();
 }
-#endif
 /**
  * cleanup
  */

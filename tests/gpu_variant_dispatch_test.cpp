@@ -1,4 +1,3 @@
-#if defined(TILES)
 #include "sdl_wrappers.h"
 
 #if SDL_MAJOR_VERSION >= 3
@@ -58,4 +57,3 @@ TEST_CASE( "memory_preset_from_option_value_mapping", "[tiles][gpu]" )
     }
 }
 #endif // SDL_MAJOR_VERSION >= 3
-#endif // TILES

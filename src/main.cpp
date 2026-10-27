@@ -77,13 +77,9 @@
 
 class ui_adaptor;
 
-#if defined(TILES) || defined(SDL_SOUND)
 #   include "sdl_version_wrappers.h"
-#endif
 
-#if defined(TILES)
 #   include "sdltiles.h"
-#endif
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -139,7 +135,7 @@ int start_logger( const char *app_name )
 namespace
 {
 
-#if defined(_WIN32) and defined(TILES)
+#if defined(_WIN32)
 // Used only if AttachConsole() works
 FILE *CONOUT;
 #endif
@@ -219,11 +215,7 @@ void printHelpMessage( const FirstPassArgs &first_pass_arguments,
  */
 void printVersionMessage()
 {
-#if defined(TILES)
     const bool hasTiles = true;
-#else
-    const bool hasTiles = false;
-#endif
 
 #if defined(SDL_SOUND)
     const bool hasSound = true;
@@ -647,7 +639,7 @@ int main( int argc, const char *argv[] )
             Json::globally_report_unvisited_members( false );
         } };
 
-#if defined(_WIN32) and defined(TILES)
+#if defined(_WIN32)
     const HANDLE std_output { GetStdHandle( STD_OUTPUT_HANDLE ) }, std_error { GetStdHandle( STD_ERROR_HANDLE ) };
     if( std_output != INVALID_HANDLE_VALUE and std_error != INVALID_HANDLE_VALUE ) {
         if( AttachConsole( ATTACH_PARENT_PROCESS ) ) {
@@ -741,7 +733,6 @@ int main( int argc, const char *argv[] )
     DebugLog( D_INFO, DC_ALL ) << "[main] C locale set to " << setlocale( LC_ALL, nullptr );
     DebugLog( D_INFO, DC_ALL ) << "[main] C++ locale set to " << std::locale().name();
 
-#if defined(TILES) || defined(SDL_SOUND)
     {
         const SDLVersionInfo compiled = GetCompiledSDLVersion();
         DebugLog( D_INFO, DC_ALL ) << "SDL version used during compile is "
@@ -755,12 +746,6 @@ int main( int argc, const char *argv[] )
                                    << linked.minor << "."
                                    << linked.patch;
     }
-#endif
-
-#if !defined(TILES)
-    get_options().init();
-    get_options().load();
-#endif
 
     // in test mode don't initialize curses to avoid escape sequences being inserted into output stream
     if( !test_mode ) {
@@ -848,18 +833,14 @@ int main( int argc, const char *argv[] )
 
 #if defined(LOCALIZE)
     if( get_option<std::string>( "USE_LANG" ).empty() && !SystemLocale::Language().has_value() ) {
-#if defined(TILES)
         display_buffer_draw_scope draw_scope;
         if( !display_buffer_scope_is_invalid() ) {
-#endif
             imclient->new_frame(); // we have to prime the pump, because of reasons
             imclient->end_frame();
             const std::string lang = select_language();
             get_options().get_option( "USE_LANG" ).setValue( lang );
             set_language_from_options();
-#if defined(TILES)
         }
-#endif
     }
 #endif
     replay_buffered_debugmsg_prompts();

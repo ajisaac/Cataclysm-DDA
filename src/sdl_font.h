@@ -3,8 +3,6 @@
 #define CATA_SRC_SDL_FONT_H
 #include "font_loader.h"
 
-#if defined(TILES)
-
 #include "cursesdef.h" // IWYU pragma: associated
 #include "sdltiles.h" // IWYU pragma: associated
 
@@ -194,7 +192,5 @@ class FontFallbackList : public Font
         std::vector<std::unique_ptr<Font>> fonts;
         std::map<std::string, std::vector<std::unique_ptr<Font>>::iterator> glyph_font;
 };
-
-#endif // TILES
 
 #endif // CATA_SRC_SDL_FONT_H

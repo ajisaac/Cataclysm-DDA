@@ -37,7 +37,7 @@
 #include "calendar.h"
 #include "calendar_ui.h"
 #include "cata_path.h"
-#if defined(TILES) && defined(USE_SDL3)
+#if defined(USE_SDL3)
 #include "cata_shader.h"
 #endif
 #include "cata_utility.h"
@@ -187,9 +187,7 @@ static const trait_id trait_DEBUG_SPEED( "DEBUG_SPEED" );
 static const trait_id trait_DEBUG_STAMINA( "DEBUG_STAMINA" );
 static const trait_id trait_NONE( "NONE" );
 
-#if defined(TILES)
 #include "sdl_wrappers.h"
-#endif
 
 #define dbg(x) DebugLog((x),D_GAME) << __FILE__ << ":" << __LINE__ << ": "
 
@@ -1009,7 +1007,7 @@ static int info_uilist()
         { uilist_entry( debug_menu_index::GENERATE_EFFECT_LIST, true, 'L', _( "Generate effect list" ) ) },
         { uilist_entry( debug_menu_index::WRITE_CITY_LIST, true, 'C', _( "Write city list to cities.output" ) ) },
         { uilist_entry( debug_menu_index::IMGUI_DEMO, true, 'u', _( "Open ImGui demo screen" ) ) },
-#if defined(TILES) && defined(USE_SDL3)
+#if defined(USE_SDL3)
         { uilist_entry( debug_menu_index::RELOAD_GPU_SHADERS, true, 'P', _( "Reload GPU shaders" ) ) },
 #endif
     };
@@ -3542,7 +3540,6 @@ static void game_report()
     // write to log
     DebugLog( DL_ALL, DC_ALL ) << " GAME REPORT:\n" << report;
     std::string popup_msg = _( "Report written to debug.log" );
-#if defined(TILES)
     // copy to clipboard
     if( query_yn(
             _( "Copy game report to clipboard?" ) +
@@ -3557,7 +3554,6 @@ static void game_report()
         // User declined to overwrite clipboard, so we'll just display it as a message. It's up to them to take an image or write it down.
         popup_msg = report;
     }
-#endif
     popup( popup_msg );
 }
 
@@ -3712,7 +3708,6 @@ static void print_npc_magic()
 
 static void show_sound()
 {
-#if defined(TILES)
     map &here = get_map();
 
     avatar &player_character = get_avatar();
@@ -3738,9 +3733,6 @@ static void show_sound()
 
     ui_manager::redraw();
     inp_mngr.wait_for_any_key();
-#else
-    popup( _( "This binary was not compiled with tiles support." ) );
-#endif
 }
 
 static void set_automove()
@@ -4902,7 +4894,7 @@ const std::vector<debug_action_entry> &all_actions()
         {
             debug_menu_index::RELOAD_GPU_SHADERS, translate_marker( "Reload GPU shaders" ), "reload gpu shaders sdl3", "Game", []()
             {
-#if defined(TILES) && defined(USE_SDL3)
+#if defined(USE_SDL3)
                 cata_shader::request_reprobe();
                 add_msg( _( "GPU shaders will reload on next frame." ) );
 #endif

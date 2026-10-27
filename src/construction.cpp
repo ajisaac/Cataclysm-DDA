@@ -75,13 +75,11 @@
 #include "vehicle.h"
 #include "vpart_position.h"
 
-#if defined(TILES)
 #include "cached_options.h"    // for use_tiles
 #include "cata_tiles.h"        // for cata_tiles
 #include "cuboid_rectangle.h"  // for half_open_rectangle
 #include "cursesport.h"        // for get_scaling_factor (??)
 #include "sdltiles.h"          // for tilecontext
-#endif
 
 class read_only_visitable;
 
@@ -591,16 +589,12 @@ construction_id construction_menu( const bool blueprint )
     ui_adaptor ui;
 
     std::unique_ptr<on_out_of_scope> restore_ui = std::make_unique<on_out_of_scope>( []() {
-#if defined( TILES )
         tilecontext->set_disable_occlusion( false );
-#endif
         // always needs to restore view
         g->invalidate_main_ui_adaptor();
     } );
-#if defined( TILES )
     tilecontext->set_disable_occlusion( true );
     g->invalidate_main_ui_adaptor();
-#endif
     std::unique_ptr<restore_on_out_of_scope<tripoint_rel_ms>> restore_view =
                 std::make_unique<restore_on_out_of_scope<tripoint_rel_ms>>( player_character.view_offset );
 
@@ -804,7 +798,6 @@ construction_id construction_menu( const bool blueprint )
         // 3 tiles of valid construction locations around the player character,
         // plus 2 tiles of padding.
         const int reserve_tile_height = 5;
-#if defined( TILES )
         const window_dimensions ter_dims = get_window_dimensions( g->w_terrain );
         const window_dimensions norm_dims = get_window_dimensions( catacurses::stdscr );
         const int tile_height = g->is_tileset_isometric()
@@ -822,10 +815,6 @@ construction_id construction_menu( const bool blueprint )
                                      // makes the reserved tiles visible.
                                      * tile_height + norm_dims.scaled_font_size.y - 1 )
                                    / norm_dims.scaled_font_size.y;
-#else
-        // desired number of reserved lines from the construction menu.
-        const int reserve_height = reserve_tile_height;
-#endif
 
         w_height = TERMY - reserve_height;
         // reduce height to match content
@@ -855,7 +844,6 @@ construction_id construction_menu( const bool blueprint )
         w_con = catacurses::newwin( w_height, w_width, point( w_x0, w_y0 ) );
 
         // center player tile in the visible part of main UI
-#if defined( TILES )
         const point visible_center(
             ter_dims.window_size_pixel.x / 2,
             ( norm_dims.scaled_font_size.y * w_y0
@@ -866,9 +854,6 @@ construction_id construction_menu( const bool blueprint )
                                         ter_dims.scaled_font_size, ter_dims.window_size_pixel,
                                         player_character.pos_bub().xy(), g->is_tileset_isometric() );
         player_character.view_offset = tripoint_rel_ms( player_character.pos_bub().xy() - target, 0 );
-#else
-        player_character.view_offset = tripoint_rel_ms( 0, ( w_height + 1 ) / 2, 0 );
-#endif
         g->invalidate_main_ui_adaptor();
 
         w_list_width = static_cast<int>( .375 * w_width );
@@ -1368,14 +1353,12 @@ void place_construction( std::vector<construction_group_str_id> const &groups )
     bool blink = true;
     std::optional<tripoint_bub_ms> mouse_pos;
 
-#if defined( TILES )
     on_out_of_scope reenable_occlusion( []() {
         tilecontext->set_disable_occlusion( false );
         g->invalidate_main_ui_adaptor();
     } );
     tilecontext->set_disable_occlusion( true );
     g->invalidate_main_ui_adaptor();
-#endif
 
     shared_ptr_fast<game::draw_callback_t> draw_preview = construction_preview_callback(
                 valid, mouse_pos, blink );

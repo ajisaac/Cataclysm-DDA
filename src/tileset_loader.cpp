@@ -1,4 +1,3 @@
-#if defined(TILES)
 #include "tileset_loader.h"
 
 #include <algorithm>
@@ -1246,4 +1245,3 @@ atlas_upload_interrupt tileset_cache::loader::upload_one_atlas( const atlas_repl
     return atlas_upload_interrupt::none;
 }
 
-#endif // defined(TILES)

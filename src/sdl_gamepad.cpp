@@ -1,4 +1,3 @@
-#if defined(TILES)
 #include "sdl_gamepad.h"
 
 #include <array>
@@ -930,4 +929,3 @@ bool handle_event( SDL_Event &event )
 
 } // namespace gamepad
 
-#endif // TILES

@@ -1,4 +1,3 @@
-#if (defined(TILES))
 
 #include <bitset>
 #include <map>
@@ -534,4 +533,3 @@ TEST_CASE( "unconnected_windows_rotate_to_indoor_floor", "[multitile][rotates]" 
     }
 }
 
-#endif // SDL_TILES

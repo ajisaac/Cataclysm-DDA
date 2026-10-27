@@ -75,8 +75,6 @@ TEST_CASE( "sprite_screen_bounds_idempotent", "[tint_overlay]" )
     CHECK( b.h == 30 );
 }
 
-#if defined(TILES)
-
 #include "cata_tiles.h"
 
 // Helper: simulate the opaque-bounds-to-destination transform from draw_sprite_at,
@@ -183,4 +181,3 @@ TEST_CASE( "opaque_bounds_transform_empty_opaque_rect", "[tint_overlay]" )
     CHECK_FALSE( b.valid );
 }
 
-#endif // TILES

@@ -131,9 +131,7 @@
 #include "worldfactory.h"
 #include "wound.h"
 
-#if defined(TILES)
 #include "sdltiles.h"
-#endif
 
 DynamicDataLoader::DynamicDataLoader()
 {
@@ -510,12 +508,7 @@ void DynamicDataLoader::initialize()
     add( "wound_fix", &wound_fix::load_wound_fixes );
     add( "mod_migration", &mod_migrations::load );
     add( "faction_mission", &faction_mission::load_faction_missions );
-#if defined(TILES)
     add( "mod_tileset", &load_mod_tileset );
-#else
-    // Dummy function
-    add( "mod_tileset", load_ignored_type );
-#endif
 }
 
 void DynamicDataLoader::load_data_from_path( const cata_path &path, const std::string &src )
@@ -931,9 +924,7 @@ void DynamicDataLoader::finalize_loaded_data()
             { _( "Wounds" ), &wound_type::finalize_all },
             { _( "Wound Fixes" ), &wound_fix::finalize_all },
             { _( "Zone Types" ), &zone_type::finalize_all },
-#if defined(TILES)
             { _( "Tileset" ), &load_tileset },
-#endif
             { _( "Math expressions" ), &finalize_conditions },
         }
     };

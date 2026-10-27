@@ -21,243 +21,6 @@
 
 static ImGuiKey cata_key_to_imgui( int cata_key );
 
-#ifdef TUI
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wold-style-cast"
-#include <curses.h>
-#pragma GCC diagnostic pop
-#include <imtui/imtui-impl-ncurses.h>
-#include <imtui/imtui-impl-text.h>
-
-#include "color_loader.h"
-
-namespace
-{
-struct RGBTuple {
-    uint8_t Blue;
-    uint8_t Green;
-    uint8_t Red;
-};
-
-struct pairs {
-    short FG;
-    short BG;
-};
-
-ImVec4 impalette[256] = {};
-std::array<RGBTuple, color_loader<RGBTuple>::COLOR_NAMES_COUNT> rgbPalette;
-std::array<pairs, 100> colorpairs;   //storage for paired colors
-} // namespace
-
-static ImVec4 compute_color( uint8_t index )
-{
-    if( index < 16 ) {
-        RGBTuple &rgbCol = rgbPalette[index];
-        return { static_cast<float>( rgbCol.Red ) / 255.0f,
-                 static_cast<float>( rgbCol.Green ) / 255.0f,
-                 static_cast<float>( rgbCol.Blue ) / 255.0f,
-                 1.0f };
-    } else if( index < 232 ) {
-        static uint8_t colors[6] = {0, 95, 135, 175, 215, 255};
-        int i = index - 16;
-        int r = i / 36;
-        i -= 36 * r;
-        int g = i / 6;
-        i -= 6 * g;
-        int b = i;
-        return { static_cast<float>( colors[r] ) / 255.0f,
-                 static_cast<float>( colors[g] ) / 255.0f,
-                 static_cast<float>( colors[b] ) / 255.0f,
-                 1.0f };
-    } else {
-        static uint8_t gray[24] = {8, 18, 28, 38, 48, 58, 68, 78, 88, 98, 108, 118,
-                                   128, 138, 148, 158, 168, 178, 188, 198, 208, 218,
-                                   228, 238
-                                  };
-        float level = static_cast<float>( gray[index - 232] ) / 255.0f;
-        return { level, level, level, 1.0f };
-    }
-}
-
-ImVec4 cataimgui::imvec4_from_color( const nc_color &color )
-{
-    int pair_id = color.get_index();
-    pairs &pair = colorpairs[pair_id];
-
-    int palette_index = pair.FG != 0 ? pair.FG : pair.BG;
-    if( color.is_bold() ) {
-        palette_index += color_loader<RGBTuple>::COLOR_NAMES_COUNT / 2;
-    }
-    return impalette[palette_index];
-}
-
-namespace
-{
-std::vector<std::pair<int, ImTui::mouse_event>> imtui_events;
-} // namespace
-
-cataimgui::client::client()
-{
-    load_colors();
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-
-    ImTui_ImplNcurses_Init();
-    ImTui_ImplText_Init();
-    ImGuiIO &io = ImGui::GetIO();
-
-    ( void )io;
-
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
-    ImGui::GetIO().IniFilename = nullptr;
-    ImGui::GetIO().LogFilename = nullptr;
-}
-
-cataimgui::client::~client()
-{
-    ImTui_ImplNcurses_Shutdown();
-    ImTui_ImplText_Shutdown();
-    // DestroyContext runs the internal Shutdown and frees the context;
-    // calling ImGui::Shutdown alone leaks the context created in the
-    // constructor.
-    ImGui::DestroyContext();
-}
-
-void cataimgui::client::new_frame( int display_buffer_w, int display_buffer_h )
-{
-    // TUI layout is driven by the ncurses backend, not display-buffer
-    // pixel dims.
-    ( void )display_buffer_w;
-    ( void )display_buffer_h;
-    ImTui_ImplNcurses_NewFrame( imtui_events );
-    imtui_events.clear();
-    ImTui_ImplText_NewFrame();
-
-    ImGui::NewFrame();
-}
-
-void cataimgui::client::abort_frame()
-{
-    // EndFrame finalizes the drawlist without painting it. Drain
-    // cata_input_trail like end_frame() so events do not pile up.
-    ImGui::EndFrame();
-    ImGuiIO &io = ImGui::GetIO();
-    for( const int &code : cata_input_trail ) {
-        io.AddKeyEvent( cata_key_to_imgui( code ), false );
-    }
-    cata_input_trail.clear();
-}
-
-void cataimgui::client::end_frame()
-{
-    ImGui::Render();
-
-    ImTui_ImplText_RenderDrawData( ImGui::GetDrawData() );
-    ImTui_ImplNcurses_DrawScreen();
-    ImGuiIO &io = ImGui::GetIO();
-    for( const int &code : cata_input_trail ) {
-        io.AddKeyEvent( cata_key_to_imgui( code ), false );
-    }
-    cata_input_trail.clear();
-}
-
-void cataimgui::client::upload_color_pair( int p, int f, int b )
-{
-    ImTui_ImplNcurses_UploadColorPair( p, static_cast<short>( f ), static_cast<short>( b ) );
-    cataimgui::init_pair( p, f, b );
-}
-
-void cataimgui::client::set_alloced_pair_count( short count )
-{
-    ImTui_ImplNcurses_SetAllocedPairCount( count );
-}
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wold-style-cast"
-void cataimgui::client::process_input( void *input, int display_buffer_w, int display_buffer_h )
-{
-    // TUI input is in cell coordinates from ncurses; no display-buffer
-    // pixel scaling.
-    ( void )display_buffer_w;
-    ( void )display_buffer_h;
-    if( !any_window_shown() ) {
-        return;
-    }
-    if( input ) {
-        input_event *curses_input = static_cast<input_event *>( input );
-        ImTui::mouse_event new_mouse_event = ImTui::mouse_event();
-        if( curses_input->type == input_event_t::mouse ) {
-            new_mouse_event.x = curses_input->mouse_pos.x;
-            new_mouse_event.y = curses_input->mouse_pos.y;
-            new_mouse_event.bstate = 0;
-            for( int input_raw_key : curses_input->sequence ) {
-                switch( static_cast<MouseInput>( input_raw_key ) ) {
-                    case MouseInput::LeftButtonPressed:
-                        new_mouse_event.bstate |= BUTTON1_PRESSED;
-                        break;
-                    case MouseInput::LeftButtonReleased:
-                        new_mouse_event.bstate |= BUTTON1_RELEASED;
-                        break;
-                    case MouseInput::RightButtonPressed:
-                        new_mouse_event.bstate |= BUTTON3_PRESSED;
-                        break;
-                    case MouseInput::RightButtonReleased:
-                        new_mouse_event.bstate |= BUTTON3_RELEASED;
-                        break;
-#if defined(BUTTON5_PRESSED) /* If curses version is prepared for a 5-button mouse, enable mousewheel */
-                    case MouseInput::ScrollWheelUp:
-                        new_mouse_event.bstate |= BUTTON4_PRESSED;
-                        break;
-                    case MouseInput::ScrollWheelDown:
-                        new_mouse_event.bstate |= BUTTON5_PRESSED;
-                        break;
-#endif
-                    default:
-                        break;
-                }
-            }
-            imtui_events.emplace_back( KEY_MOUSE, new_mouse_event );
-        } else {
-            int ch = curses_input->get_first_input();
-            if( ch != UNKNOWN_UNICODE ) {
-                if( ch > 127 && ch < 245 ) { // Values between 127 and 245 indicate UTF-8
-                    ch = utf8_wrapper( curses_input->text ).at( 0 );
-                }
-                imtui_events.emplace_back( ch, new_mouse_event );
-            }
-        }
-    }
-}
-#pragma GCC diagnostic pop
-
-void cataimgui::load_colors()
-{
-    color_loader<RGBTuple>().load( rgbPalette );
-    for( int i = 0; i < 256; i++ ) {
-        impalette[i] = compute_color( i );
-    }
-}
-
-void cataimgui::init_pair( int p, int f, int b )
-{
-    colorpairs[p].FG = f;
-    colorpairs[p].BG = b;
-}
-
-template<>
-RGBTuple color_loader<RGBTuple>::from_rgb( const int r, const int g, const int b )
-{
-    RGBTuple result;
-    // Blue
-    result.Blue = b;
-    // Green
-    result.Green = g;
-    // Red
-    result.Red = r;
-    return result;
-}
-#else
 #include "sdl_utils.h"
 #include "sdl_font.h"
 #include "sdltiles.h"
@@ -465,7 +228,7 @@ cataimgui::client::~client()
     ImGui::DestroyContext();
 }
 
-#if 0 and not TUI
+#if 0
 struct FreeTypeTest {
     enum FontBuildMode { FontBuildMode_FreeType, FontBuildMode_Stb };
 
@@ -564,7 +327,7 @@ point cataimgui::imgui_frame_display_size( const int display_buffer_w, const int
 
 void cataimgui::client::new_frame( int display_buffer_w, int display_buffer_h )
 {
-#if 0 and not TUI
+#if 0
     if( freetype_test.PreNewFrame() ) {
         // REUPLOAD FONT TEXTURE TO GPU
 #if SDL_MAJOR_VERSION >= 3
@@ -607,7 +370,7 @@ void cataimgui::client::new_frame( int display_buffer_w, int display_buffer_h )
     }
 
     ImGui::NewFrame();
-#if 0 and not TUI
+#if 0
     freetype_test.ShowFontsOptionsWindow();
 #endif
 }
@@ -673,8 +436,6 @@ void cataimgui::client::process_input( void *input, int display_buffer_w, int di
 #endif
     }
 }
-
-#endif
 
 bool cataimgui::client::auto_size_frame_active()
 {
@@ -867,10 +628,8 @@ void cataimgui::draw_colored_text( const std::string &original_text,
     if( chars_per_line == 0 ) {
         chars_per_line = SIZE_MAX;
     }
-#ifndef TUI
     size_t char_width = size_t( ImGui::CalcTextSize( " " ).x );
     chars_per_line /= char_width;
-#endif
     std::vector<std::string> folded_msg = foldstring( text, chars_per_line );
 
     for( const std::string &line : folded_msg ) {
@@ -969,10 +728,8 @@ cataimgui::window::~window()
         if( !ui_adaptor::has_imgui() ) {
             ImGui::GetIO().ClearInputKeys();
             GImGui->InputEventsQueue.resize( 0 );
-#ifdef TILES
             // Removes leftover ImGui artifacts
             clear_screen = true;
-#endif
         }
     }
 }
@@ -992,38 +749,22 @@ bool cataimgui::window::is_bounds_changed()
 
 size_t cataimgui::window::get_text_width( std::string_view text )
 {
-#ifndef TUI
     return ImGui::CalcTextSize( text.data(), text.data() + text.size() ).x;
-#else
-    return utf8_width( text );
-#endif
 }
 
 size_t cataimgui::window::get_text_height( const char *text )
 {
-#ifndef TUI
     return ImGui::CalcTextSize( "0" ).y * strlen( text );
-#else
-    return utf8_width( text );
-#endif
 }
 
 size_t cataimgui::window::str_width_to_pixels( size_t len )
 {
-#ifndef TUI
     return ImGui::CalcTextSize( "0" ).x * len;
-#else
-    return len;
-#endif
 }
 
 size_t cataimgui::window::str_height_to_pixels( size_t len )
 {
-#ifndef TUI
     return ImGui::CalcTextSize( "0" ).y * len;
-#else
-    return len;
-#endif
 }
 
 size_t cataimgui::get_string_width( const std::string_view str )
@@ -1038,10 +779,8 @@ size_t cataimgui::get_string_height( const std::string_view str, const float wra
     if( chars_per_line == 0 ) {
         chars_per_line = SIZE_MAX;
     }
-#ifndef TUI
     size_t char_width = size_t( ImGui::CalcTextSize( " " ).x );
     chars_per_line /= char_width;
-#endif
     const std::vector<std::string> folded_msg = foldstring( new_str, chars_per_line );
 
     return folded_msg.size() * ImGui::GetTextLineHeightWithSpacing();
@@ -1207,11 +946,7 @@ void cataimgui::PushGuiFont()
 
 void cataimgui::PushMonoFont()
 {
-#ifdef TILES
     ImFont *font = ImGui::GetIO().Fonts->Fonts[1];
-#else
-    ImFont *font = ImGui::GetIO().Fonts->Fonts[0];
-#endif
     ImGui::PushFont( font, font->LegacySize );
 }
 

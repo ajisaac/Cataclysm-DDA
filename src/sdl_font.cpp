@@ -1,5 +1,4 @@
-﻿#if defined( TILES )
-#include "sdl_font.h"
+﻿#include "sdl_font.h"
 
 #include "font_loader.h"
 #include "output.h"
@@ -666,4 +665,3 @@ void FontFallbackList::rebuild_for_renderer( const SDL_Renderer_Ptr &renderer )
     }
 }
 
-#endif // TILES

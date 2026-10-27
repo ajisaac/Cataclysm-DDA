@@ -45,9 +45,7 @@
 #include "vpart_position.h"
 #include "vpart_range.h"
 
-#if defined(TILES)
 #include "sdltiles.h" // To get tile screen positions for draw_appliance_connections()
-#endif
 
 class uilist_impl;
 
@@ -162,9 +160,7 @@ void veh_app_interact::run( map &here, vehicle &veh, const point_rel_ms &p )
     ap.app_loop( here );
 }
 
-#if defined(TILES)
 static bool showing_connections = true;
-#endif
 
 // Registers general appliance actions from keybindings
 veh_app_interact::veh_app_interact( vehicle &veh, const point_rel_ms &p )
@@ -177,9 +173,7 @@ veh_app_interact::veh_app_interact( vehicle &veh, const point_rel_ms &p )
     ctxt.register_action( "REMOVE" );
     ctxt.register_action( "MERGE" );
     ctxt.register_action( "DISCONNECT_GRID" );
-#if defined( TILES )
     ctxt.register_action( "TOGGLE_CONNECTION_VISIBILITY" );
-#endif
 }
 
 // @returns true if a battery part exists on any vehicle connected to veh
@@ -242,8 +236,6 @@ void veh_app_interact::init_ui_windows( map &here )
     imenu.setup();
 }
 
-#if defined( TILES )
-
 static void draw_imgui_line( point start, point end, uint32_t line_color, float width )
 {
     ImGui::GetBackgroundDrawList()->AddLine(
@@ -297,7 +289,6 @@ static void draw_appliance_connections( vehicle *veh )
         draw_connection_lines( start, end );
     }
 }
-#endif
 
 std::string veh_app_interact::draw_info_imgui_header( map &here )
 {
@@ -383,8 +374,6 @@ std::string veh_app_interact::draw_info_imgui_header( map &here )
         units::power rate = veh->total_accessory_epower() + veh->recharge_epower_this_turn;
         print_charge( _( "Appliance power consumption: " ), rate, ret );
     }
-
-
 
     return ret;
 }
@@ -609,12 +598,10 @@ void veh_app_interact::hide()
     vp.hidden = !vp.hidden;
 }
 
-#if defined(TILES)
 static void toggle_connections_visibility()
 {
     showing_connections = !showing_connections;
 }
-#endif
 
 void veh_app_interact::populate_app_actions( map &here )
 {
@@ -666,7 +653,6 @@ void veh_app_interact::populate_app_actions( map &here )
                     string_format( "%s%s", ctxt.get_action_name( "PLUG" ),
                                    //~ An addendum to Plug In's description, as in: Plug in appliance / merge power grid".
                                    veh->is_powergrid() ? _( " / merge power grid" ) : "" ) );
-#if defined(TILES)
     // Hide connections
     app_actions.emplace_back( []() {
         toggle_connections_visibility();
@@ -681,7 +667,6 @@ void veh_app_interact::populate_app_actions( map &here )
         } );
         imenu.addentry( -1, true, 0, _( "Hide/Unhide wiring" ) );
     }
-#endif
 
     if( veh->is_powergrid() && veh->part_count() > 1 && !vp->info().has_flag( VPFLAG_WALL_MOUNTED ) ) {
         // Disconnect from power grid
@@ -716,11 +701,9 @@ shared_ptr_fast<ui_adaptor> veh_app_interact::create_or_get_ui_adaptor( map &her
             cui.position_from_window( catacurses::stdscr );
         } );
         current_ui->mark_resize();
-#if defined(TILES)
         current_ui->on_redraw( [this]( const ui_adaptor & ) {
             draw_appliance_connections( veh );
         } );
-#endif
     }
     return current_ui;
 }

@@ -2,8 +2,6 @@
 #ifndef CATA_SRC_CATA_SHADER_H
 #define CATA_SRC_CATA_SHADER_H
 
-#if defined(TILES)
-
 #include "sdl_wrappers.h"
 
 namespace cata_shader
@@ -265,7 +263,5 @@ class variant_pass
 } // namespace cata_shader
 
 #endif // SDL_MAJOR_VERSION >= 3
-
-#endif // TILES
 
 #endif // CATA_SRC_CATA_SHADER_H

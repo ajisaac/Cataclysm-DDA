@@ -1,7 +1,6 @@
 #pragma once
 #ifndef CATA_SRC_SDL_GAMEPAD_H
 #define CATA_SRC_SDL_GAMEPAD_H
-#if defined(TILES)
 #include "input_enums.h"
 #include "sdl_wrappers.h"
 
@@ -59,6 +58,5 @@ int direction_to_radial_joy( direction dir, int stick_idx );
 
 } // namespace gamepad
 
-#endif // TILES
 #endif // CATA_SRC_SDL_GAMEPAD_H
 

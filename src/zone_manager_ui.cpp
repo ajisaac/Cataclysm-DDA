@@ -57,15 +57,11 @@ shared_ptr_fast<game::draw_callback_t> zone_manager_ui::create_zone_callback(
                                                pos.y() - getmaxy( g->w_terrain ) / 2 ) );
 
             tripoint_rel_ms offset;
-#if defined(TILES)
             if( use_tiles ) {
                 offset = tripoint_rel_ms::zero; //TILES
             } else {
-#endif
                 offset = { offset2, 0 }; //CURSES
-#if defined(TILES)
             }
-#endif
 
             const tripoint_bub_ms start( std::min( zone_start->x(), zone_end->x() ),
                                          std::min( zone_start->y(), zone_end->y() ),

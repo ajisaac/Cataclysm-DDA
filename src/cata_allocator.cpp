@@ -24,7 +24,6 @@
 #include <snmalloc/override/new.cc> // NOLINT(bugprone-suspicious-include)
 #endif
 
-#if defined(TILES) || defined(SDL_SOUND)
 #define SDL_SET_MEMORY_FUNCTIONS
 #if defined(USE_SDL3)
 #include <SDL3/SDL_stdinc.h>
@@ -32,7 +31,6 @@
 #include <SDL2/SDL_stdinc.h>
 #else
 #include <SDL_stdinc.h>
-#endif
 #endif
 
 void cata::init_allocator()

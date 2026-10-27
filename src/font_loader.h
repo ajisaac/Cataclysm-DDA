@@ -6,8 +6,6 @@
 #include <imgui/imgui_freetype.h>
 #undef IMGUI_DEFINE_MATH_OPERATORS
 
-#if defined( TILES )
-
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -75,7 +73,5 @@ class font_loader
         /// @throws std::exception upon any kind of error.
         void load();
 };
-
-#endif // TILES
 
 #endif // CATA_SRC_FONT_LOADER_H

@@ -9,8 +9,6 @@ namespace catacurses
 class window;
 } // namespace catacurses
 
-#if defined(TILES)
-
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -160,8 +158,6 @@ class display_buffer_draw_scope
         bool outermost_ = false;
         bool active_ = false;
 };
-
-#endif // TILES
 
 // Text level, valid only for a point relative to the window, not a point in overall space.
 bool window_contains_point_relative( const catacurses::window &win, const point &p );

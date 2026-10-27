@@ -4060,15 +4060,11 @@ void target_ui::draw_terrain_overlay()
             if( tile.z() != center.z() ) {
                 continue;
             }
-#ifdef TILES
             if( use_tiles ) {
                 g->draw_highlight( tile );
             } else {
-#endif
                 get_map().drawsq( g->w_terrain, tile, params );
-#ifdef TILES
             }
-#endif
         }
     }
 }

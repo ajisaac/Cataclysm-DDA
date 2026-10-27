@@ -566,7 +566,6 @@ void editmap_ui::draw_main_ui_overlay()
     }
     if( editmap_state.tmpmap_ptr ) {
         tinymap &tmpmap = *editmap_state.tmpmap_ptr;
-#ifdef TILES
         if( use_tiles ) {
             const tripoint_bub_ms player_location = get_player_character().pos_bub();
             const point_bub_ms origin_p = target.xy() + point( 1 - SEEX, 1 - SEEY );
@@ -636,15 +635,12 @@ void editmap_ui::draw_main_ui_overlay()
                                           std::get<2>( it.second ), std::get<3>( it.second ) );
             }
         } else {
-#endif
             drawsq_params params = drawsq_params().center( tripoint_bub_ms( SEEX - 1, SEEY - 1, target.z() ) );
             for( const tripoint_omt_ms &p : tmpmap.points_on_zlevel() ) {
                 tmpmap.drawsq( g->w_terrain, rebase_bub( p ), params );
             }
             tmpmap.rebuild_vehicle_level_caches();
-#ifdef TILES
         }
-#endif
     }
 }
 

@@ -84,9 +84,7 @@
 #include "ranged.h"
 #include "rng.h"
 #include "safemode_ui.h"
-#if defined(TILES)
 #include "sdl_gamepad.h"
-#endif
 #include "sleep.h"
 #include "sounds.h"
 #include "string_formatter.h"
@@ -108,10 +106,8 @@
 
 enum class direction : unsigned int;
 
-#if defined(TILES)
 #include "cata_tiles.h" // all animation functions will be pushed out to a cata_tiles function in some manner
 #include "sdltiles.h"
-#endif
 
 static const bionic_id bio_remote( "bio_remote" );
 
@@ -276,10 +272,8 @@ input_context game::get_player_input( std::string &action )
     const visibility_variables &cache = here.get_visibility_variables_cache();
     const level_cache &map_cache = here.get_cache_ref( pos.z() );
     const auto &visibility_cache = map_cache.visibility_cache;
-#if defined(TILES)
     // Mark cata_tiles draw caches as dirty
     tilecontext->set_draw_cache_dirty();
-#endif
 
     user_turn current_turn;
 
@@ -307,7 +301,6 @@ input_context game::get_player_input( std::string &action )
         point offset( u.view_offset.xy().raw() + point( -getmaxx( w_terrain ) / 2 + pos.x(),
                       -getmaxy( w_terrain ) / 2 + pos.y() ) );
 
-#if defined(TILES)
         if( g->is_tileset_isometric() ) {
             iStart.x = 0;
             iStart.y = 0;
@@ -316,7 +309,6 @@ input_context game::get_player_input( std::string &action )
             offset.x = 0;
             offset.y = 0;
         }
-#endif //TILES
 
         // TODO: Move the weather calculations out of here.
         const bool bWeatherEffect = weather_info.symbol != NULL_UNICODE;
@@ -410,12 +402,10 @@ input_context game::get_player_input( std::string &action )
                     // ignores ui_adaptor z-order and paints over it.
                     invalidate_main_ui_adaptor();
                 } else {
-#if defined(TILES)
                     // Mark minimap dirty so beacon colors keep cycling
                     if( tilecontext->has_blinking_minimap() ) {
                         werase( g->w_pixel_minimap );
                     }
-#endif
                     wnoutrefresh( g->w_pixel_minimap );
                 }
             }
@@ -431,15 +421,12 @@ input_context game::get_player_input( std::string &action )
             // Remove asynchronous animations after animation delay if no input
             if( current_turn.async_anim_timeout() ) {
                 bool cleared = g->void_async_anim_curses();
-#if defined(TILES)
                 cleared |= tilecontext->void_async_anim();
-#endif
                 if( cleared ) {
                     invalidate_main_ui_adaptor();
                 }
             }
 
-#if defined(TILES)
             // Expire stale hit-animation overlays between draws
             if( tilecontext->expire_hit_animations() ) {
                 invalidate_main_ui_adaptor();
@@ -449,7 +436,6 @@ input_context game::get_player_input( std::string &action )
             if( tilecontext->has_animated_tiles() ) {
                 invalidate_main_ui_adaptor();
             }
-#endif
 
             if( g->has_blink_curses() && current_turn.blink_timeout() ) {
                 // Toggle blink phase and redraw
@@ -3286,12 +3272,7 @@ bool game::handle_action()
     // Remove asynchronous animations if any action taken before the input timeout
     // Otherwise repeated input can cause animations to accumulate as the timeout is never reached
     g->void_async_anim_curses();
-#if defined(TILES)
     tilecontext->void_async_anim();
-#else
-    // Curses does not redraw itself so do it here
-    g->invalidate_main_ui_adaptor();
-#endif
 
     bool veh_ctrl = has_vehicle_control( player_character );
 
@@ -3325,7 +3306,6 @@ bool game::handle_action()
             }
         }
 
-#if defined(TILES)
         if( gamepad::is_active() ) {
             gamepad::direction dir = gamepad::get_left_stick_direction();
             if( dir != gamepad::direction::NONE ) {
@@ -3339,7 +3319,6 @@ bool game::handle_action()
                 }
             }
         }
-#endif
 
         if( act == ACTION_ACTIONMENU ) {
             if( uquit == QUIT_WATCH ) {

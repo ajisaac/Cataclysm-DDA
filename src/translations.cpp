@@ -52,7 +52,7 @@ std::string locale_dir()
 #define CATA_IS_ON_BSD
 #endif
 
-#if !defined(__ANDROID__) && ((defined(__linux__) || defined(CATA_IS_ON_BSD) || (defined(MACOSX) && !defined(TILES))))
+#if !defined(__ANDROID__) && (defined(__linux__) || defined(CATA_IS_ON_BSD))
     if( !PATH_INFO::base_path().get_logical_root_path().empty() ) {
         loc_dir = ( PATH_INFO::base_path() / "share" / "locale" ).generic_u8string();
     } else {

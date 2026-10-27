@@ -2,8 +2,6 @@
 #ifndef CATA_SRC_SDL_RENDERER_RECOVERY_H
 #define CATA_SRC_SDL_RENDERER_RECOVERY_H
 
-#if defined(TILES)
-
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -493,7 +491,5 @@ class software_render_fixture
     private:
         bool available_ = false;
 };
-
-#endif // TILES
 
 #endif // CATA_SRC_SDL_RENDERER_RECOVERY_H

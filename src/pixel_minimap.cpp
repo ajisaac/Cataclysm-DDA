@@ -1,4 +1,3 @@
-#if defined(TILES)
 
 #include "pixel_minimap.h"
 
@@ -651,4 +650,3 @@ const
     cata_fatal( "Invalid pixel_minimap_type %d", static_cast<int>( type ) );
 }
 
-#endif // SDL_TILES

@@ -192,9 +192,7 @@ void input_context_stack_impl::push( std::shared_ptr<input_context_handle> const
     stack.push_back( context );
 }
 
-#if defined(__ANDROID__) || defined(TILES)
 input_context_stack_impl input_context::input_context_stack;
-#endif
 
 #if defined(__ANDROID__)
 void input_context::register_manual_key( manual_key mk )
@@ -1203,35 +1201,6 @@ input_event input_context::get_raw_input()
     return next_action;
 }
 
-#if defined(TUI)
-// Also specify that we don't have a gamepad plugged in.
-std::optional<tripoint_bub_ms> input_context::get_coordinates( const catacurses::window
-        &capture_win, const point &offset, const bool center_cursor ) const
-{
-    if( !coordinate_input_received ) {
-        return std::nullopt;
-    }
-    const point view_size( getmaxx( capture_win ), getmaxy( capture_win ) );
-    const point win_min( getbegx( capture_win ),
-                         getbegy( capture_win ) );
-    const half_open_rectangle<point> win_bounds( win_min, win_min + view_size );
-    if( !win_bounds.contains( coordinate ) ) {
-        return std::nullopt;
-    }
-
-    point p = coordinate + offset;
-    // If no offset is specified, account for the window location
-    if( offset == point::zero ) {
-        p -= win_min;
-    }
-    // Some windows (notably the overmap) want 0,0 to be the center of the screen
-    if( center_cursor ) {
-        p -= view_size / 2;
-    }
-    return tripoint_bub_ms( p.x, p.y, get_map().get_abs_sub().z() );
-}
-#endif
-
 std::optional<tripoint_rel_omt> input_context::get_coordinates_rel_omt( const catacurses::window
         &capture_win, const point &offset, const bool center_cursor ) const
 {
@@ -1246,14 +1215,6 @@ std::optional<tripoint_rel_omt> input_context::get_coordinates_rel_omt( const ca
 std::optional<point> input_context::get_coordinates_text( const catacurses::window
         &capture_win ) const
 {
-#if !defined( TILES )
-    std::optional<tripoint_bub_ms> coord3d = get_coordinates( capture_win );
-    if( coord3d.has_value() ) {
-        return coord3d->xy().raw();
-    } else {
-        return std::nullopt;
-    }
-#else
     if( !coordinate_input_received ) {
         return std::nullopt;
     }
@@ -1276,7 +1237,6 @@ std::optional<point> input_context::get_coordinates_text( const catacurses::wind
     const point selected( divide_round_down( screen_pos.x, fw ),
                           divide_round_down( screen_pos.y, fh ) );
     return selected;
-#endif
 }
 
 std::string input_context::get_action_name( const std::string &action_id ) const
@@ -1402,11 +1362,7 @@ bool input_context::is_event_type_enabled( const input_event_t type ) const
         case input_event_t::keyboard_code:
             return input_manager::actual_keyboard_mode( preferred_keyboard_mode ) == keyboard_mode::keycode;
         case input_event_t::gamepad:
-#if defined(TILES)
             return gamepad::is_active();
-#else
-            return false;
-#endif
         case input_event_t::mouse:
             return true;
     }

@@ -22,9 +22,7 @@
 #include "bionics.h"
 #include "cached_options.h"
 #include "calendar.h"
-#ifdef TILES
 #include "cata_imgui.h"
-#endif
 #include "cata_variant.h"
 #include "clzones.h"
 #include "coordinates.h"
@@ -496,13 +494,11 @@ void game::handle_progress_ui()
             }
 
             // Avoid redrawing the main UI every time due to invalidation
-#ifdef TILES
             // If an ImGui window just closed and cleared the buffer, do a full
             // redraw now before blocking UIs below.
             if( cataimgui::clear_pending() ) {
                 ui_manager::redraw();
             }
-#endif
             ui_adaptor dummy( ui_adaptor::disable_uis_below {} );
             if( !wait_popup ) {
                 wait_popup = std::make_unique<static_popup>();

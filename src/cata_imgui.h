@@ -13,15 +13,9 @@ class nc_color;
 struct input_event;
 using ImGuiInputTextFlags = int;
 
-#if defined(IMTUI) || !(defined(WIN32) || defined(TILES))
-#   define TUI
-#endif
-
-#ifndef TUI
 #include "sdl_geometry.h"
 #include "sdl_wrappers.h"
 #include "color_loader.h"
-#endif
 #include "text.h"
 
 struct point;
@@ -71,23 +65,17 @@ constexpr int min_screen_res_y = 384;
 class client
 {
         std::vector<int> cata_input_trail;
-#ifndef TUI
         // Backend-active latches for the platform (SDL2/SDL3) and
         // renderer (SDLRenderer2/3) ImGui backends. Guard the wrappers
         // so partial teardown + retry is idempotent.
         bool platform_backend_active_ = false;
         bool renderer_backend_active_ = false;
-#endif
     public:
-#ifdef TUI
-        client();
-#else
         client( const SDL_Renderer_Ptr &sdl_renderer, const SDL_Window_Ptr &sdl_window,
                 const GeometryRenderer_Ptr &sdl_geometry );
         void load_fonts( const std::unique_ptr<Font> &gui_font, const std::unique_ptr<Font> &mono_font,
                          const std::array<SDL_Color, color_loader<SDL_Color>::COLOR_NAMES_COUNT> &windowsPalette,
                          const std::vector<font_config> &gui_typeface, const std::vector<font_config> &mono_typeface );
-#endif
         ~client();
 
         // display_buffer_w/h drive ImGui layout (DisplaySize). Pass 0 to fall
@@ -101,10 +89,6 @@ class client
         void abort_frame();
         void process_input( void *input, int display_buffer_w = 0, int display_buffer_h = 0 );
         void process_cata_input( const input_event &event );
-#ifdef TUI
-        void upload_color_pair( int p, int f, int b );
-        void set_alloced_pair_count( short count );
-#else
         const SDL_Renderer_Ptr &sdl_renderer;
         const SDL_Window_Ptr &sdl_window;
         const GeometryRenderer_Ptr &sdl_geometry;
@@ -120,7 +104,6 @@ class client
         // buffers) without tearing down the backend; they recreate
         // lazily on the next RenderDrawData.
         void destroy_backend_device_objects() const;
-#endif
         bool auto_size_frame_active();
         bool any_window_shown();
 
@@ -134,13 +117,11 @@ class client
         static void clear_text_focus();
 };
 
-#ifndef TUI
 // Pick the ImGui DisplaySize for a frame: the explicit display-buffer dims when
 // both are positive, else the renderer's output dims. Keeps the terminal-buffer
 // sizing contract when the idle-null target leaves the output reading the window.
 point imgui_frame_display_size( int display_buffer_w, int display_buffer_h,
                                 int renderer_output_w, int renderer_output_h );
-#endif
 
 void point_to_imvec2( point *src, ImVec2 *dest );
 void imvec2_to_point( ImVec2 *src, point *dest );
@@ -154,9 +135,7 @@ void set_scroll( scroll &s );
 void draw_colored_text( const std::string &original_text, const nc_color &color,
                         float wrap_width = 0.0F, bool *is_selected = nullptr,
                         bool *is_focused = nullptr, bool *is_hovered = nullptr );
-#ifndef TUI
 bool clear_pending();
-#endif
 void draw_colored_text( const std::string &original_text, nc_color &color,
                         float wrap_width = 0.0F, bool *is_selected = nullptr,
                         bool *is_focused = nullptr, bool *is_hovered = nullptr );
@@ -208,11 +187,6 @@ class window
         void draw_filter( const input_context &ctxt, bool filtering_active );
         void hide_if_hidden() const;
 };
-
-#ifdef TUI
-void init_pair( int p, int f, int b );
-void load_colors();
-#endif
 
 // drops the ImGuiInputTextFlags_CharsScientific flag from regular imgui InputFloat because it doesn't allow commas
 bool InputFloat( const char *label, float *v, float step = 0.0f, float step_fast = 0.0f,

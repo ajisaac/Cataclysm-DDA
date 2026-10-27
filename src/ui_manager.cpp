@@ -16,10 +16,8 @@
 #include <emscripten.h>
 #endif
 
-#if defined(TILES)
 #include "sdl_wrappers.h"
 #include "sdltiles.h"
-#endif
 
 using ui_stack_t = std::vector<std::reference_wrapper<ui_adaptor>>;
 
@@ -27,12 +25,10 @@ static bool imgui_frame_started = false;
 static bool redraw_in_progress = false;
 static bool showing_debug_message = false;
 static bool restart_redrawing = false;
-#if defined( TILES )
 static std::optional<SDL_Rect> prev_clip_rect;
 // renderer_resource_generation() sampled when prev_clip_rect was saved, so the
 // restore can be skipped if a recovery rebuilt the renderer in between.
 static uint64_t prev_clip_rect_generation = 0;
-#endif
 static ui_stack_t ui_stack;
 
 ui_adaptor::ui_adaptor() : is_imgui( false ), disabling_uis_below( false ),
@@ -58,7 +54,6 @@ ui_adaptor::ui_adaptor( ui_adaptor::debug_message_ui ) : is_imgui( false ),
     if( redraw_in_progress ) {
         restart_redrawing = true;
     }
-#if defined( TILES )
     // Reset the clip rect because the debug message UI might be created in a
     // redraw callback when a clip rect is active. When the UI is deconstructed,
     // restore the previous clip rect to prevent the redraw callback from
@@ -82,7 +77,6 @@ ui_adaptor::ui_adaptor( ui_adaptor::debug_message_ui ) : is_imgui( false ),
             prev_clip_rect = std::nullopt;
         }
     }
-#endif
     ui_stack.emplace_back( *this );
 }
 
@@ -95,7 +89,6 @@ ui_adaptor::~ui_adaptor()
     if( is_debug_message_ui ) {
         cata_assert( showing_debug_message );
         showing_debug_message = false;
-#if defined( TILES )
         // See ui_adaptor( debug_message_ui ). Skip the restore when a recovery is
         // queued now, or when one rebuilt the renderer since the rect was saved:
         // the saved rect belongs to the pre-rebuild renderer.
@@ -104,7 +97,6 @@ ui_adaptor::~ui_adaptor()
             const SDL_Renderer_Ptr &renderer = get_sdl_renderer();
             RenderSetClipRect( renderer, &prev_clip_rect.value() );
         }
-#endif
     }
     for( auto it = ui_stack.rbegin(); it < ui_stack.rend(); ++it ) {
         if( &it->get() == this ) {
@@ -123,14 +115,9 @@ void ui_adaptor::position_from_window( const catacurses::window &win )
     } else {
         const rectangle<point> old_dimensions = dimensions;
         // ensure position is updated before calling invalidate
-#ifdef TILES
         const window_dimensions dim = get_window_dimensions( win );
         dimensions = rectangle<point>(
                          dim.window_pos_pixel, dim.window_pos_pixel + dim.window_size_pixel );
-#else
-        const point origin( getbegx( win ), getbegy( win ) );
-        dimensions = rectangle<point>( origin, origin + point( getmaxx( win ), getmaxy( win ) ) );
-#endif
         invalidated = true;
         ui_manager::invalidate( old_dimensions, false );
     }
@@ -140,13 +127,9 @@ void ui_adaptor::position( const point &topleft, const point &size )
 {
     const rectangle<point> old_dimensions = dimensions;
     // ensure position is updated before calling invalidate
-#ifdef TILES
     const window_dimensions dim = get_window_dimensions( topleft, size );
     dimensions = rectangle<point>( dim.window_pos_pixel,
                                    dim.window_pos_pixel + dim.window_size_pixel );
-#else
-    dimensions = rectangle<point>( topleft, topleft + size );
-#endif
     invalidated = true;
     ui_manager::invalidate( old_dimensions, false );
 }
@@ -172,48 +155,29 @@ void ui_adaptor::on_screen_resize( const screen_resize_callback_t &fun )
 
 void ui_adaptor::set_cursor( const catacurses::window &w, const point &pos )
 {
-#if !defined( TILES )
-    cursor_type = cursor::custom;
-    cursor_pos = point( getbegx( w ), getbegy( w ) ) + pos;
-#else
     // Unimplemented
     cursor_type = cursor::disabled;
     static_cast<void>( w );
     static_cast<void>( pos );
-#endif
 }
 
 void ui_adaptor::record_cursor( const catacurses::window &w )
 {
-#if !defined( TILES )
-    cursor_type = cursor::custom;
-    cursor_pos = point( getbegx( w ) + getcurx( w ), getbegy( w ) + getcury( w ) );
-#else
     // Unimplemented
     cursor_type = cursor::disabled;
     static_cast<void>( w );
-#endif
 }
 
 void ui_adaptor::record_term_cursor()
 {
-#if defined( TUI )
-    cursor_type = cursor::custom;
-    cursor_pos = point( getcurx( catacurses::newscr ), getcury( catacurses::newscr ) );
-#else
     // Unimplemented
     cursor_type = cursor::disabled;
-#endif
 }
 
 void ui_adaptor::default_cursor()
 {
-#if defined( TUI )
-    cursor_type = cursor::last;
-#else
     // Unimplemented
     cursor_type = cursor::disabled;
-#endif
 }
 
 void ui_adaptor::disable_cursor()
@@ -223,11 +187,7 @@ void ui_adaptor::disable_cursor()
 
 static void restore_cursor( const point &p )
 {
-#if defined( TUI )
-    wmove( catacurses::newscr, p );
-#else
     static_cast<void>( p );
-#endif
 }
 
 void ui_adaptor::mark_resize() const
@@ -380,7 +340,6 @@ void ui_adaptor::redraw_invalidated( )
     if( test_mode || ui_stack.empty() ) {
         return;
     }
-#if defined(TILES)
     display_buffer_draw_scope draw_scope;
     if( !draw_scope.should_draw() ) {
         // Return before the redraw callbacks clear their invalidation flags, so a
@@ -391,14 +350,9 @@ void ui_adaptor::redraw_invalidated( )
     int buf_w = 0;
     int buf_h = 0;
     get_display_buffer_dims( &buf_w, &buf_h );
-#endif
     // This boolean is needed when a debug error is thrown inside redraw_invalidated
     if( !imgui_frame_started ) {
-#if defined(TILES)
         imclient->new_frame( buf_w, buf_h );
-#else
-        imclient->new_frame();
-#endif
     }
     imgui_frame_started = true;
 
@@ -517,7 +471,6 @@ void ui_adaptor::redraw_invalidated( )
     emscripten_sleep( 1 );
 #endif
 
-#if defined(TILES)
     if( renderer_should_abort_frame() ) {
         // Close the ImGui frame WITHOUT backend rendering: abort_frame balances
         // the next NewFrame assert without painting the drawlist onto a target
@@ -529,7 +482,6 @@ void ui_adaptor::redraw_invalidated( )
         imgui_frame_started = false;
         return;
     }
-#endif
     imclient->end_frame();
     imgui_frame_started = false;
 

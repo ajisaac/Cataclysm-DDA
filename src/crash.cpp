@@ -16,13 +16,7 @@
 #include <string>
 #include <typeinfo>
 
-#if !(defined(WIN32) || defined(TILES) || defined(CYGWIN))
-#include <curses.h>
-#endif
-
-#if defined(TILES)
 #include "sdl_wrappers.h"
-#endif
 
 #if defined(_WIN32)
 #if 1 // HACK: Hack to prevent reordering of #include "platform_win.h" by IWYU
@@ -79,12 +73,10 @@ extern "C" {
                  << "\nVERSION: " << getVersionString()
                  << "\nTYPE: " << type
                  << "\nMESSAGE: " << msg;
-#if defined(TILES)
         if( SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Error",
                                       log_text.str().c_str(), nullptr ) != 0 ) {
             log_text << "\nError creating SDL message box: " << SDL_GetError();
         }
-#endif
 #endif
         log_text << "\nSTACK TRACE:\n";
         debug_write_backtrace( log_text );
@@ -140,9 +132,6 @@ extern "C" {
             default:
                 return;
         }
-#if !(defined(WIN32) || defined(TILES)) && !defined(CYGWIN)
-        endwin();
-#endif
         if( !isDebuggerActive() ) {
             log_crash( "Signal", msg );
         }

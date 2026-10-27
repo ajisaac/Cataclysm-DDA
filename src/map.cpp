@@ -111,10 +111,8 @@
 #include "weather.h"
 #include "weighted_list.h"
 
-#if defined(TILES)
 #include "cata_tiles.h" // all animation functions will be pushed out to a cata_tiles function in some manner
 #include "sdltiles.h"
-#endif
 
 static const ammo_effect_str_id ammo_effect_IGNITE( "IGNITE" );
 static const ammo_effect_str_id ammo_effect_INCENDIARY( "INCENDIARY" );
@@ -2286,21 +2284,17 @@ uint8_t map::get_known_connections( const tripoint_bub_ms &p,
     uint8_t val = 0;
     std::function<bool( const tripoint_bub_ms & )> is_memorized;
     avatar &player_character = get_avatar();
-#ifdef TILES
     if( use_tiles ) {
         is_memorized =
         [&]( const tripoint_bub_ms & q ) {
             return !player_character.get_memorized_tile( get_abs( q ) ).get_ter_id().empty();
         };
     } else {
-#endif
         is_memorized =
         [&]( const tripoint_bub_ms & q ) {
             return player_character.get_memorized_tile( get_abs( q ) ).symbol != 0;
         };
-#ifdef TILES
     }
-#endif
 
     const bool overridden = override.find( p ) != override.end();
     const bool is_transparent = ch.transparency_cache[p.x()][p.y()] > LIGHT_TRANSPARENCY_SOLID;
@@ -2372,19 +2366,15 @@ uint8_t map::get_known_connections_f( const tripoint_bub_ms &p,
     uint8_t val = 0;
     std::function<bool( const tripoint_bub_ms & )> is_memorized;
     avatar &player_character = get_avatar();
-#ifdef TILES
     if( use_tiles ) {
         is_memorized = [&]( const tripoint_bub_ms & q ) {
             return !player_character.get_memorized_tile( get_abs( q ) ).get_dec_id().empty();
         };
     } else {
-#endif
         is_memorized = [&]( const tripoint_bub_ms & q ) {
             return player_character.get_memorized_tile( get_abs( q ) ).symbol != 0;
         };
-#ifdef TILES
     }
-#endif
 
     const bool overridden = override.find( p ) != override.end();
     const bool is_transparent = ch.transparency_cache[p.x()][p.y()] > LIGHT_TRANSPARENCY_SOLID;
@@ -7553,12 +7543,10 @@ void map::update_visibility_cache( const int zlev )
         }
     }
 
-#if defined(TILES)
     if( !test_mode ) {
         // Mark cata_tiles draw caches as dirty
         tilecontext->set_draw_cache_dirty();
     }
-#endif
 
     visibility_variables_cache.last_pos = pos;
     visibility_variables_cache.visibility_cache_dirty = false;
@@ -10607,12 +10595,10 @@ void map::build_map_cache( const int zlev, bool skip_lightmap )
         player_prev_pos = p;
         player_prev_range = sr;
         camera_cache_dirty = true;
-#if defined(TILES)
         if( !test_mode ) {
             // Mark cata_tiles draw caches as dirty
             tilecontext->set_draw_cache_dirty();
         }
-#endif
     }
     if( camera_cache_dirty ) {
         u.moncam_cache = mcache;

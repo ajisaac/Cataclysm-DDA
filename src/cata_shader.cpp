@@ -1,4 +1,3 @@
-#if defined(TILES)
 
 #include "cata_shader.h"
 
@@ -768,4 +767,3 @@ void variant_pass::rebind_renderer( SDL_Renderer *renderer )
 
 #endif // SDL_MAJOR_VERSION >= 3
 
-#endif // TILES

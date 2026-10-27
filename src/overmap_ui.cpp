@@ -89,9 +89,7 @@
 #include "weather_gen.h"
 #include "weather_type.h"
 
-#ifdef TILES
 #include "cached_options.h"
-#endif // TILES
 
 enum class cube_direction : int;
 class JsonObject;
@@ -455,11 +453,7 @@ void overmap_sidebar::draw_mission_info()
 
 cataimgui::bounds overmap_sidebar::get_bounds()
 {
-#ifdef TILES
     float character_cell_width = static_cast<float>( fontwidth );
-#else
-    float character_cell_width = 1.0;
-#endif
     ImVec2 viewport = ImGui::GetMainViewport()->WorkSize;
     // OVERMAP_LEGEND_WIDTH is our width in character cells in the
     // old-school terminal emulation, even though the overmap tiles
@@ -1314,14 +1308,11 @@ static void draw_ascii( const catacurses::window &w, overmap_draw_data_t &data )
     wnoutrefresh( w );
 }
 
-#if defined(TILES)
 tiles_redraw_info redraw_info;
-#endif
 
 static void draw( overmap_draw_data_t &data )
 {
     cata_assert( static_cast<bool>( data.ui ) );
-#if defined( TILES )
     if( use_tiles && use_tiles_overmap ) {
         redraw_info = tiles_redraw_info { data.cursor_pos, uistate.overmap_show_overlays };
         werase( g->w_overmap );
@@ -1329,7 +1320,6 @@ static void draw( overmap_draw_data_t &data )
         wnoutrefresh( g->w_overmap );
         return;
     }
-#endif // TILES
     draw_ascii( g->w_overmap, data );
 }
 
@@ -2184,7 +2174,6 @@ static tripoint_abs_omt display()
     do {
         ui->invalidate_ui();
         ui_manager::redraw();
-#if (defined TILES || defined _WIN32 || defined WINDOWS )
         int scroll_timeout = get_option<int>( "EDGE_SCROLL" );
         // If EDGE_SCROLL is disabled, it will have a value of -1.
         // blinking won't work if handle_input() is passed a negative integer.
@@ -2192,9 +2181,6 @@ static tripoint_abs_omt display()
             scroll_timeout = 33;
         }
         action = ictxt.handle_input( scroll_timeout );
-#else
-        action = ictxt.handle_input( get_option<int>( "BLINK_SPEED" ) );
-#endif
         if( !display_path.empty() ) {
             std::chrono::time_point<std::chrono::steady_clock> now = std::chrono::steady_clock::now();
             // We go faster per-tile the more we have to go

@@ -350,7 +350,6 @@ static void draw_messages( const draw_args &args )
     wnoutrefresh( w );
 }
 
-#if defined(TILES)
 static void draw_mminimap( const draw_args &args )
 {
     const catacurses::window &w = args._win;
@@ -359,7 +358,6 @@ static void draw_mminimap( const draw_args &args )
     g->draw_pixel_minimap( w );
     wnoutrefresh( w );
 }
-#endif
 
 // ============
 // INITIALIZERS
@@ -388,10 +386,8 @@ static std::vector<window_panel> initialize_default_custom_panels( const widget 
     // TODO: Make these into proper widgets
     ret.emplace_back( draw_messages, "Log", to_translation( "Log" ),
                       -2, width, true );
-#if defined(TILES)
     ret.emplace_back( draw_mminimap, "Map", to_translation( "Map" ),
                       -1, width, true, default_render, true );
-#endif // TILES
 
     return ret;
 }

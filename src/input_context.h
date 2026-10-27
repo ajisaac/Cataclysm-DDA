@@ -65,15 +65,11 @@ class input_context
         std::shared_ptr<input_context_handle> handle{ new input_context_handle{this} };
 
     public:
-#if defined(__ANDROID__) || defined(TILES)
         // Whatever's on top is our current input context.
         static input_context_stack_impl input_context_stack;
-#endif
         input_context() : category( "default" ), registered_any_input( false ),
             coordinate_input_received( false ), handling_coordinate_input( false ) {
-#if defined(__ANDROID__) || defined(TILES)
             input_context_stack.push( handle );
-#endif
 #if defined(__ANDROID__)
             allow_text_entry = false;
 #endif
@@ -86,9 +82,7 @@ class input_context
             : category( category ), registered_any_input( false ),
               coordinate_input_received( false ), handling_coordinate_input( false ),
               preferred_keyboard_mode( preferred_keyboard_mode ) {
-#if defined(__ANDROID__) || defined(TILES)
             input_context_stack.push( handle );
-#endif
 #if defined(__ANDROID__)
             allow_text_entry = false;
 #endif
@@ -103,14 +97,10 @@ class input_context
             public:
                 explicit scoped_activation( input_context &ctx ) {
                     ( void )ctx;
-#if defined(__ANDROID__) || defined(TILES)
                     input_context_stack.push( ctx.handle );
-#endif
                 }
                 ~scoped_activation() {
-#if defined(__ANDROID__) || defined(TILES)
                     input_context_stack.pop();
-#endif
                 }
                 scoped_activation( const scoped_activation & ) = delete;
                 scoped_activation &operator=( const scoped_activation & ) = delete;

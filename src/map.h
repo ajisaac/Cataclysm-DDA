@@ -48,9 +48,7 @@
 #include "value_ptr.h"
 #include "vpart_position.h"
 
-#if defined(TILES)
 #include "cata_tiles.h"
-#endif
 
 struct scent_block;
 
@@ -2397,7 +2395,6 @@ class map
         bool has_haulable_items( const tripoint_bub_ms &pos );
         std::vector<item_location> get_haulable_items( const tripoint_bub_ms &pos );
 
-#if defined(TILES)
         bool draw_points_cache_dirty = true;
         std::map<int, std::map<int, std::vector<tile_render_info>>> draw_points_cache;
         point_rel_ms prev_top_left;
@@ -2405,7 +2402,6 @@ class map
         point prev_o;
         std::multimap<point, formatted_text> overlay_strings_cache;
         color_block_overlay_container color_blocks_cache;
-#endif
 };
 
 // The map the code is currently processing. It is currently (incorrectly) fixed at the

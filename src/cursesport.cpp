@@ -1,5 +1,4 @@
 #include "cursesport.h"
-#ifndef TUI
 
 #include <cstdint>
 #include <memory>
@@ -554,4 +553,3 @@ bool nc_color::is_blink() const
     return attribute_value & A_BLINK;
 }
 
-#endif

@@ -45,9 +45,7 @@
 #include "sdl_wrappers.h" // for GetAndroidJNIEnv(), GetAndroidActivity()
 #endif
 
-#if defined(TILES)
 #include "cata_tiles.h"
-#endif // TILES
 
 #if defined(__ANDROID__)
 #include <jni.h>
@@ -667,26 +665,14 @@ bool options_manager::cOpt::is_hidden() const
             return false;
 
         case COPT_SDL_HIDE:
-#if defined(TILES)
             return true;
-#else
-            return false;
-#endif
 
         case COPT_CURSES_HIDE: // NOLINT(bugprone-branch-clone)
-#if !defined(TILES) // If not defined, it's the curses interface.
-            return true;
-#else
             return false;
-#endif
 
         case COPT_POSIX_CURSES_HIDE:
             // Check if we on windows and using wincurses.
-#if defined(TILES) || defined(_WIN32)
             return false;
-#else
-            return true;
-#endif
 
         case COPT_NO_SOUND_HIDE:
 #if !defined(SDL_SOUND) // If not defined, we have no sound support.
@@ -2418,7 +2404,6 @@ void options_manager::add_options_graphics()
 
     add_empty_line();
 
-#if defined(TILES)
     add_option_group( "graphics", Group( "font_params", to_translation( "Font settings" ),
                                          to_translation( "Font display settings.  To change font type or source file, edit fonts.json in config directory." ) ),
     [&]( const std::string & page_id ) {
@@ -2482,7 +2467,6 @@ void options_manager::add_options_graphics()
              false, COPT_CURSES_HIDE
            );
     } );
-#endif // TILES
 
     add_empty_line();
 
@@ -2703,13 +2687,11 @@ void options_manager::add_options_graphics()
                                          to_translation( "Graphical display options" ),
                                          to_translation( "Options regarding graphical display." ) ),
     [&]( const std::string & page_id ) {
-#if defined(TILES)
         std::vector<options_manager::id_and_option> display_list = cata_tiles::build_display_list();
         add( "DISPLAY", page_id, to_translation( "Display" ),
              to_translation( "Sets which video display will be used to show the game.  Requires restart." ),
              display_list,
              display_list.front().first, COPT_CURSES_HIDE );
-#endif
 
 #if !defined(__ANDROID__) || !defined(__EMSCRIPTEN__) // Android and Emscripten are always fullscreen
         add( "FULLSCREEN", page_id, to_translation( "Fullscreen" ),
@@ -2725,12 +2707,6 @@ void options_manager::add_options_graphics()
 #endif
 
 #if !defined(__ANDROID__)
-#   if !defined(TILES)
-        // No renderer selection in non-TILES mode
-        add( "RENDERER", page_id, to_translation( "Renderer" ),
-        to_translation( "Set which renderer to use.  Requires restart." ), { { "software", to_translation( "software" ) } },
-        "software", COPT_CURSES_HIDE );
-#   else
         std::vector<options_manager::id_and_option> renderer_list = cata_tiles::build_renderer_list();
         std::string default_renderer = renderer_list.front().first;
 #   if defined(_WIN32)
@@ -2752,7 +2728,6 @@ void options_manager::add_options_graphics()
         add( "RENDERER", page_id, to_translation( "Renderer" ),
              to_translation( "Set which renderer to use.  Requires restart." ), renderer_list,
              default_renderer, renderer_hide );
-#   endif
 
 #else
         add( "SOFTWARE_RENDERING", page_id, to_translation( "Software rendering" ),
@@ -3281,7 +3256,6 @@ void options_manager::add_options_android()
 #endif
 }
 
-#if defined(TILES)
 // Helper method to isolate #ifdeffed tiles code.
 static void refresh_tiles( bool used_tiles_changed, bool pixel_minimap_height_changed, bool ingame )
 {
@@ -3339,11 +3313,6 @@ static void refresh_tiles( bool used_tiles_changed, bool pixel_minimap_height_ch
         g->mark_main_ui_adaptor_resize();
     }
 }
-#else
-static void refresh_tiles( bool, bool, bool )
-{
-}
-#endif // TILES
 
 static void draw_borders_external(
     const catacurses::window &w, int horizontal_level, const std::set<int> &vert_lines,
@@ -3390,7 +3359,6 @@ options_manager::PageItem::fmt_tooltip( const std::string &group_id,
             std::string ret = string_format( "%s #%s",
                                              opt.getTooltip(),
                                              opt.getDefaultText() );
-#if !defined(TUI)
             if( opt_name == "TERMINAL_X" ) {
                 int new_window_width = 0;
                 new_window_width = projected_window_width();
@@ -3410,7 +3378,6 @@ options_manager::PageItem::fmt_tooltip( const std::string &group_id,
                                       "The window will be %d pixels tall with the selected value.",
                                       new_window_height ), new_window_height );
             }
-#endif
             return ret;
         }
         default:
@@ -4018,7 +3985,7 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
     calendar::set_eternal_night( ::get_option<std::string>( "ETERNAL_TIME_OF_DAY" ) == "night" );
     calendar::set_eternal_day( ::get_option<std::string>( "ETERNAL_TIME_OF_DAY" ) == "day" );
 
-#if !defined(EMSCRIPTEN) && !defined(__ANDROID__) && !defined(TUI)
+#if !defined(EMSCRIPTEN) && !defined(__ANDROID__)
     if( terminal_size_changed ) {
         int scaling_factor = get_scaling_factor();
         point TERM( ::get_option<int>( "TERMINAL_X" ), ::get_option<int>( "TERMINAL_Y" ) );

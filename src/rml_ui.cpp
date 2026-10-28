@@ -11,6 +11,7 @@
 #include "path_info.h"
 #include "rml_markup.h"
 #include "rml_render_sdl.h"
+#include "sdltiles.h"
 #include "ui_manager.h"
 
 namespace
@@ -38,6 +39,18 @@ class cata_system_interface : public Rml::SystemInterface
             }
             // true == keep going; false would break into the debugger.
             return true;
+        }
+
+        // For copy, cut and paste in text fields.
+        void SetClipboardText( const Rml::String &text ) override {
+            SDL_SetClipboardText( text.c_str() );
+        }
+
+        void GetClipboardText( Rml::String &text ) override {
+            if( char *clipboard = SDL_GetClipboardText() ) {
+                text = clipboard;
+                SDL_free( clipboard );
+            }
         }
 };
 
@@ -94,6 +107,11 @@ int key_modifier_state()
     }
     if( mods & SDL_KMOD_GUI ) {
         state |= Rml::Input::KM_META;
+#if defined(__APPLE__)
+        // RmlUi only knows the clipboard and select-all shortcuts by Ctrl,
+        // which macOS puts on Cmd.
+        state |= Rml::Input::KM_CTRL;
+#endif
     }
     if( mods & SDL_KMOD_CAPS ) {
         state |= Rml::Input::KM_CAPSLOCK;
@@ -123,6 +141,56 @@ void move_mouse( float x, float y, int modifiers )
 {
     context->ProcessMouseMove( static_cast<int>( x * pixel_density ),
                                static_cast<int>( y * pixel_density ), modifiers );
+}
+
+// Only the keys RmlUi acts on by default: text editing, navigation, and the
+// letters its Ctrl shortcuts use. Printable text arrives as text input.
+Rml::Input::KeyIdentifier convert_key( SDL_Keycode key )
+{
+    if( key >= SDLK_A && key <= SDLK_Z ) {
+        return static_cast<Rml::Input::KeyIdentifier>( Rml::Input::KI_A +
+                static_cast<int>( key - SDLK_A ) );
+    }
+    if( key >= SDLK_0 && key <= SDLK_9 ) {
+        return static_cast<Rml::Input::KeyIdentifier>( Rml::Input::KI_0 +
+                static_cast<int>( key - SDLK_0 ) );
+    }
+    switch( key ) {
+        case SDLK_SPACE:
+            return Rml::Input::KI_SPACE;
+        case SDLK_RETURN:
+            return Rml::Input::KI_RETURN;
+        case SDLK_KP_ENTER:
+            return Rml::Input::KI_NUMPADENTER;
+        case SDLK_ESCAPE:
+            return Rml::Input::KI_ESCAPE;
+        case SDLK_BACKSPACE:
+            return Rml::Input::KI_BACK;
+        case SDLK_TAB:
+            return Rml::Input::KI_TAB;
+        case SDLK_DELETE:
+            return Rml::Input::KI_DELETE;
+        case SDLK_INSERT:
+            return Rml::Input::KI_INSERT;
+        case SDLK_HOME:
+            return Rml::Input::KI_HOME;
+        case SDLK_END:
+            return Rml::Input::KI_END;
+        case SDLK_PAGEUP:
+            return Rml::Input::KI_PRIOR;
+        case SDLK_PAGEDOWN:
+            return Rml::Input::KI_NEXT;
+        case SDLK_LEFT:
+            return Rml::Input::KI_LEFT;
+        case SDLK_RIGHT:
+            return Rml::Input::KI_RIGHT;
+        case SDLK_UP:
+            return Rml::Input::KI_UP;
+        case SDLK_DOWN:
+            return Rml::Input::KI_DOWN;
+        default:
+            return Rml::Input::KI_UNKNOWN;
+    }
 }
 
 // Every document with a loaded Rml::ElementDocument.
@@ -197,6 +265,13 @@ void init( const SDL_Renderer_Ptr &renderer )
         // Not fatal: boxes still draw, text just will not. Worth knowing which.
         DebugLog( D_ERROR, DC_ALL ) << "RmlUi: failed to load font face " << font;
     }
+    // Unifont doubles as the monospace family and as the fallback for glyphs
+    // Roboto lacks, such as CJK.
+    const std::string mono_font = PATH_INFO::fontdir() + "unifont.ttf";
+    if( !Rml::LoadFontFace( mono_font, "cata-mono", Rml::Style::FontStyle::Normal,
+                            Rml::Style::FontWeight::Auto, true ) ) {
+        DebugLog( D_ERROR, DC_ALL ) << "RmlUi: failed to load font face " << mono_font;
+    }
 
     context = Rml::CreateContext( "cata", output_size() );
     if( !context ) {
@@ -268,6 +343,35 @@ void process_event( const SDL_Event &ev )
         case SDL_EVENT_WINDOW_MOUSE_LEAVE:
             context->ProcessMouseLeave();
             break;
+        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_UP:
+        case SDL_EVENT_TEXT_INPUT: {
+            // See the header: keys only reach RmlUi while the document with
+            // its focus is the top UI.
+            Rml::Element *focus = context->GetFocusElement();
+            Rml::ElementDocument *focus_doc = focus ? focus->GetOwnerDocument() : nullptr;
+            const auto owner = std::find_if( live_documents.begin(), live_documents.end(),
+            [focus_doc]( const document * live ) {
+                return focus_doc && live->doc == focus_doc;
+            } );
+            // is_on_top is only refreshed for adaptors the last pass redrew, so
+            // also require that: one below a disable_uis_below adaptor, such as
+            // a debugmsg, keeps whatever it had before.
+            if( owner == live_documents.end() ||
+                std::find( pass_documents.begin(), pass_documents.end(),
+                           *owner ) == pass_documents.end() ||
+                !( *owner )->adaptor->is_on_top ) {
+                break;
+            }
+            if( ev.type == SDL_EVENT_TEXT_INPUT ) {
+                context->ProcessTextInput( Rml::String( ev.text.text ) );
+            } else if( ev.type == SDL_EVENT_KEY_DOWN ) {
+                context->ProcessKeyDown( convert_key( ev.key.key ), modifiers );
+            } else {
+                context->ProcessKeyUp( convert_key( ev.key.key ), modifiers );
+            }
+            break;
+        }
         default:
             break;
     }
@@ -293,16 +397,28 @@ void end_redraw_pass()
             continue;
         }
         if( wanted ) {
-            // No focus: input still goes through input_context, and focusing
-            // would also let RmlUi pull the document to the front on its own.
+            // No focus here: a document asks for it explicitly, below.
             element->Show( Rml::ModalFlag::None, Rml::FocusFlag::None );
         } else {
             element->Hide();
         }
     }
+    // Focusing makes RmlUi pull the document to the front on its own, so the
+    // stacking order has to be reapplied after.
+    bool focused = false;
+    for( document *doc : pass_documents ) {
+        if( doc->pending_focus.empty() || !doc->get() ) {
+            continue;
+        }
+        if( Rml::Element *element = doc->get()->GetElementById( doc->pending_focus ) ) {
+            element->Focus();
+            focused = true;
+        }
+        doc->pending_focus.clear();
+    }
     // Pulling each to the front in turn, bottom first, leaves the context in
     // stack order.
-    if( pass_documents != applied_order ) {
+    if( focused || pass_documents != applied_order ) {
         for( document *doc : pass_documents ) {
             if( Rml::ElementDocument *element = doc->get() ) {
                 element->PullToFront();
@@ -357,6 +473,32 @@ void render()
 bool active()
 {
     return initialised;
+}
+
+point viewport_px()
+{
+    if( !context ) {
+        return point::zero;
+    }
+    const Rml::Vector2i size = context->GetDimensions();
+    return point( size.x, size.y );
+}
+
+float dp_ratio()
+{
+    return context ? context->GetDensityIndependentPixelRatio() : 1.f;
+}
+
+float imgui_px_scale()
+{
+    int buffer_w = 0;
+    int buffer_h = 0;
+    get_display_buffer_dims( &buffer_w, &buffer_h );
+    const point view = viewport_px();
+    if( buffer_w <= 0 || buffer_h <= 0 || view.x <= 0 || view.y <= 0 ) {
+        return 1.f;
+    }
+    return static_cast<float>( std::max( 1, std::min( view.x / buffer_w, view.y / buffer_h ) ) );
 }
 
 document::document( const std::string &file )
@@ -443,6 +585,40 @@ int document::hovered_child( const std::string &id ) const
         }
     }
     return -1;
+}
+
+void document::set_attribute( const std::string &id, const std::string &name,
+                              const std::string &value )
+{
+    if( Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr ) {
+        element->SetAttribute( name, value );
+    }
+}
+
+std::optional<std::string> document::get_value( const std::string &id ) const
+{
+    Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr;
+    if( auto *control = rmlui_dynamic_cast<Rml::ElementFormControl *>( element ) ) {
+        return control->GetValue();
+    }
+    return std::nullopt;
+}
+
+void document::set_value( const std::string &id, const std::string &value )
+{
+    Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr;
+    if( auto *input = rmlui_dynamic_cast<Rml::ElementFormControlInput *>( element ) ) {
+        input->SetValue( value );
+        const int end = static_cast<int>( Rml::StringUtilities::LengthUTF8( value ) );
+        input->SetSelectionRange( end, end );
+    } else if( auto *control = rmlui_dynamic_cast<Rml::ElementFormControl *>( element ) ) {
+        control->SetValue( value );
+    }
+}
+
+void document::focus( const std::string &id )
+{
+    pending_focus = id;
 }
 
 main_menu_replica::main_menu_replica() : document( "main_menu_replica.rml" ) {}

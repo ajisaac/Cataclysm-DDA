@@ -25,6 +25,7 @@
 #include "game_constants.h"
 #include "game_inventory.h"
 #include "game_ui.h"
+#include "imgui/imgui.h"
 #include "input_popup.h"
 #include "item.h"
 #include "item_contents.h"

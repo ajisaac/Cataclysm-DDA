@@ -36,6 +36,13 @@ std::string markup_to_rml( std::string_view text,
                            report_color_error color_error = report_color_error::yes );
 
 /**
+ * As above, with text outside any color tag in `base_color` -- the
+ * counterpart of print_colored_text()'s base color.
+ */
+std::string markup_to_rml( std::string_view text, const nc_color &base_color,
+                           report_color_error color_error = report_color_error::yes );
+
+/**
  * The RML classes for one color, mapped the way catacurses::wattron() does:
  * "fg-NAME", plus " bg-NAME" unless the background is the default black.
  * NAME is the lowercased palette entry from colors.json, e.g. "lred" or

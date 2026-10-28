@@ -37,6 +37,7 @@
 #include "localized_comparator.h"
 #include "map.h"
 #include "output.h"
+#include "rml_markup.h"
 #include "string_formatter.h"
 #include "translation.h"
 #include "translations.h"
@@ -73,22 +74,22 @@ class pocket_favorite_callback : public uilist_callback
         explicit pocket_favorite_callback( const std::string &uilist_text,
                                            const std::vector<item_location> &to_organize,
                                            uilist &pocket_selector );
-        void refresh( uilist *menu ) override;
-        float desired_extra_space_right( ) override {
-            return std::max( ImGui::GetMainViewport()->Size.x / 2,
-                             ImGui::GetMainViewport()->Size.x - ( 50 * ImGui::CalcTextSize( "X" ).x ) );
-        }
+        void update( uilist *menu ) override;
+        std::string right_panel_rml( uilist *menu ) override;
         bool key( const input_context &, const input_event &event, int entnum, uilist *menu ) override;
 };
 } // namespace
 
-void pocket_favorite_callback::refresh( uilist *menu )
+void pocket_favorite_callback::update( uilist *menu )
 {
     if( needs_to_refresh ) {
         refresh_columns( menu );
         needs_to_refresh = false;
     }
+}
 
+std::string pocket_favorite_callback::right_panel_rml( uilist *menu )
+{
     item_pocket *selected_pocket = nullptr;
     int i = 0;
     int pocket_num = 0;
@@ -108,31 +109,25 @@ void pocket_favorite_callback::refresh( uilist *menu )
         ++i;
     }
 
-    if( selected_pocket != nullptr && !selected_pocket->is_forbidden() ) {
-        std::vector<iteminfo> info;
-
-        ImGui::TableSetColumnIndex( 2 );
-        ImGui::PushStyleColor( ImGuiCol_Text, c_light_gray );
-        ImGui::TextWrapped( "%s", _( "Currently modifying " ) );
-        ImGui::SameLine( 0.0, 0.0 );
-        ImGui::PushStyleColor( ImGuiCol_Text, c_light_blue );
-        ImGui::TextWrapped( "%s", whitelist ? _( "whitelist" ) : _( "blacklist" ) );
-        ImGui::PopStyleColor();
-        ImGui::PopStyleColor();
-        ImGui::NewLine();
-        ImGui::NewLine();
-
-        selected_pocket->general_info( info, pocket_num, true );
-        cataimgui::draw_colored_text( format_item_info( info, {} ) );
-        info.clear();
-
-        selected_pocket->favorite_info( info );
-        cataimgui::draw_colored_text( format_item_info( info, {} ) );
-        info.clear();
-
-        selected_pocket->contents_info( info, pocket_num, true );
-        cataimgui::draw_colored_text( format_item_info( info, {} ) );
+    if( selected_pocket == nullptr || selected_pocket->is_forbidden() ) {
+        return std::string();
     }
+
+    std::string panel = colorize( _( "Currently modifying " ), c_light_gray ) +
+                        colorize( whitelist ? _( "whitelist" ) : _( "blacklist" ), c_light_blue ) + "\n\n";
+    std::vector<iteminfo> info;
+    selected_pocket->general_info( info, pocket_num, true );
+    panel += format_item_info( info, {} ) + "\n";
+    info.clear();
+
+    selected_pocket->favorite_info( info );
+    panel += format_item_info( info, {} ) + "\n";
+    info.clear();
+
+    selected_pocket->contents_info( info, pocket_num, true );
+    panel += format_item_info( info, {} );
+    // As wide as the ImGui panel was: at least half the screen
+    return "<div style=\"width: 50vw;\">" + rml_ui::markup_to_rml( panel ) + "</div>";
 }
 
 pocket_favorite_callback::pocket_favorite_callback( const std::string &uilist_text,

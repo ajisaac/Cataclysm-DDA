@@ -48,9 +48,8 @@ void query_popup_impl::on_redraw()
         content_dirty = false;
         set_class( "root", "on-top", parent->ontop );
         set_class( "root", "full-screen", parent->fullscr );
-        set_inner_rml( "message", "<span class=\"" +
-                       rml_ui::color_to_rml_classes( parent->default_text_color ) + "\">" +
-                       rml_ui::markup_to_rml( parent->text ) + "</span>" );
+        set_inner_rml( "message", rml_ui::markup_to_rml( parent->text,
+                       parent->default_text_color ) );
         labels = option_labels();
         show_buttons();
     }

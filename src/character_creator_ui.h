@@ -46,7 +46,7 @@ class character_creator_callback : public uilist_callback
         // this override stores and resets uilist's return value so that the uilist doesn't redraw
         void confirm( uilist *menu ) override;
         void select( uilist *menu ) override;
-        void refresh( uilist *menu ) override;
+        void update( uilist *menu ) override;
 };
 
 // never serialized, just to keep state in one place

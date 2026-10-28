@@ -97,6 +97,13 @@ std::string markup_to_rml( std::string_view text, report_color_error color_error
     return rml;
 }
 
+std::string markup_to_rml( std::string_view text, const nc_color &base_color,
+                           report_color_error color_error )
+{
+    return "<span class=\"" + color_to_rml_classes( base_color ) + "\">" +
+           markup_to_rml( text, color_error ) + "</span>";
+}
+
 std::string color_to_rml_classes( const nc_color &color )
 {
     const cata_cursesport::pairs &pair =

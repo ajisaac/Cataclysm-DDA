@@ -33,6 +33,7 @@
 #include "game.h"
 #include "game_constants.h"
 #include "generic_factory.h"
+#include "imgui/imgui.h"
 #include "input_enums.h"
 #include "input_popup.h"
 #include "item.h"

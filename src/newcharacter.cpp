@@ -3846,7 +3846,7 @@ void character_creator_callback::select( uilist *menu )
     }
 }
 
-void character_creator_callback::refresh( uilist *menu )
+void character_creator_callback::update( uilist *menu )
 {
     menu->footer_text = !menu->filter.empty() ? string_format( "Filter: %s",
                         menu->filter ) : std::string();

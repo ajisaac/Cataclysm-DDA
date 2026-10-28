@@ -24,6 +24,7 @@
 #include "memory_fast.h"
 #include "pimpl.h"
 #include "point.h"
+#include "rml_ui.h"
 #include "string_formatter.h"
 
 class scrollbar;
@@ -190,10 +191,11 @@ struct uilist_entry {
  *       game_z[num]->dead = true;
  *     }
  *   }
- *   void refresh( uilist *menu ) {
+ *   std::string right_panel_rml( uilist *menu ) {
  *       if( menu->previewing >= 0 && static_cast<size_t>( menu->previewing ) < game_z.size() ) {
- *           ImGui::TextColored( c_red, "( %s )", game_z[menu->previewing]->name() );
+ *           return rml_ui::markup_to_rml( game_z[menu->previewing]->name(), c_red );
  *       }
+ *       return std::string();
  *   }
  * }
  * uilist monmenu;
@@ -230,6 +232,27 @@ class uilist_callback
                           uilist * ) {
             return false;
         }
+        /**
+         * Called on every redraw while the menu is up, before it is drawn, to
+         * bring the menu up to date -- footer_text, entries and so on.
+         */
+        virtual void update( uilist * ) {}
+        /**
+         * RML for panels beside the list, or empty for none. Called on every
+         * redraw, after update(); a panel is only rebuilt when its RML
+         * changes. rml_ui::markup_to_rml() converts game text.
+         */
+        virtual std::string left_panel_rml( uilist * ) {
+            return std::string();
+        }
+        virtual std::string right_panel_rml( uilist * ) {
+            return std::string();
+        }
+        /**
+         * Legacy ImGui side panels, no longer drawn now that uilist is RmlUi.
+         * Remove once the callbacks still overriding these have moved to
+         * left_panel_rml() and right_panel_rml().
+         */
         virtual void refresh( uilist * ) {}
         virtual float desired_extra_space_left( ) {
             return 0.0;
@@ -430,12 +453,6 @@ class uilist // NOLINT(cata-xy)
         void reset();
 
         void set_hide( bool val );
-        /**
-         * Used to hide ImGui menu under old menu.
-         *
-         * FIXME: Remove after complete ImGui migration.
-         */
-        void hide_if_hidden();
 
         shared_ptr_fast<uilist_impl> create_or_get_ui();
         // NOLINTNEXTLINE(google-explicit-constructor)
@@ -505,13 +522,6 @@ class uilist // NOLINT(cata-xy)
         int fselected = 0; // -1 as sentinel value for no filtered entries to select from
 
     private:
-        ImVec2 calculated_menu_size;
-        cataimgui::bounds calculated_bounds;
-        float calculated_hotkey_width;
-        float calculated_label_width;
-        float calculated_secondary_width;
-        float extra_space_left;
-        float extra_space_right;
         std::vector<int> fentries;
         std::map<input_event, int, std::function<bool( const input_event &, const input_event & )>>
         keymap { input_event::compare_type_mod_code };
@@ -547,31 +557,39 @@ class uilist // NOLINT(cata-xy)
         void set_selected( int index );
 };
 
-class uilist_impl : public cataimgui::window
+/**
+ * Draws a uilist with RmlUi, from data/raw/rmlui/uilist.rml, and tells it
+ * which row or tab the mouse is over.
+ *
+ * Only the rows that fit are built, around the selection, so lists of
+ * thousands of entries, like the debug spawn menus, stay cheap to draw.
+ */
+class uilist_impl : public rml_ui::document
 {
         friend class uilist;
         uilist &parent;
     public:
-        explicit uilist_impl( uilist &parent ) : cataimgui::window( "UILIST",
-                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                    ImGuiWindowFlags_NoNavInputs ),
-            parent( parent ) {
-        }
+        explicit uilist_impl( uilist &parent );
 
-        uilist_impl( uilist &parent, const std::string &title ) : cataimgui::window( title,
-                    ImGuiWindowFlags_None | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                    ImGuiWindowFlags_NoNavInputs ),
-            parent( parent ) {
-        }
+        /// Recompute the position, the size and how many rows fit, on the next redraw.
+        void mark_resized();
+        /// Index into the parent's filtered entries of the row the mouse is over, or -1.
+        int hovered_entry() const;
+        /// Index into the parent's categories of the tab the mouse is over, or -1.
+        int hovered_category() const;
 
-        cataimgui::bounds get_bounds() override {
-            if( !parent.started ) {
-                parent.setup();
-            }
+    protected:
+        void on_redraw() override;
 
-            return parent.desired_bounds.value_or( parent.calculated_bounds );
-        }
-        void draw_controls() override;
+    private:
+        void apply_layout();
+        std::string rows_rml() const;
+        // Set the content of the element with this id, if it changed since last time.
+        void show( const std::string &id, const std::string &rml );
+
+        bool layout_dirty = true;
+        bool hidden = false;
+        std::map<std::string, std::string> shown;
 };
 
 /**

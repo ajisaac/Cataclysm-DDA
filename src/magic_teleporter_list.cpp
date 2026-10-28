@@ -27,6 +27,8 @@
 #include "output.h"
 #include "panels.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "string_formatter.h"
 #include "translations.h"
 #include "type_id.h"
 #include "uilist.h"
@@ -182,18 +184,16 @@ class teleporter_callback : public uilist_callback
         std::map<int, tripoint_abs_omt> index_pairs;
     public:
         explicit teleporter_callback( std::map<int, tripoint_abs_omt> &ip ) : index_pairs( ip ) {}
-        float desired_extra_space_right( ) override {
-            return 33 * ImGui::CalcTextSize( "X" ).x;
-        }
-        void refresh( uilist *menu ) override {
-            ImGui::TableSetColumnIndex( 2 );
+        // TODO: bring back the overmap preview that draw_overmap_chunk_imgui() drew below this
+        std::string right_panel_rml( uilist *menu ) override {
             const int entnum = menu->previewing;
-            if( entnum >= 0 && static_cast<size_t>( entnum ) < index_pairs.size() ) {
-                avatar &player_character = get_avatar();
-                int dist = rl_dist( player_character.pos_abs_omt(), index_pairs[entnum] );
-                ImGui::Text( _( "Distance: %d %s" ), dist, index_pairs[entnum].to_string().c_str() );
-                overmap_ui::draw_overmap_chunk_imgui( player_character, index_pairs[entnum], 29, 21 );
+            if( entnum < 0 || static_cast<size_t>( entnum ) >= index_pairs.size() ) {
+                return std::string();
             }
+            avatar &player_character = get_avatar();
+            int dist = rl_dist( player_character.pos_abs_omt(), index_pairs[entnum] );
+            return rml_ui::markup_to_rml( string_format( _( "Distance: %d %s" ), dist,
+                                          index_pairs[entnum].to_string() ) );
         }
 };
 } // namespace

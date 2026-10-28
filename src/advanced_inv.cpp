@@ -57,6 +57,7 @@
 #include "player_activity.h"
 #include "point.h"
 #include "ret_val.h"
+#include "rml_markup.h"
 #include "string_formatter.h"
 #include "string_input_popup.h"
 #include "translations.h"
@@ -2121,35 +2122,22 @@ class query_destination_callback : public uilist_callback
 {
     private:
         advanced_inventory &_adv_inv;
-        // Render a fancy ASCII grid at the left of the menu.
-        void draw_squares( const uilist *menu );
     public:
         explicit query_destination_callback( advanced_inventory &adv_inv ) : _adv_inv( adv_inv ) {}
-        void refresh( uilist *menu ) override {
-            draw_squares( menu );
-        }
-        float desired_extra_space_left( ) override {
-            cataimgui::PushMonoFont();
-            float rv = ImGui::CalcTextSize( "[1][2][3]" ).x + ( 3.0 * ImGui::GetStyle().ItemSpacing.x );
-            ImGui::PopFont();
-            return rv;
-        }
+        // Render a fancy ASCII grid at the left of the menu.
+        std::string left_panel_rml( uilist *menu ) override;
 };
 } // namespace
 
-void query_destination_callback::draw_squares( const uilist *menu )
+std::string query_destination_callback::left_panel_rml( uilist *menu )
 {
-    ImGui::TableSetColumnIndex( 0 );
-    ImGui::NewLine();
-    ImGui::NewLine();
-    ImGui::NewLine();
     cata_assert( menu->entries.size() >= 9 );
     int sel = 0;
     if( menu->previewing >= 0 && static_cast<size_t>( menu->previewing ) < menu->entries.size() ) {
         sel = _adv_inv.screen_relative_location(
                   static_cast <aim_location>( menu->previewing + 1 ) );
     }
-    cataimgui::PushMonoFont();
+    std::string grid;
     for( int i = 7; i >= 1; i -= 3 ) { // 7,4,1
         for( int ii = 0; ii <= 2; ii++ ) { // +0,1,2
             aim_location loc = _adv_inv.screen_relative_location( static_cast <aim_location>( i + ii ) );
@@ -2161,21 +2149,15 @@ void query_destination_callback::draw_squares( const uilist *menu )
             bool canputitems = menu->entries[i + ii - 1].enabled && square.canputitems();
             nc_color bcolor = canputitems ? ( sel == loc ? h_white : c_light_gray ) : c_red;
             nc_color kcolor = canputitems ? ( sel == loc ? h_white : c_dark_gray ) : c_red;
-            // TODO(db48x): maybe make these clickable buttons or something
-            ImGui::PushID( i + ii );
-            ImGui::BeginGroup();
-            ImGui::TextColored( bcolor, "%c", bracket[0] );
-            ImGui::SameLine( 0.0, 0.0 );
-            ImGui::TextColored( kcolor, "%s", key.c_str() );
-            ImGui::SameLine( 0.0, 0.0 );
-            ImGui::TextColored( bcolor, "%c", bracket[1] );
-            ImGui::EndGroup();
-            ImGui::PopID();
-            ImGui::SameLine();
+            grid += colorize( std::string( 1, bracket[0] ), bcolor ) + colorize( key, kcolor ) +
+                    colorize( std::string( 1, bracket[1] ), bcolor );
+            if( ii < 2 ) {
+                grid += " ";
+            }
         }
-        ImGui::NewLine();
+        grid += "\n";
     }
-    ImGui::PopFont();
+    return "<div style=\"font-family: cata-mono;\">" + rml_ui::markup_to_rml( grid ) + "</div>";
 }
 
 bool advanced_inventory::query_destination( aim_location &def )

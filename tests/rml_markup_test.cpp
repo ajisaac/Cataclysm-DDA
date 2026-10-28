@@ -47,6 +47,10 @@ TEST_CASE( "rml_markup_turns_color_tags_into_spans", "[rml]" )
         CHECK( markup_to_rml( "<good>fine</good>" ) == "<span class=\"fg-green\">fine</span>" );
         CHECK( markup_to_rml( "<bad>worse</bad>" ) == "<span class=\"fg-red\">worse</span>" );
     }
+    SECTION( "a base color wraps everything" ) {
+        CHECK( markup_to_rml( "a <color_green>b</color>", c_red ) ==
+               "<span class=\"fg-red\">a <span class=\"fg-green\">b</span></span>" );
+    }
     SECTION( "text inside tags is still escaped" ) {
         CHECK( markup_to_rml( "<color_red>a & b</color>" ) ==
                "<span class=\"fg-red\">a &amp; b</span>" );

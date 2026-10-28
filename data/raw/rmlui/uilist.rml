@@ -1,0 +1,168 @@
+<rml>
+<head>
+    <title>List menu</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <style>
+        /* Centered by default. uilist::desired_bounds, when set, positions
+           and sizes #menu through inline styles on #root and #menu. */
+        #root
+        {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .hidden
+        {
+            display: none;
+        }
+        #menu
+        {
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            max-width: 95%;
+            max-height: 95%;
+            overflow: hidden;
+            padding: 12dp 16dp;
+            background-color: #141821f2;
+            border: 1dp #39465c;
+            border-radius: 8dp;
+        }
+        #title
+        {
+            font-size: 18dp;
+            color: #ffffff;
+            margin-bottom: 8dp;
+        }
+        /* Game text lines up with spaces, so keep them. */
+        #text, #desc, #left, #right
+        {
+            white-space: pre-wrap;
+        }
+        #text
+        {
+            margin-bottom: 8dp;
+            padding-bottom: 8dp;
+            border-bottom: 1dp #39465c;
+        }
+        /* Clicking a tab switches to it; see uilist::query_once(). */
+        #tabs
+        {
+            display: flex;
+            flex-wrap: wrap;
+            margin-bottom: 8dp;
+        }
+        #tabs .tab
+        {
+            padding: 4dp 10dp;
+            margin-right: 4dp;
+            border-radius: 4dp 4dp 0 0;
+            background-color: #1b2130;
+            color: #b7b2a4;
+        }
+        #tabs .tab:hover
+        {
+            background-color: #232b3a;
+        }
+        #tabs .tab.active
+        {
+            background-color: #2b3a52;
+            color: #ffffff;
+        }
+        #body
+        {
+            display: flex;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+        #left
+        {
+            flex: 0 0 auto;
+            margin-right: 12dp;
+        }
+        #right
+        {
+            flex: 0 1 auto;
+            margin-left: 12dp;
+        }
+        #list-column
+        {
+            flex: 1 1 auto;
+        }
+        /* The height is also in src/uilist.cpp (row_height_dp), which works
+           out how many rows fit. Hovering a row previews it, and clicking it
+           picks it; see uilist::query_once(). */
+        #list .entry
+        {
+            display: flex;
+            align-items: center;
+            height: 24dp;
+            padding: 0 8dp;
+            border-radius: 4dp;
+            white-space: nowrap;
+        }
+        #list .entry .hotkey
+        {
+            flex: 0 0 auto;
+            min-width: 24dp;
+            margin-right: 8dp;
+        }
+        #list .entry .label
+        {
+            flex: 1 1 auto;
+        }
+        #list .entry .column
+        {
+            flex: 0 0 auto;
+            margin-left: 16dp;
+        }
+        #list .entry:hover
+        {
+            background-color: #232b3a;
+        }
+        #list .entry.selected
+        {
+            background-color: #2b3a52;
+        }
+        /* Selected text is shown in one color, as the old menus did. */
+        #list .entry.selected span
+        {
+            color: #ffffff;
+        }
+        #position
+        {
+            margin-top: 4dp;
+            font-size: 13dp;
+            color: #6d7b92;
+            text-align: right;
+        }
+        #desc
+        {
+            margin-top: 8dp;
+            padding-top: 8dp;
+            border-top: 1dp #39465c;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by uilist_impl in src/uilist.cpp. -->
+    <div id="root">
+        <div id="menu">
+            <div id="title" class="hidden"></div>
+            <div id="text" class="hidden"></div>
+            <div id="tabs" class="hidden"></div>
+            <div id="body">
+                <div id="left" class="hidden"></div>
+                <div id="list-column">
+                    <div id="list"></div>
+                    <div id="position" class="hidden"></div>
+                </div>
+                <div id="right" class="hidden"></div>
+            </div>
+            <div id="desc" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

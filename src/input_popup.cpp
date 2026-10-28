@@ -1,24 +1,28 @@
 #include "input_popup.h"
 
 #include <cstddef>
+#include <locale>
+#include <sstream>
+#include <type_traits>
 
 #include "coordinates.h"
-#include "imgui/imgui.h"
-#include "imgui/imgui_stdlib.h"
 #include "input_enums.h"
 #include "ret_val.h"
-#include "text.h"
+#include "rml_markup.h"
+#include "string_formatter.h"
 #include "translations.h"
 #include "try_parse_integer.h"
 #include "uilist.h"
 #include "ui_manager.h"
 #include "uistate.h"
 
-input_popup::input_popup( int width, const std::string &title, const point &pos,
-                          ImGuiWindowFlags flags ) :
-    cataimgui::window( title, ImGuiWindowFlags_NoNavInputs | flags | ( title.empty() ?
-                       ImGuiWindowFlags_NoTitleBar : 0 ) | ImGuiWindowFlags_AlwaysAutoResize ),
-    pos( pos ),
+// Roughly the width of a digit in the popup's font, to turn the character
+// widths callers give into something RmlUi can lay out.
+static constexpr float char_width_em = 0.56f;
+
+input_popup::input_popup( int width, const std::string &title ) :
+    rml_ui::document( "input_popup.rml" ),
+    title( title ),
     width( width )
 {
     ctxt = input_context( "STRING_INPUT", keyboard_mode::keychar );
@@ -27,6 +31,7 @@ input_popup::input_popup( int width, const std::string &title, const point &pos,
     ctxt.register_action( "TEXT.CLEAR" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
     ctxt.set_timeout( 10 );
+    focus( "input" );
 }
 
 void input_popup::set_description( const std::string &desc, const nc_color &default_color,
@@ -35,17 +40,20 @@ void input_popup::set_description( const std::string &desc, const nc_color &defa
     description = desc;
     description_default_color = default_color;
     description_monofont = monofont;
+    content_dirty = true;
 }
 
 void input_popup::set_label( const std::string &label, const nc_color &default_color )
 {
     this->label = label;
     label_default_color = default_color;
+    content_dirty = true;
 }
 
 void input_popup::set_max_input_length( int length )
 {
     max_input_length = length;
+    content_dirty = true;
 }
 
 int input_popup::get_max_input_length() const
@@ -76,53 +84,44 @@ bool input_popup::cancelled() const
     return is_cancelled;
 }
 
-cataimgui::bounds input_popup::get_bounds()
+void input_popup::on_redraw()
 {
-    return {
-        pos.x < 0 ? -1.f : str_width_to_pixels( pos.x ),
-        pos.y < 0 ? -1.f : str_height_to_pixels( pos.y ),
-        width <= 0 ? -1.f : str_width_to_pixels( width ),
-        -1.f
-    };
+    if( content_dirty ) {
+        content_dirty = false;
+        set_class( "title", "hidden", title.empty() );
+        set_inner_rml( "title", rml_ui::markup_to_rml( title ) );
+        set_class( "description", "hidden", description.empty() );
+        set_class( "description", "mono", description_monofont );
+        set_inner_rml( "description",
+                       rml_ui::markup_to_rml( description, description_default_color ) );
+        set_class( "label", "hidden", label.empty() );
+        set_inner_rml( "label", rml_ui::markup_to_rml( label, label_default_color ) );
+        set_attribute( "popup", "style",
+                       width > 0 ? string_format( "width: %.1fem;", width * char_width_em ) : "" );
+        set_attribute( "input", "maxlength",
+                       max_input_length > 0 ? std::to_string( max_input_length ) : "-1" );
+        // Shrink the field to match a short limit.
+        set_attribute( "input", "style", max_input_length > 0 ?
+                       string_format( "flex: 0 0 auto; width: %.1fem;",
+                                      ( max_input_length + 1 ) * char_width_em ) : "" );
+    }
+    if( pending_text ) {
+        set_value( "input", *pending_text );
+        pending_text.reset();
+    }
 }
 
-void input_popup::draw_controls()
+void input_popup::show_text( const std::string &text )
 {
-    if( !description.empty() ) {
-        if( description_monofont ) {
-            cataimgui::PushMonoFont();
-        }
-        // todo: you should not have to manually split text to print it as paragraphs
-        uint64_t offset = 0;
-        uint64_t pos = 0;
-        while( pos != std::string::npos ) {
-            pos = description.find( '\n', offset );
-            std::string str = description.substr( offset, pos - offset );
-            cataimgui::TextColoredParagraph( description_default_color, str );
-            ImGui::NewLine();
-            offset = pos + 1;
-        }
-        if( description_monofont ) {
-            ImGui::PopFont();
-        }
-    }
+    pending_text = text;
+}
 
-    if( !label.empty() ) {
-        ImGui::AlignTextToFramePadding();
-        cataimgui::draw_colored_text( label, c_light_red );
-        ImGui::SameLine();
+std::string input_popup::field_text( const std::string &fallback ) const
+{
+    if( pending_text ) {
+        return *pending_text;
     }
-
-    // make sure the cursor is in the input field when we regain focus
-    if( !ImGui::IsWindowFocused() ) {
-        set_focus = true;
-    }
-
-    if( set_focus && ImGui::IsWindowFocused() ) {
-        ImGui::SetKeyboardFocusHere();
-        set_focus = false;
-    }
-    draw_input_control();
+    return get_value( "input" ).value_or( fallback );
 }
 
 bool input_popup::handle_custom_callbacks( const std::string &action )
@@ -143,84 +142,16 @@ bool input_popup::handle_custom_callbacks( const std::string &action )
 }
 
 string_input_popup_imgui::string_input_popup_imgui( int width, const std::string &old_input,
-        const std::string &title, const point &pos, ImGuiWindowFlags flags ) :
-    input_popup( width, title, pos, flags ),
+        const std::string &title ) :
+    input_popup( width, title ),
     text( old_input ),
     old_input( old_input )
 {
-    // for opening uilist history
-    // non-uilist history is handled by imgui itself and not customizable (yet?)
+    // Up opens the uilist history, or with it off, up and down step through
+    // the history in the field
     ctxt.register_action( "HISTORY_UP" );
-}
-
-static void set_text( ImGuiInputTextCallbackData *data, const std::string &text )
-{
-    data->DeleteChars( 0, data->BufTextLen );
-    data->InsertChars( 0, text.c_str() );
-}
-
-static int input_callback( ImGuiInputTextCallbackData *data )
-{
-    string_input_popup_imgui *popup = static_cast<string_input_popup_imgui *>( data->UserData );
-
-    if( data->EventFlag == ImGuiInputTextFlags_CallbackHistory ) {
-        popup->update_input_history( data );
-    }
-
-    if( data->EventFlag == ImGuiInputTextFlags_CallbackEdit ) {
-        int max = popup->get_max_input_length();
-        if( max > 0 && data->BufTextLen > max ) {
-            data->BufTextLen = max;
-            data->SelectionStart = data->BufTextLen;
-            data->SelectionEnd = data->BufTextLen;
-            data->CursorPos = data->BufTextLen;
-            data->BufDirty = true;
-        }
-    }
-
-    if( data->EventFlag == ImGuiInputTextFlags_CallbackAlways && popup->want_clear_text() ) {
-        // Only called when popup->text is empty
-        data->BufTextLen = 0;
-        data->SelectionStart = 0;
-        data->SelectionEnd = 0;
-        data->CursorPos = 0;
-        data->Buf[0] = '\000';
-        data->BufDirty = true;
-    }
-
-    return 0;
-}
-
-bool string_input_popup_imgui::want_clear_text()
-{
-    if( do_clear_text ) {
-        do_clear_text = false;
-        return true;
-    }
-    return false;
-}
-
-void string_input_popup_imgui::draw_input_control()
-{
-    ImGuiInputTextFlags flags = ImGuiInputTextFlags_CallbackEdit;
-
-    if( !is_uilist_history ) {
-        flags |= ImGuiInputTextFlags_CallbackHistory;
-    }
-
-    if( do_clear_text ) {
-        flags |= ImGuiInputTextFlags_CallbackAlways;
-    }
-
-    // shrink width of input field if we only allow short inputs
-    // todo: use full available width for unrestricted inputs in wider windows
-    float input_width = str_width_to_pixels( max_input_length + 1 );
-    if( max_input_length > 0 && input_width < ImGui::CalcItemWidth() ) {
-        ImGui::SetNextItemWidth( input_width );
-    }
-
-    std::string input_label = "##string_input_" + label;
-    ImGui::InputText( input_label.c_str(), &text, flags, input_callback, this );
+    ctxt.register_action( "HISTORY_DOWN" );
+    show_text( text );
 }
 
 void string_input_popup_imgui::set_identifier( const std::string &ident )
@@ -231,6 +162,7 @@ void string_input_popup_imgui::set_identifier( const std::string &ident )
 void string_input_popup_imgui::set_text( const std::string &txt )
 {
     text = txt;
+    show_text( txt );
 }
 
 void string_input_popup_imgui::show_history()
@@ -273,14 +205,8 @@ void string_input_popup_imgui::show_history()
     }
 }
 
-void string_input_popup_imgui::update_input_history( ImGuiInputTextCallbackData *data )
+void string_input_popup_imgui::step_history( bool up )
 {
-    if( data->EventKey != ImGuiKey_UpArrow && data->EventKey != ImGuiKey_DownArrow ) {
-        return;
-    }
-
-    bool up = data->EventKey == ImGuiKey_UpArrow;
-
     if( identifier.empty() ) {
         return;
     }
@@ -299,7 +225,7 @@ void string_input_popup_imgui::update_input_history( ImGuiInputTextCallbackData 
         if( history_index >= static_cast<int>( hist.size() ) ) {
             return;
         } else if( history_index == 0 ) {
-            session_input.assign( data->Buf, data->BufTextLen );
+            session_input = text;
 
             //avoid showing the same result twice (after reopen filter window without reset)
             if( hist.size() > 1 && session_input == hist.back() ) {
@@ -308,7 +234,7 @@ void string_input_popup_imgui::update_input_history( ImGuiInputTextCallbackData 
         }
     } else {
         if( history_index == 1 ) {
-            ::set_text( data, session_input );
+            set_text( session_input );
             //show initial string entered and 'return'
             history_index = 0;
             return;
@@ -318,8 +244,7 @@ void string_input_popup_imgui::update_input_history( ImGuiInputTextCallbackData 
     }
 
     history_index += up ? 1 : -1;
-    const std::string &new_text = hist[hist.size() - history_index];
-    ::set_text( data, new_text );
+    set_text( hist[hist.size() - history_index] );
 }
 
 void string_input_popup_imgui::add_to_history( const std::string &value ) const
@@ -340,6 +265,8 @@ std::string string_input_popup_imgui::query()
         ui_manager::redraw_invalidated();
 
         std::string action = ctxt.handle_input();
+        // RmlUi has already applied any typing to the field
+        text = field_text( text );
         if( handle_custom_callbacks( action ) ) {
             continue;
         }
@@ -350,15 +277,11 @@ std::string string_input_popup_imgui::query()
         } else if( action == "TEXT.QUIT" ) {
             break;
         } else if( action == "HISTORY_UP" && is_uilist_history ) {
-            // non-uilist history is handled inside input callback
             show_history();
+        } else if( ( action == "HISTORY_UP" || action == "HISTORY_DOWN" ) && !is_uilist_history ) {
+            step_history( action == "HISTORY_UP" );
         } else if( action == "TEXT.CLEAR" ) {
-            do_clear_text = true;
-        }
-
-        // mouse click on x to close leads here
-        if( !get_is_open() ) {
-            break;
+            set_text( std::string() );
         }
     }
 
@@ -388,40 +311,99 @@ void string_input_popup_imgui::use_uilist_history( bool use_uilist )
 }
 
 template<typename T>
-number_input_popup<T>::number_input_popup( int width, T old_value, const std::string &title,
-        const point &pos, ImGuiWindowFlags flags ) :
-    input_popup( width, title, pos, flags ),
+static std::string format_number( T value )
+{
+    if constexpr( std::is_integral_v<T> ) {
+        return std::to_string( value );
+    } else {
+        return string_format( "%g", value );
+    }
+}
+
+template<typename T>
+static std::optional<T> parse_number( const std::string &text )
+{
+    if constexpr( std::is_integral_v<T> ) {
+        const ret_val<T> parsed = try_parse_integer<T>( text, false );
+        if( parsed.success() ) {
+            return parsed.value();
+        }
+        return std::nullopt;
+    } else {
+        std::istringstream conv( text );
+        conv.imbue( std::locale::classic() );
+        T parsed = 0;
+        conv >> parsed;
+        if( conv && ( conv >> std::ws ).eof() ) {
+            return parsed;
+        }
+        return std::nullopt;
+    }
+}
+
+template<typename T>
+number_input_popup<T>::number_input_popup( int width, T old_value, const std::string &title ) :
+    input_popup( width, title ),
     value( old_value ),
     old_value( old_value )
 {
-    // potentially register context keys
+    // Up and down step the value, page up and down by the fast step, and so
+    // does clicking the step buttons
+    ctxt.register_action( "HISTORY_UP" );
+    ctxt.register_action( "HISTORY_DOWN" );
+    ctxt.register_action( "PAGE_UP" );
+    ctxt.register_action( "PAGE_DOWN" );
+    ctxt.register_action( "SELECT" );
+    show_text( format_number( value ) );
 }
 
-template<>
-void number_input_popup<int>::draw_input_control()
+template<typename T>
+T number_input_popup<T>::step_amount( bool fast ) const
 {
-    // todo: maybe set width of input field, default is fairly long
-    // step size default values are imgui defaults
-    ImGui::InputInt( "##number_input", &value, step_size.value_or( 1 ),
-                     fast_step_size.value_or( 100 ) );
+    // The defaults the ImGui popup had: 1 and 100 for whole numbers, and no
+    // stepping for floats.
+    if constexpr( std::is_integral_v<T> ) {
+        return fast ? fast_step_size.value_or( 100 ) : step_size.value_or( 1 );
+    } else {
+        return fast ? fast_step_size.value_or( 0 ) : step_size.value_or( 0 );
+    }
 }
 
-template<>
-void number_input_popup<float>::draw_input_control()
+template<typename T>
+void number_input_popup<T>::step_by( T amount )
 {
-    // todo: maybe set width of input field, default is fairly long
-    // step size default values are imgui defaults
-    cataimgui::InputFloat( "##number_input", &value, step_size.value_or( 0.f ),
-                           fast_step_size.value_or( 0.f ) );
+    if( amount == 0 ) {
+        return;
+    }
+    value += amount;
+    show_text( format_number( value ) );
+}
+
+template<typename T>
+void number_input_popup<T>::read_field()
+{
+    if( std::optional<T> parsed = parse_number<T>( field_text( format_number( value ) ) ) ) {
+        value = *parsed;
+    }
+}
+
+template<typename T>
+void number_input_popup<T>::on_redraw()
+{
+    input_popup::on_redraw();
+    set_class( "steps", "hidden", step_amount( false ) == 0 );
 }
 
 template<typename T>
 T number_input_popup<T>::query()
 {
+    is_cancelled = false;
 
     while( true ) {
         ui_manager::redraw_invalidated();
         std::string action = ctxt.handle_input();
+        // RmlUi has already applied any typing to the field
+        read_field();
 
         if( handle_custom_callbacks( action ) ) {
             continue;
@@ -431,14 +413,22 @@ T number_input_popup<T>::query()
             return value;
         } else if( action == "TEXT.QUIT" ) {
             break;
-        }
-
-        // mouse click on x to close leads here
-        if( !get_is_open() ) {
-            break;
+        } else if( action == "TEXT.CLEAR" ) {
+            show_text( std::string() );
+        } else if( action == "HISTORY_UP" || action == "HISTORY_DOWN" ) {
+            step_by( action == "HISTORY_UP" ? step_amount( false ) : -step_amount( false ) );
+        } else if( action == "PAGE_UP" || action == "PAGE_DOWN" ) {
+            step_by( action == "PAGE_UP" ? step_amount( true ) : -step_amount( true ) );
+        } else if( action == "SELECT" ) {
+            // The step buttons are "−" then "+"
+            const int button = hovered_child( "steps" );
+            if( button >= 0 ) {
+                step_by( button == 0 ? -step_amount( false ) : step_amount( false ) );
+            }
         }
     }
 
+    is_cancelled = true;
     return old_value;
 }
 

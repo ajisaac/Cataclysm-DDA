@@ -3,9 +3,11 @@
 #define CATA_SRC_RML_UI_H
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "point.h"
 #include "sdl_wrappers.h"
 
 class ui_adaptor;
@@ -45,13 +47,24 @@ void render();
 
 /**
  * Pass an SDL event on to RmlUi, in the window coordinates SDL reported it
- * in. Only mouse events are handled so far: keyboard input still goes through
- * input_context alone. RmlUi sees every event, not instead of the game.
+ * in. RmlUi sees events as well as the game, not instead of it: mouse events
+ * always, and keyboard and text events only while the document holding
+ * RmlUi's focus is the top UI, so that typing into whatever is on top never
+ * also edits a field behind it. Game actions still come from input_context.
  */
 void process_event( const SDL_Event &ev );
 
 /// Whether init() has succeeded and shutdown() has not been called since.
 bool active();
+
+/// The context's size, in its own pixels -- RCSS `px`. Zero before init().
+point viewport_px();
+/// Context pixels per RCSS `dp`: the window's pixel density.
+float dp_ratio();
+/// Context pixels per ImGui pixel, for honouring sizes and positions callers
+/// worked out with ImGui. ImGui draws into the display buffer, which is shown
+/// at the largest whole multiple of its size that fits.
+float imgui_px_scale();
 
 /**
  * Bracket one pass of ui_adaptor::redraw_invalidated(). Between the two,
@@ -118,12 +131,27 @@ class document
         /// Index of the child of the element with this id that the mouse is
         /// over, directly or through one of its descendants, or -1.
         int hovered_child( const std::string &id ) const;
+        /// Set an attribute on the element with this id.
+        void set_attribute( const std::string &id, const std::string &name,
+                            const std::string &value );
+        /// The value of the form control with this id, as typed so far, or
+        /// nullopt if there is no such control.
+        std::optional<std::string> get_value( const std::string &id ) const;
+        /// Replace the value of the form control with this id, leaving a text
+        /// field's caret at the end.
+        void set_value( const std::string &id, const std::string &value );
+        /// Give the element with this id keyboard focus once the document is
+        /// next shown -- RmlUi cannot focus an element while it is hidden.
+        void focus( const std::string &id );
 
     private:
         friend void shutdown();
+        friend void end_redraw_pass();
+        friend void process_event( const SDL_Event &ev );
 
         Rml::ElementDocument *doc = nullptr;
         std::unique_ptr<ui_adaptor> adaptor;
+        std::string pending_focus;
 };
 
 /**

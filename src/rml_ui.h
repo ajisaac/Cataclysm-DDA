@@ -75,11 +75,11 @@ class document
 {
     public:
         /**
-         * @param rml Document source.
-         * @param source_url Name for RmlUi's log messages, and the base for
-         *                   resolving relative paths inside the document.
+         * @param file Document file under data/raw/rmlui/, e.g.
+         *             "main_menu_replica.rml". Relative paths inside it, such
+         *             as a link to common.rcss, resolve from that directory.
          */
-        document( const std::string &rml, const std::string &source_url );
+        explicit document( const std::string &file );
         virtual ~document();
 
         document( const document & ) = delete;

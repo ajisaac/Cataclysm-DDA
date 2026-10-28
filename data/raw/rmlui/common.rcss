@@ -1,0 +1,25 @@
+/*
+ * Base styles shared by the game's RmlUi documents; link it from each one.
+ *
+ * RmlUi has no built-in default stylesheet, so every element starts out
+ * inline and block elements have to be declared here.
+ *
+ * The fg-* and bg-* color classes that game text converts to are not here:
+ * they are generated from the loaded palette and attached to every document
+ * in code (see src/rml_markup.h).
+ */
+
+body
+{
+    width: 100%;
+    height: 100%;
+    /* Registered in code from data/font/Roboto-Medium.ttf. */
+    font-family: cata-sans;
+    font-size: 16dp;
+    color: #e8e4d8;
+}
+
+div, p, h1, h2, h3
+{
+    display: block;
+}

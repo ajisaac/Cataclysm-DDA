@@ -18,14 +18,14 @@ bool active()
     return false;
 }
 
-document::document( const std::string &, const std::string & ) {}
+document::document( const std::string & ) {}
 document::~document() = default;
 Rml::ElementDocument *document::get() const
 {
     return doc;
 }
 
-main_menu_replica::main_menu_replica() : document( std::string(), std::string() ) {}
+main_menu_replica::main_menu_replica() : document( std::string() ) {}
 void main_menu_replica::update( const std::vector<std::string> &, int ) {}
 } // namespace rml_ui
 
@@ -102,68 +102,6 @@ const Rml::SharedPtr<Rml::StyleSheetContainer> &get_palette_sheet()
     }
     return palette_sheet;
 }
-
-const char *main_menu_rml = R"RML(
-<rml>
-<head>
-<style>
-body
-{
-    width: 100%;
-    height: 100%;
-    font-family: cata-sans;
-    color: #e8e4d8;
-}
-#menu
-{
-    position: absolute;
-    top: 48dp;
-    left: 48dp;
-    width: 300dp;
-    padding: 20dp;
-    background-color: #141821f2;
-    border: 1dp #39465c;
-    border-radius: 12dp;
-}
-#menu .heading
-{
-    display: block;
-    font-size: 13dp;
-    color: #6d7b92;
-    margin-bottom: 14dp;
-}
-#menu .item
-{
-    display: block;
-    font-size: 19dp;
-    padding: 7dp 12dp;
-    margin-bottom: 2dp;
-    border-radius: 6dp;
-    color: #b7b2a4;
-}
-#menu .item.selected
-{
-    background-color: #2b3a52;
-    color: #ffffff;
-}
-#menu .item .key
-{
-    color: #7fa8e0;
-}
-#menu .item.selected .key
-{
-    color: #cfe2ff;
-}
-</style>
-</head>
-<body>
-<div id="menu">
-    <div class="heading">RmlUi &mdash; main menu replica</div>
-    <div id="items"></div>
-</div>
-</body>
-</rml>
-)RML";
 
 /// The main menu's "<M|m>OTD" labels, split the way shortcut_text() splits
 /// them, with the hotkey in a span the replica's stylesheet can accent.
@@ -339,14 +277,16 @@ bool active()
     return initialised;
 }
 
-document::document( const std::string &rml, const std::string &source_url )
+document::document( const std::string &file )
 {
     if( !initialised || !context ) {
         return;
     }
-    doc = context->LoadDocumentFromMemory( rml, source_url );
+    const std::string path =
+        ( PATH_INFO::datadir_path() / "raw" / "rmlui" / file ).generic_u8string();
+    doc = context->LoadDocument( path );
     if( !doc ) {
-        DebugLog( D_ERROR, DC_ALL ) << "RmlUi: failed to load document " << source_url;
+        DebugLog( D_ERROR, DC_ALL ) << "RmlUi: failed to load document " << path;
         return;
     }
     live_documents.push_back( this );
@@ -388,7 +328,7 @@ Rml::ElementDocument *document::get() const
     return doc;
 }
 
-main_menu_replica::main_menu_replica() : document( main_menu_rml, "[cata-main-menu]" ) {}
+main_menu_replica::main_menu_replica() : document( "main_menu_replica.rml" ) {}
 
 void main_menu_replica::update( const std::vector<std::string> &items, int selected )
 {

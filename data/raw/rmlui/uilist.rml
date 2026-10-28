@@ -77,6 +77,14 @@
             flex: 1 1 auto;
             min-height: 0;
         }
+        /* A panel's content scrolls, and its footer stays put; see
+           uilist::scroll_right_panel(). */
+        #left, #right
+        {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
         #left
         {
             flex: 0 0 auto;
@@ -84,12 +92,34 @@
         }
         #right
         {
-            flex: 0 1 auto;
+            flex: 1 1 0;
+            min-width: 0;
             margin-left: 12dp;
         }
+        #left-content, #right-content
+        {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+        }
+        #right-footer
+        {
+            flex: 0 0 auto;
+            margin-top: 6dp;
+        }
+        #left table td, #right table td, #left table th, #right table th
+        {
+            padding: 0 12dp 2dp 0;
+            text-align: left;
+        }
+        /* The list fills the menu, unless a right panel takes the rest. */
         #list-column
         {
             flex: 1 1 auto;
+        }
+        #body.with-right #list-column
+        {
+            flex: 0 1 auto;
         }
         /* The height is also in src/uilist.cpp (row_height_dp), which works
            out how many rows fit. Hovering a row previews it, and clicking it
@@ -154,12 +184,17 @@
             <div id="text" class="hidden"></div>
             <div id="tabs" class="hidden"></div>
             <div id="body">
-                <div id="left" class="hidden"></div>
+                <div id="left" class="hidden">
+                    <div id="left-content"></div>
+                </div>
                 <div id="list-column">
                     <div id="list"></div>
                     <div id="position" class="hidden"></div>
                 </div>
-                <div id="right" class="hidden"></div>
+                <div id="right" class="hidden">
+                    <div id="right-content"></div>
+                    <div id="right-footer" class="hidden"></div>
+                </div>
             </div>
             <div id="desc" class="hidden"></div>
         </div>

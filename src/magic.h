@@ -963,8 +963,7 @@ class spellbook_callback : public uilist_callback
         std::vector<spell_type> spells;
     public:
         void add_spell( const spell_id &sp );
-        void refresh( uilist *menu ) override;
-        float desired_extra_space_right( ) override;
+        std::string right_panel_rml( uilist *menu ) override;
 };
 
 // Utility structure to run area queries over weight map. It uses shortest-path-expanding-tree,

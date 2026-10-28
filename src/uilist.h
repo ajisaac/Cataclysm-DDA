@@ -240,7 +240,12 @@ class uilist_callback
         /**
          * RML for panels beside the list, or empty for none. Called on every
          * redraw, after update(); a panel is only rebuilt when its RML
-         * changes. rml_ui::markup_to_rml() converts game text.
+         * changes. rml_ui::markup_to_rml() converts game text, and tables
+         * are styled for two-column key/value data.
+         *
+         * A panel's content scrolls when it is taller than the menu (see
+         * uilist::scroll_right_panel()), while the right panel's footer,
+         * for key hints and the like, stays below it.
          */
         virtual std::string left_panel_rml( uilist * ) {
             return std::string();
@@ -248,17 +253,8 @@ class uilist_callback
         virtual std::string right_panel_rml( uilist * ) {
             return std::string();
         }
-        /**
-         * Legacy ImGui side panels, no longer drawn now that uilist is RmlUi.
-         * Remove once the callbacks still overriding these have moved to
-         * left_panel_rml() and right_panel_rml().
-         */
-        virtual void refresh( uilist * ) {}
-        virtual float desired_extra_space_left( ) {
-            return 0.0;
-        }
-        virtual float desired_extra_space_right( ) {
-            return 0.0;
+        virtual std::string right_panel_footer_rml( uilist * ) {
+            return std::string();
         }
         virtual ~uilist_callback() = default;
 };
@@ -453,6 +449,8 @@ class uilist // NOLINT(cata-xy)
         void reset();
 
         void set_hide( bool val );
+        /// Scroll the right panel's content, on the next redraw.
+        void scroll_right_panel( rml_ui::scroll how );
 
         shared_ptr_fast<uilist_impl> create_or_get_ui();
         // NOLINTNEXTLINE(google-explicit-constructor)
@@ -577,6 +575,8 @@ class uilist_impl : public rml_ui::document
         int hovered_entry() const;
         /// Index into the parent's categories of the tab the mouse is over, or -1.
         int hovered_category() const;
+        /// Whether the mouse is over a side panel, which the wheel scrolls.
+        bool hovering_panel() const;
 
     protected:
         void on_redraw() override;
@@ -589,6 +589,7 @@ class uilist_impl : public rml_ui::document
 
         bool layout_dirty = true;
         bool hidden = false;
+        std::optional<rml_ui::scroll> pending_scroll;
         std::map<std::string, std::string> shown;
 };
 

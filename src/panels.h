@@ -35,8 +35,9 @@ namespace overmap_ui
 void draw_overmap_chunk( const catacurses::window &w_minimap, const avatar &you,
                          const tripoint_abs_omt &global_omt, const point &start, int width,
                          int height );
-void draw_overmap_chunk_imgui( const avatar &you, const tripoint_abs_omt &global_omt,
-                               int width, int height );
+// The same chunk as game markup, one row per line, for a monospace font
+std::string overmap_chunk_markup( const avatar &you, const tripoint_abs_omt &global_omt,
+                                  int width, int height );
 } // namespace overmap_ui
 
 bool default_render();

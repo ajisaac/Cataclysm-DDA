@@ -222,29 +222,37 @@ void overmap_ui::draw_overmap_chunk( const catacurses::window &w_minimap, const 
     }
 }
 
-void overmap_ui::draw_overmap_chunk_imgui( const avatar &you, const tripoint_abs_omt &global_omt,
-        const int width, const int height )
+std::string overmap_ui::overmap_chunk_markup( const avatar &you,
+        const tripoint_abs_omt &global_omt, const int width, const int height )
 {
-    ImGui::BeginGroup();
-    ImVec2 start_pos = ImGui::GetCursorPos();
-    const ImVec2 mid { static_cast<float>( width / 2.0 ), static_cast<float>( height / 2.0 ) };
-    ImVec2 char_size = ImGui::CalcTextSize( "X" );
     // Map is centered on curs - typically player's global_omt_location
     const tripoint_abs_omt targ = you.get_active_mission_target();
     bool drew_mission = targ.is_invalid();
     const int sight_points = you.overmap_sight_range( g->light_level( you.posz() ) );
 
-    // i scans across width, with 0 in the middle(ish)
+    std::string chunk;
+    // j scans down the rows and i across them, each with 0 in the middle(ish)
     //     -(w/2) ... w-(w/2)-1
     // w:9   -4 ... 4
     // w:10  -5 ... 4
     // w:11  -5 ... 5
     // w:12  -6 ... 5
     // w:13  -6 ... 6
-    for( int i = width - ( width / 2 ) - 1; i >= -( width / 2 ); i-- ) {
-        // j scans across height, with 0 in the middle(ish)
-        // (same algorithm)
-        for( int j = height - ( height / 2 ) - 1; j >= -( height / 2 ); j-- ) {
+    for( int j = -( height / 2 ); j <= height - ( height / 2 ) - 1; j++ ) {
+        // Runs of one color are colorized together, to keep the markup short
+        std::string run;
+        nc_color run_color = c_unset;
+        const auto add = [&]( const std::string & sym, const nc_color & color ) {
+            if( color != run_color ) {
+                if( !run.empty() ) {
+                    chunk += colorize( run, run_color );
+                }
+                run.clear();
+                run_color = color;
+            }
+            run += sym;
+        };
+        for( int i = -( width / 2 ); i <= width - ( width / 2 ) - 1; i++ ) {
             // omp is the overmap point of the terrain whose symbol we are drawing
             const tripoint_abs_omt omp = global_omt + tripoint( i, j, 0 );
             // Terrain color and symbol to use for this point
@@ -283,44 +291,26 @@ void overmap_ui::draw_overmap_chunk_imgui( const avatar &you, const tripoint_abs
                     ter_color = red_background( ter_color );
                 }
             }
-            // TODO: Build colorized string instead of writing directly to window
-            ImVec2 pos = start_pos + ( char_size * ( mid + ImVec2( i, j ) ) );
-            ImGui::SetCursorPos( pos );
             // Show hordes on minimap, leaving a one-tile space around the player
             bool show_hordes = i < -1 || i > 1 || j < -1 || j > 1;
             int horde_size = overmap_buffer.get_horde_size( omp );
             if( show_hordes && horde_size >= HORDE_VISIBILITY_SIZE &&
                 seen && you.overmap_los( omp, sight_points ) ) {
-                const char *horde = horde_size > HORDE_VISIBILITY_SIZE * 2 ? "Z" : "z";
-                ImGui::TextColored( c_green, "%s", horde );
-                ImGui::SameLine( 0, 0 );
+                add( horde_size > HORDE_VISIBILITY_SIZE * 2 ? "Z" : "z", c_green );
             } else {
                 if( i == 0 && j == 0 ) {
                     // Highlight player character position in center of minimap
                     ter_color = hilite( ter_color );
                 }
-                ImGui::TextColored( ter_color, "%s", ter_sym.c_str() );
-                ImGui::SameLine( 0, 0 );
+                add( ter_sym, ter_color );
             }
         }
-        ImGui::NewLine();
+        if( !run.empty() ) {
+            chunk += colorize( run, run_color );
+        }
+        chunk += "\n";
     }
-
-    // When the mission marker is not visible within the current overmap extents,
-    // draw an arrow at the edge of the map pointing in the general mission direction.
-    // TODO: Replace `drew_mission` with a function like `is_mission_on_map`
-    // TODO: commented out temporarily
-    // if( !drew_mission ) {
-    //     char glyph = '*';
-    //     if( targ.z() > you.posz() ) {
-    //         glyph = '^';
-    //     } else if( targ.z() < you.posz() ) {
-    //         glyph = 'v';
-    //     }
-    //     const point arrow = display::mission_arrow_offset( you, width, height );
-    //     mvwputch( w_minimap, arrow + point( start_x, start_y ), c_red, glyph );
-    // }
-    ImGui::EndGroup();
+    return chunk;
 }
 
 static void decorate_panel( std::string_view name, const catacurses::window &w )

@@ -23,3 +23,23 @@ div, p, h1, h2, h3
 {
     display: block;
 }
+
+table
+{
+    box-sizing: border-box;
+    display: table;
+}
+tr
+{
+    box-sizing: border-box;
+    display: table-row;
+}
+td, th
+{
+    box-sizing: border-box;
+    display: table-cell;
+}
+thead, tbody
+{
+    display: table-row-group;
+}

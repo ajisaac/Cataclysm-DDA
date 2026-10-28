@@ -126,8 +126,7 @@ std::string pocket_favorite_callback::right_panel_rml( uilist *menu )
 
     selected_pocket->contents_info( info, pocket_num, true );
     panel += format_item_info( info, {} );
-    // As wide as the ImGui panel was: at least half the screen
-    return "<div style=\"width: 50vw;\">" + rml_ui::markup_to_rml( panel ) + "</div>";
+    return rml_ui::markup_to_rml( panel );
 }
 
 pocket_favorite_callback::pocket_favorite_callback( const std::string &uilist_text,

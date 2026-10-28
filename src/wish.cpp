@@ -14,11 +14,13 @@
 #include <utility>
 #include <vector>
 
+#include "ascii_art.h"
 #include "bionics.h"
 #include "bodypart.h"
 #include "calendar.h"
 #include "cata_imgui.h"
 #include "cata_scope_helpers.h"
+#include "cata_utility.h"
 #include "character.h"
 #include "color.h"
 #include "coordinates.h"
@@ -47,12 +49,14 @@
 #include "monstergenerator.h"
 #include "mtype.h"
 #include "mutation.h"
+#include "options.h"
 #include "output.h"
 #include "overmap.h"
 #include "overmapbuffer.h"
 #include "pimpl.h"
 #include "point.h"
 #include "proficiency.h"
+#include "rml_markup.h"
 #include "skill.h"
 #include "string_formatter.h"
 #include "string_input_popup.h"
@@ -69,12 +73,33 @@ static const efftype_id effect_pet( "pet" );
 
 static const mongroup_id GROUP_ZOMBIE( "GROUP_ZOMBIE" );
 
-static float lines_for_msg( std::string_view msg )
+// The markup counterpart of cataimgui::TextKeybinding(): "[key] description",
+// in the active hotkey color while that option is on.
+static std::string keybinding_markup( const input_context &ctxt, const char *action,
+                                      const char *description, bool active )
 {
-    if( msg.empty() ) {
-        return 0.0;
+    const nc_color color = active ? ACTIVE_HOTKEY_COLOR : c_light_gray;
+    // strlen(action) <= 1 for non-action explicit keys
+    const std::string key = *action == 0 || *( action + 1 ) == 0 ? std::string( action ) :
+                            ctxt.get_desc( action );
+    return colorize( "[", c_light_gray ) + colorize( key, color ) + colorize( "] ", c_light_gray ) +
+           colorize( description, color );
+}
+
+// Feedback and key hints, below a debug spawn menu's info panel
+static std::string wish_footer_rml( const std::string &msg, const std::vector<std::string> &hints )
+{
+    std::string markup;
+    if( !msg.empty() ) {
+        markup += colorize( msg, c_green ) + "\n";
     }
-    return 1.0 + static_cast<float>( std::count( msg.begin(), msg.end(), '\n' ) );
+    markup += string_join( hints, colorize( ", ", c_light_gray ) );
+    return rml_ui::markup_to_rml( markup );
+}
+
+static std::string value_row_rml( const char *key, const std::string &value_rml )
+{
+    return "<tr><td>" + rml_ui::markup_to_rml( key ) + "</td><td>" + value_rml + "</td></tr>";
 }
 
 namespace
@@ -82,7 +107,6 @@ namespace
 class wish_mutate_callback: public uilist_callback
 {
     public:
-        cataimgui::scroll desc_scroll = cataimgui::scroll::none;
         // Last menu entry
         int lastlen = 0;
         // Feedback message
@@ -100,74 +124,54 @@ class wish_mutate_callback: public uilist_callback
             return c_white;
         }
 
+        // One value per line
         template<typename T>
-        void ValueRow( const char *key, const std::vector<T> &list ) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( key );
-            ImGui::TableNextColumn();
+        std::string ValueRow( const char *key, const std::vector<T> &list ) {
+            std::vector<std::string> values;
             for( const auto &value : list ) {
-                auto color = mcolor( value );
-                ImGui::TextColored( color,
-                                    "%s",
-                                    value->name() );
+                values.emplace_back( rml_ui::markup_to_rml( value->name(), mcolor( value ) ) );
             }
-            ImGui::NewLine();
+            return value_row_rml( key, string_join( values, "<br/>" ) );
         }
 
-        void ValueRow( const char *key, const std::vector<string_id<mutation_branch>> &list ) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( key );
-            ImGui::TableNextColumn();
+        std::string ValueRow( const char *key,
+                              const std::vector<string_id<mutation_branch>> &list ) {
+            std::vector<std::string> values;
             for( const auto &value : list ) {
-                nc_color color = mcolor( value );
-                ImGui::TextColored( color,
-                                    "%s",
-                                    value->name().c_str() );
+                values.emplace_back( rml_ui::markup_to_rml( value->name(), mcolor( value ) ) );
             }
-            ImGui::NewLine();
+            return value_row_rml( key, string_join( values, "<br/>" ) );
         }
 
-        void ValueRow( const char *key, const std::vector<mutation_category_id> &list ) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( key );
-            ImGui::TableNextColumn();
+        std::string ValueRow( const char *key, const std::vector<mutation_category_id> &list ) {
+            std::vector<std::string> values;
             for( const auto &value : list ) {
-                ImGui::TextColored( c_light_gray, "%s", value.c_str() );
+                values.emplace_back( rml_ui::markup_to_rml( value.str(), c_light_gray ) );
             }
-            ImGui::NewLine();
+            return value_row_rml( key, string_join( values, "<br/>" ) );
         }
 
-        void ValueRow( const char *key, const std::set<std::string> &list ) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( key );
-            ImGui::TableNextColumn();
+        std::string ValueRow( const char *key, const std::set<std::string> &list ) {
+            std::vector<std::string> values;
             for( const auto &value : list ) {
-                ImGui::TextColored( c_light_gray, "%s", value.c_str() );
+                values.emplace_back( rml_ui::markup_to_rml( value, c_light_gray ) );
             }
-            ImGui::NewLine();
+            return value_row_rml( key, string_join( values, "<br/>" ) );
         }
 
-        void ValueRow( const char *key, const char *value ) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( key );
-            ImGui::TableNextColumn();
-            ImGui::TextColored( c_light_gray, "%s", value );
+        std::string ValueRow( const char *key, const char *value ) {
+            return value_row_rml( key, rml_ui::markup_to_rml( value, c_light_gray ) );
         }
 
         wish_mutate_callback() = default;
         bool key( const input_context &ctxt, const input_event &event, int entnum, uilist *menu ) override {
             const std::string &action = ctxt.input_to_action( event );
             if( action == "SCROLL_DESC_UP" ) {
-                desc_scroll = cataimgui::scroll::page_up;
+                menu->scroll_right_panel( rml_ui::scroll::page_up );
                 return true;
             }
             if( action == "SCROLL_DESC_DOWN" ) {
-                desc_scroll = cataimgui::scroll::page_down;
+                menu->scroll_right_panel( rml_ui::scroll::page_down );
                 return true;
             }
             if( event.get_first_input() == 't' && you->has_trait( vTraits[ entnum ] ) ) {
@@ -196,12 +200,7 @@ class wish_mutate_callback: public uilist_callback
             return false;
         }
 
-        float desired_extra_space_right( ) override {
-            return std::min( ImGui::GetMainViewport()->Size.x / 2.0f,
-                             std::max( TERMX / 2, TERMX - 50 ) * ImGui::CalcTextSize( "X" ).x );
-        }
-
-        void refresh( uilist *menu ) override {
+        void update( uilist * ) override {
             if( !started ) {
                 started = true;
                 for( const mutation_branch &traits_iter : mutation_branch::get_all() ) {
@@ -209,73 +208,58 @@ class wish_mutate_callback: public uilist_callback
                     pTraits[traits_iter.id] = you->has_trait( traits_iter.id );
                 }
             }
+        }
 
-            ImGui::TableSetColumnIndex( 2 );
-
-            ImVec2 info_size = ImGui::GetContentRegionAvail( );
-            // 1 line for ctxt + 0 to 1 line for msg
-            info_size.y -= ( 1.0 + lines_for_msg( msg ) ) * ImGui::GetTextLineHeightWithSpacing();
-            if( ImGui::BeginChild( "mutation info", info_size )
-                && menu->previewing >= 0 && static_cast<size_t>( menu->previewing ) < vTraits.size()
-              ) {
-                cataimgui::set_scroll( desc_scroll );
-                const mutation_branch &mdata = vTraits[menu->previewing].obj();
-
-                ImGui::TextUnformatted( mdata.valid ? _( "Valid" ) : _( "Nonvalid" ) );
-                ImGui::NewLine();
-
-                if( ImGui::BeginTable( "props", 2 ) ) {
-                    ImGui::TableSetupColumn( "key" );
-                    ImGui::TableSetupColumn( "value" );
-                    ValueRow( _( "Id:" ), mdata.id.c_str() );
-                    ValueRow( _( "Prereqs:" ), mdata.prereqs );
-                    if( !mdata.prereqs2.empty() ) {
-                        ValueRow( _( "Prereqs, 2d:" ), mdata.prereqs2 );
-                    }
-                    if( !mdata.threshreq.empty() ) {
-                        ValueRow( _( "Thresholds required:" ), mdata.threshreq );
-                    }
-                    if( !mdata.cancels.empty() ) {
-                        ValueRow( _( "Cancels:" ), mdata.cancels );
-                    }
-                    if( !mdata.replacements.empty() ) {
-                        ValueRow( _( "Becomes:" ), mdata.replacements );
-                    }
-                    if( !mdata.additions.empty() ) {
-                        ValueRow( _( "Add-ons:" ), mdata.additions );
-                    }
-                    if( !mdata.types.empty() ) {
-                        ValueRow( _( "Type:" ), mdata.types );
-                    }
-                    if( !mdata.category.empty() ) {
-                        ValueRow( _( "Category:" ), mdata.category );
-                    }
-                    ImGui::EndTable();
-                }
-                ImGui::NewLine();
-
-                //~ pts: points, vis: visibility, ugly: ugliness
-                ImGui::Text( _( "pts: %d vis: %d ugly: %d" ),
-                             mdata.points,
-                             mdata.visibility,
-                             mdata.ugliness );
-                ImGui::NewLine();
-                ImGui::TextWrapped( "%s", you->mutation_desc( mdata.id ).c_str() );
+        std::string right_panel_rml( uilist *menu ) override {
+            if( menu->previewing < 0 ||
+                static_cast<size_t>( menu->previewing ) >= vTraits.size() ) {
+                return std::string();
             }
-            ImGui::EndChild();
-            if( !msg.empty() ) {
-                ImGui::TextColored( c_green, "%s", msg.c_str() );
+            const mutation_branch &mdata = vTraits[menu->previewing].obj();
+
+            std::string rml = rml_ui::markup_to_rml( mdata.valid ? _( "Valid" ) :
+                              _( "Nonvalid" ) ) + "<br/><br/><table>";
+            rml += ValueRow( _( "Id:" ), mdata.id.c_str() );
+            rml += ValueRow( _( "Prereqs:" ), mdata.prereqs );
+            if( !mdata.prereqs2.empty() ) {
+                rml += ValueRow( _( "Prereqs, 2d:" ), mdata.prereqs2 );
             }
+            if( !mdata.threshreq.empty() ) {
+                rml += ValueRow( _( "Thresholds required:" ), mdata.threshreq );
+            }
+            if( !mdata.cancels.empty() ) {
+                rml += ValueRow( _( "Cancels:" ), mdata.cancels );
+            }
+            if( !mdata.replacements.empty() ) {
+                rml += ValueRow( _( "Becomes:" ), mdata.replacements );
+            }
+            if( !mdata.additions.empty() ) {
+                rml += ValueRow( _( "Add-ons:" ), mdata.additions );
+            }
+            if( !mdata.types.empty() ) {
+                rml += ValueRow( _( "Type:" ), mdata.types );
+            }
+            if( !mdata.category.empty() ) {
+                rml += ValueRow( _( "Category:" ), mdata.category );
+            }
+            rml += "</table><br/>";
+
+            //~ pts: points, vis: visibility, ugly: ugliness
+            rml += rml_ui::markup_to_rml( string_format( _( "pts: %d vis: %d ugly: %d" ),
+                                          mdata.points, mdata.visibility, mdata.ugliness ) +
+                                          "\n\n" + you->mutation_desc( mdata.id ) );
+            return rml;
+        }
+
+        std::string right_panel_footer_rml( uilist *menu ) override {
             input_context ctxt( menu->input_category, keyboard_mode::keycode );
-
-            cataimgui::TextKeybinding( ctxt, "UILIST.FILTER", _( "Find" ),
-                                       menu->filtering && ( !menu->filter.empty() ) );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "t",      _( "Toggle base trait" ),  false );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "a",      _( "Show active traits" ), only_active );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "UILIST.QUIT", _( "Quit" ),          false );
+            return wish_footer_rml( msg, {
+                keybinding_markup( ctxt, "UILIST.FILTER", _( "Find" ),
+                                   menu->filtering && ( !menu->filter.empty() ) ),
+                keybinding_markup( ctxt, "t",      _( "Toggle base trait" ),  false ),
+                keybinding_markup( ctxt, "a",      _( "Show active traits" ), only_active ),
+                keybinding_markup( ctxt, "UILIST.QUIT", _( "Quit" ),          false )
+            } );
         }
 
         ~wish_mutate_callback() override = default;
@@ -677,7 +661,6 @@ namespace
 class wish_monster_callback: public uilist_callback
 {
     public:
-        cataimgui::scroll desc_scroll = cataimgui::scroll::none;
         // last menu entry
         int lastent;
         // feedback message
@@ -700,14 +683,14 @@ class wish_monster_callback: public uilist_callback
         }
 
         bool key( const input_context &ctxt, const input_event &event, int /*entnum*/,
-                  uilist * /*menu*/ ) override {
+                  uilist *menu ) override {
             const std::string &action = ctxt.input_to_action( event );
             if( action == "SCROLL_DESC_UP" ) {
-                desc_scroll = cataimgui::scroll::page_up;
+                menu->scroll_right_panel( rml_ui::scroll::page_up );
                 return true;
             }
             if( action == "SCROLL_DESC_DOWN" ) {
-                desc_scroll = cataimgui::scroll::page_down;
+                menu->scroll_right_panel( rml_ui::scroll::page_down );
                 return true;
             }
             if( event.get_first_input() == 'f' ) {
@@ -729,12 +712,7 @@ class wish_monster_callback: public uilist_callback
             return false;
         }
 
-        float desired_extra_space_right( ) override {
-            return std::min( ImGui::GetMainViewport()->Size.x / 2.0f,
-                             std::max( TERMX / 2, TERMX - 50 ) * ImGui::CalcTextSize( "X" ).x );
-        }
-
-        void refresh( uilist *menu ) override {
+        void update( uilist *menu ) override {
             const int entnum = menu->previewing;
             const bool valid_entnum = entnum >= 0 && static_cast<size_t>( entnum ) < mtypes.size();
             if( entnum != lastent ) {
@@ -748,42 +726,45 @@ class wish_monster_callback: public uilist_callback
                     tmp = monster();
                 }
             }
+        }
 
-            ImGui::TableSetColumnIndex( 2 );
-            ImVec2 info_size = ImGui::GetContentRegionAvail( );
-            // 1 line for ctxt + 0 to 2 lines for msg
-            info_size.y -= ( 1.0 + lines_for_msg( msg ) ) * ImGui::GetTextLineHeightWithSpacing();
-            if( ImGui::BeginChild( "monster info", info_size ) && valid_entnum ) {
-                cataimgui::set_scroll( desc_scroll );
-                std::string header = string_format( "#%d: %s (%d)%s", entnum, tmp.type->id.c_str(), group,
-                                                    hallucination ? _( " (hallucination)" ) : "" );
-                ImGui::SetCursorPosX( ( ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(
-                                            header.c_str() ).x ) * 0.5 );
-                ImGui::TextColored( c_cyan, "%s", header.c_str() );
+        std::string right_panel_rml( uilist *menu ) override {
+            const int entnum = menu->previewing;
+            if( entnum < 0 || static_cast<size_t>( entnum ) >= mtypes.size() ) {
+                return std::string();
+            }
+            std::string header = string_format( "#%d: %s (%d)%s", entnum, tmp.type->id.c_str(),
+                                                group, hallucination ? _( " (hallucination)" ) : "" );
+            std::string rml = "<div style=\"text-align: center;\">" +
+                              rml_ui::markup_to_rml( header, c_cyan ) + "</div>";
 
-                // show debug info
-                restore_on_out_of_scope<bool> restore_debugmode( debug_mode );
-                debug_mode = true;
-                tmp.print_info_imgui();
+            // show debug info
+            restore_on_out_of_scope<bool> restore_debugmode( debug_mode );
+            debug_mode = true;
+            rml += rml_ui::markup_to_rml( tmp.info_markup() );
+
+            if( get_option<bool>( "ENABLE_ASCII_ART" ) ) {
+                const ascii_art_id art = tmp.type->get_picture_id();
+                if( art.is_valid() ) {
+                    rml += "<div style=\"font-family: cata-mono;\">" +
+                           rml_ui::markup_to_rml( string_join( art->picture, "\n" ), c_white ) +
+                           "</div>";
+                }
             }
-            ImGui::EndChild();
-            if( !msg.empty() ) {
-                ImGui::TextColored( c_green, "%s", msg.c_str() );
-            }
+            return rml;
+        }
+
+        std::string right_panel_footer_rml( uilist *menu ) override {
             input_context ctxt( menu->input_category, keyboard_mode::keycode );
-
-            cataimgui::TextKeybinding( ctxt, "UILIST.FILTER", _( "Find" ),
-                                       menu->filtering && ( !menu->filter.empty() ) );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "f",      _( "Friendly" ),       friendly );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "h",      _( "Hallucination" ),  hallucination );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "i",      _( "Increase Group" ), false );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "d",      _( "Decrease Group" ), false );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "UILIST.QUIT", _( "Quit" ),      false );
+            return wish_footer_rml( msg, {
+                keybinding_markup( ctxt, "UILIST.FILTER", _( "Find" ),
+                                   menu->filtering && ( !menu->filter.empty() ) ),
+                keybinding_markup( ctxt, "f",      _( "Friendly" ),       friendly ),
+                keybinding_markup( ctxt, "h",      _( "Hallucination" ),  hallucination ),
+                keybinding_markup( ctxt, "i",      _( "Increase Group" ), false ),
+                keybinding_markup( ctxt, "d",      _( "Decrease Group" ), false ),
+                keybinding_markup( ctxt, "UILIST.QUIT", _( "Quit" ),      false )
+            } );
         }
 
         ~wish_monster_callback() override = default;
@@ -947,7 +928,6 @@ namespace
 class wish_item_callback: public uilist_callback
 {
     public:
-        cataimgui::scroll desc_scroll = cataimgui::scroll::none;
         bool incontainer;
         bool spawn_everything;
         bool renew_snippet;
@@ -975,7 +955,7 @@ class wish_item_callback: public uilist_callback
             if( menu->selected < 0 ) {
                 return;
             }
-            desc_scroll = cataimgui::scroll::begin;
+            menu->scroll_right_panel( rml_ui::scroll::top );
             chosen_snippet_id = { -1, "" };
             renew_snippet = true;
             const itype &selected_itype = *standard_itype_ids[menu->selected];
@@ -1057,10 +1037,10 @@ class wish_item_callback: public uilist_callback
                 return true;
             }
             if( action == "SCROLL_DESC_UP" ) {
-                desc_scroll = cataimgui::scroll::page_up;
+                menu->scroll_right_panel( rml_ui::scroll::page_up );
             }
             if( action == "SCROLL_DESC_DOWN" ) {
-                desc_scroll = cataimgui::scroll::page_down;
+                menu->scroll_right_panel( rml_ui::scroll::page_down );
             }
             if( cur_key == KEY_LEFT || cur_key == KEY_RIGHT ) {
                 // For Renew snippet_id.
@@ -1070,12 +1050,7 @@ class wish_item_callback: public uilist_callback
             return false;
         }
 
-        float desired_extra_space_right( ) override {
-            return std::min( ImGui::GetMainViewport()->Size.x / 2.0f,
-                             std::max( TERMX / 2, TERMX - 50 ) * ImGui::CalcTextSize( "X" ).x );
-        }
-
-        void refresh( uilist *menu ) override {
+        void update( uilist *menu ) override {
             const int entnum = menu->previewing;
             if( entnum >= 0 && static_cast<size_t>( entnum ) < standard_itype_ids.size() ) {
                 tmp = wishitem_produce( *standard_itype_ids[entnum], flags, false );
@@ -1108,36 +1083,25 @@ class wish_item_callback: public uilist_callback
                                         flags.empty() ? "" : _( " (flagged)" ) );
                 info = tmp.get_info( true );
             }
+        }
 
-            ImGui::TableSetColumnIndex( 2 );
-            ImVec2 info_size = ImGui::GetContentRegionAvail();
-            // 1 line for ctxt + 0 to 1 line for msg
-            info_size.y -= ( 1.0 + lines_for_msg( msg ) ) * ImGui::GetTextLineHeightWithSpacing();
+        std::string right_panel_rml( uilist * ) override {
+            return "<div style=\"text-align: center;\">" + rml_ui::markup_to_rml( header, c_cyan ) +
+                   "</div>" + rml_ui::markup_to_rml( format_item_info( info, {} ) );
+        }
 
-            if( ImGui::BeginChild( "wish item", info_size ) ) {
-                cataimgui::set_scroll( desc_scroll );
-                ImGui::SetCursorPosX( ( info_size.x - ImGui::CalcTextSize( header.c_str() ).x ) * 0.5 );
-                ImGui::TextColored( c_cyan, "%s", header.c_str() );
-                display_item_info( info, {} );
-            }
-            ImGui::EndChild();
-            if( !msg.empty() ) {
-                ImGui::TextColored( c_green, "%s", msg.c_str() );
-            }
+        std::string right_panel_footer_rml( uilist *menu ) override {
             input_context ctxt( menu->input_category, keyboard_mode::keycode );
-
-            cataimgui::TextKeybinding( ctxt, "UILIST.FILTER", _( "Find" ),
-                                       menu->filtering && ( !menu->filter.empty() ) );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "CONTAINER",  _( "Container" ),  incontainer );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "FLAG",       _( "Flag" ),       !flags.empty() );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "EVERYTHING", _( "Everything" ), spawn_everything );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "SNIPPET",    _( "Snippet" ),    chosen_snippet_id.first != -1 );
-            cataimgui::TextListSeparator();
-            cataimgui::TextKeybinding( ctxt, "UILIST.QUIT", _( "Quit" ),      false );
+            return wish_footer_rml( msg, {
+                keybinding_markup( ctxt, "UILIST.FILTER", _( "Find" ),
+                                   menu->filtering && ( !menu->filter.empty() ) ),
+                keybinding_markup( ctxt, "CONTAINER",  _( "Container" ),  incontainer ),
+                keybinding_markup( ctxt, "FLAG",       _( "Flag" ),       !flags.empty() ),
+                keybinding_markup( ctxt, "EVERYTHING", _( "Everything" ), spawn_everything ),
+                keybinding_markup( ctxt, "SNIPPET",    _( "Snippet" ),
+                                   chosen_snippet_id.first != -1 ),
+                keybinding_markup( ctxt, "UILIST.QUIT", _( "Quit" ),      false )
+            } );
         }
 };
 } // namespace

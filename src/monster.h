@@ -147,7 +147,10 @@ class monster : public Creature
         void get_HP_Bar( nc_color &color, std::string &text ) const;
         std::pair<std::string, nc_color> get_attitude() const;
         int print_info( const catacurses::window &w, int vStart, int vLines, int column ) const override;
-        void print_info_imgui() const;
+        /// What print_info() shows, as game markup for the debug spawn menu's
+        /// panel. The ASCII art is left to the caller, since it wants a
+        /// monospace font.
+        std::string info_markup() const;
 
         // Information on how our symbol should appear
         nc_color basic_symbol_color() const override;

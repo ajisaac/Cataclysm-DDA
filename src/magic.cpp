@@ -60,6 +60,7 @@
 #include "requirements.h"
 #include "rng.h"
 #include "sounds.h"
+#include "rml_markup.h"
 #include "string_formatter.h"
 #include "talker.h"
 #include "text.h"
@@ -2764,8 +2765,7 @@ class spellcasting_callback : public uilist_callback
 {
     private:
         std::vector<spell *> known_spells;
-        cataimgui::scroll spell_info_scroll = cataimgui::scroll::none;
-        void display_spell_info( size_t index );
+        std::string spell_info_rml( size_t index ) const;
     public:
         // invlets reserved for special functions
         static const std::set<int> reserved_invlets;
@@ -2809,38 +2809,26 @@ class spellcasting_callback : public uilist_callback
                 get_player_character().magic->toggle_favorite( known_spells[entnum]->id() );
                 refresh_favorite( menu, known_spells );
             } else if( action == "SCROLL_UP_SPELL_MENU" ) {
-                spell_info_scroll = cataimgui::scroll::line_up;
+                menu->scroll_right_panel( rml_ui::scroll::line_up );
             } else if( action == "SCROLL_DOWN_SPELL_MENU" ) {
-                spell_info_scroll = cataimgui::scroll::line_down;
+                menu->scroll_right_panel( rml_ui::scroll::line_down );
             }
             return false;
         }
 
-        float desired_extra_space_right( ) override {
-            return std::clamp( float( EVEN_MINIMUM_TERM_WIDTH * ImGui::CalcTextSize( "X" ).x ),
-                               ImGui::GetMainViewport()->Size.x * 3 / 8, ImGui::GetMainViewport()->Size.x );
+        std::string right_panel_rml( uilist *menu ) override {
+            if( menu->previewing < 0 || static_cast<size_t>( menu->previewing ) >= known_spells.size() ) {
+                return std::string();
+            }
+            return spell_info_rml( menu->previewing );
         }
 
-        void refresh( uilist *menu ) override {
-            ImGui::TableSetColumnIndex( 2 );
-            ImGui::SameLine( 0.0, -1.0 );
-            ImVec2 info_size = ImGui::GetContentRegionAvail();
-            info_size.y -= ImGui::GetTextLineHeightWithSpacing();
-            if( ImGui::BeginChild( "spell info", info_size, ImGuiChildFlags_None,
-                                   ImGuiWindowFlags_None ) ) {
-                if( menu->previewing >= 0 && static_cast<size_t>( menu->previewing ) < known_spells.size() ) {
-                    display_spell_info( menu->previewing );
-                }
-            }
-            ImGui::EndChild();
+        std::string right_panel_footer_rml( uilist * ) override {
             std::string ignore_string = casting_ignore ? _( "Ignore Distractions" ) :
                                         _( "Popup Distractions" );
-            ImGui::TextColored( casting_ignore ? c_red : c_light_green, "%s %s", "[I]", ignore_string.c_str() );
-            ImGui::SameLine();
-            if( cataimgui::BeginRightAlign( "hotkeys" ) ) {
-                ImGui::TextColored( c_yellow, "%s", _( "Assign Hotkey [=]" ) );
-                cataimgui::EndRightAlign();
-            }
+            return rml_ui::markup_to_rml( colorize( string_format( "%s %s", "[I]", ignore_string ),
+                                          casting_ignore ? c_red : c_light_green ) + "    " +
+                                          colorize( _( "Assign Hotkey [=]" ), c_yellow ) );
         }
 };
 } // namespace
@@ -2936,34 +2924,21 @@ std::string spell::enumerate_spell_data( const Character &guy ) const
     return uppercase_first_letter( enumerate_as_string( spell_data ) );
 }
 
-void spellcasting_callback::display_spell_info( size_t index )
+std::string spellcasting_callback::spell_info_rml( size_t index ) const
 {
     const spell &sp = *known_spells[ index ];
     Character &pc = get_player_character();
 
-    cataimgui::set_scroll( spell_info_scroll );
-    ImGui::TextColored( c_yellow, "%s", sp.spell_class() == trait_NONE ? _( "Classless" ) :
-                        sp.spell_class()->name().c_str() );
+    std::string header = colorize( sp.spell_class() == trait_NONE ? _( "Classless" ) :
+                                   sp.spell_class()->name(), c_yellow ) + "\n";
     std::string desc = sp.description();
     parse_tags( desc, *get_avatar().as_character(), *get_avatar().as_character() );
-    std::vector<std::string> lines = string_split( desc, '\n' );
-    for( std::string &l : lines ) {
-        cataimgui::TextColoredParagraph( c_white, l );
-        ImGui::NewLine();
-    }
-    ImGui::NewLine();
-
-    std::vector<std::string> lines2 = string_split( sp.enumerate_spell_data( pc ), '\n' );
-    for( std::string &l : lines2 ) {
-        cataimgui::TextColoredParagraph( c_white, l );
-        ImGui::NewLine();
-    }
-    ImGui::NewLine();
-
+    header += colorize( desc, c_white ) + "\n\n";
+    header += colorize( sp.enumerate_spell_data( pc ), c_white ) + "\n\n";
     if( sp.is_channeling_spell() ) {
-        cataimgui::TextColoredParagraph( c_light_blue,
-                                         _( "Passing turns after casting this spell will actively channel it, causing continued effects." ) );
-        ImGui::NewLine();
+        header += colorize(
+                      _( "Passing turns after casting this spell will actively channel it, causing continued effects." ),
+                      c_light_blue ) + "\n\n";
     }
 
     // Calculates temp_level_adjust from EoC, saves it to the spell for later use, and prepares to display the result
@@ -2976,41 +2951,27 @@ void spellcasting_callback::display_spell_info( size_t index )
     }
     const bool is_psi = sp.has_flag( spell_flag::PSIONIC );
 
-    double column_width = ImGui::GetContentRegionAvail().x / 2.0;
-    if( ImGui::BeginTable( "data", 2 ) ) {
-        ImGui::TableSetupColumn( "current level", ImGuiTableColumnFlags_WidthFixed, column_width );
-        ImGui::TableSetupColumn( "max level", ImGuiTableColumnFlags_WidthFixed, column_width );
+    const auto cell = []( const std::string & markup ) {
+        return "<td>" + rml_ui::markup_to_rml( markup ) + "</td>";
+    };
+    std::string table = "<table style=\"width: 100%;\"><tr>";
+    table += cell( string_format( "%s: %d%s%s", is_psi ? _( "Power Level" ) : _( "Spell Level" ),
+                                  sp.get_effective_level(),
+                                  sp.is_max_level( pc ) ? _( " (MAX)" ) : "", temp_level_adjust_string ) );
+    table += cell( string_format( "%s: %d", _( "Max Level" ), sp.get_max_level( pc ) ) );
+    table += "</tr><tr>";
+    table += cell( !sp.valid_caster_condition( pc ) ?
+                   colorize( sp.failed_caster_condition_message(), c_light_red ) :
+                   colorize( sp.colorized_fail_percent( pc ), c_white ) );
+    table += cell( string_format( "%s: %d", _( "Difficulty" ), sp.get_difficulty( pc ) ) );
+    table += "</tr><tr>";
+    table += cell( string_format( "%s: %s", _( "Current Exp" ),
+                                  colorize( std::to_string( sp.xp() ), c_light_green ) ) );
+    table += cell( string_format( "%s: %s", _( "to Next Level" ),
+                                  colorize( std::to_string( sp.exp_to_next_level() ), c_light_green ) ) );
+    table += "</tr></table><br/>";
 
-        ImGui::TableNextColumn();
-        ImGui::Text( "%s: %d%s%s", is_psi ? _( "Power Level" ) : _( "Spell Level" ),
-                     sp.get_effective_level(),
-                     sp.is_max_level( pc ) ? _( " (MAX)" ) : "", temp_level_adjust_string.c_str() );
-        ImGui::TableNextColumn();
-        ImGui::Text( "%s: %d", _( "Max Level" ), sp.get_max_level( pc ) );
-
-        ImGui::TableNextColumn();
-
-        if( !sp.valid_caster_condition( pc ) ) {
-            cataimgui::draw_colored_text( sp.failed_caster_condition_message(), c_light_red, column_width );
-        } else {
-            cataimgui::draw_colored_text( sp.colorized_fail_percent( pc ), c_white );
-        }
-        ImGui::TableNextColumn();
-        ImGui::Text( "%s: %d", _( "Difficulty" ), sp.get_difficulty( pc ) );
-
-        ImGui::TableNextColumn();
-        ImGui::Text( "%s: ", _( "Current Exp" ) );
-        ImGui::SameLine( 0, 0 );
-        ImGui::TextColored( c_light_green, "%d", sp.xp() );
-        ImGui::TableNextColumn();
-        ImGui::Text( "%s: ", _( "to Next Level" ) );
-        ImGui::SameLine( 0, 0 );
-        ImGui::TextColored( c_light_green, "%d", sp.exp_to_next_level() );
-
-        ImGui::EndTable();
-    }
-    ImGui::NewLine();
-
+    std::vector<std::string> lines;
     const bool cost_encumb = sp.energy_cost_encumbered( pc );
     if( pc.magic->has_enough_energy( pc, sp ) ) {
         std::string cost_string = cost_encumb ? _( "Casting Cost (impeded)" ) : _( "Casting Cost" );
@@ -3018,24 +2979,20 @@ void spellcasting_callback::display_spell_info( size_t index )
                                       _( "Channeling Cost" );
         std::string energy_cur = sp.energy_source() == magic_energy_type::hp ? "" :
                                  string_format( _( " (%s current)" ), sp.energy_cur_string( pc ) );
-        cataimgui::draw_colored_text( string_format( "%s: %s %s%s",
-                                      is_psi ? psi_cost_string.c_str() : cost_string.c_str(),
-                                      sp.energy_cost_string( pc ).c_str(),
-                                      sp.energy_string().c_str(), energy_cur.c_str() ) );
+        lines.emplace_back( string_format( "%s: %s %s%s",
+                                           is_psi ? psi_cost_string : cost_string,
+                                           sp.energy_cost_string( pc ), sp.energy_string(), energy_cur ) );
     } else {
-        ImGui::TextColored( c_red, "%s %s", _( "Not Enough" ), sp.energy_string().c_str() );
-        ImGui::SameLine( 0, 0 );
-        cataimgui::draw_colored_text( string_format( ": %s %s",
-                                      sp.energy_cost_string( pc ).c_str(),
-                                      sp.energy_string().c_str() ) );
+        lines.emplace_back( colorize( string_format( "%s %s", _( "Not Enough" ), sp.energy_string() ),
+                                      c_red ) +
+                            string_format( ": %s %s", sp.energy_cost_string( pc ), sp.energy_string() ) );
     }
     const bool c_t_encumb = sp.casting_time_encumbered( pc );
     std::string psi_cast_time = c_t_encumb ? _( "Channeling Time (impeded)" ) : _( "Channeling Time" );
     std::string cast_time = c_t_encumb ? _( "Casting Time (impeded)" ) : _( "Casting Time" );
-    ImGui::Text( "%s: ", is_psi ? psi_cast_time.c_str() : cast_time.c_str() );
-    ImGui::SameLine( 0, 0 );
-    ImGui::TextColored( c_t_encumb ? c_red : c_white, "%s",
-                        moves_to_string( sp.casting_time( pc ) ).c_str() );
+    lines.emplace_back( string_format( "%s: %s", is_psi ? psi_cast_time : cast_time,
+                                       colorize( moves_to_string( sp.casting_time( pc ) ),
+                                               c_t_encumb ? c_red : c_white ) ) );
 
     std::string targets;
     if( sp.is_valid_target( spell_target::none ) ) {
@@ -3043,19 +3000,19 @@ void spellcasting_callback::display_spell_info( size_t index )
     } else {
         targets = sp.enumerate_targets();
     }
-    ImGui::Text( "%s: %s", _( "Valid Targets" ), targets.c_str() );
-    ImGui::NewLine();
+    lines.emplace_back( string_format( "%s: %s", _( "Valid Targets" ), targets ) );
+    lines.emplace_back();
 
     std::string target_ids;
     target_ids = sp.list_targeted_monster_names();
     if( !target_ids.empty() ) {
-        ImGui::TextWrapped( _( "Only affects the monsters: %s" ), target_ids.c_str() );
-        ImGui::NewLine();
+        lines.emplace_back( string_format( _( "Only affects the monsters: %s" ), target_ids ) );
+        lines.emplace_back();
     }
 
-    // Range / AOE in two columns
+    // Range / AOE
     std::string range = sp.range( pc ) <= 0 ? _( "self" ) : std::to_string( sp.range( pc ) );
-    ImGui::Text( "%s: %s", _( "Range" ), range.c_str() );
+    lines.emplace_back( string_format( "%s: %s", _( "Range" ), range ) );
 
     std::string aoe_string_temp = is_psi ? _( "Power Radius" ) : _( "Spell Radius" );
 
@@ -3069,20 +3026,20 @@ void spellcasting_callback::display_spell_info( size_t index )
             } else if( sp.shape() == spell_shape::line ) {
                 aoe_string_temp = _( "Line Width" );
             }
-            ImGui::Text( "%s: %d %s", aoe_string_temp.c_str(), sp.aoe( pc ), degree_string.c_str() );
+            lines.emplace_back( string_format( "%s: %d %s", aoe_string_temp, sp.aoe( pc ), degree_string ) );
         }
     } else if( sp.effect() == "short_range_teleport" ) {
         if( sp.aoe( pc ) > 0 ) {
-            ImGui::Text( "%s: %d", _( "Variance" ), sp.aoe( pc ) );
+            lines.emplace_back( string_format( "%s: %d", _( "Variance" ), sp.aoe( pc ) ) );
         }
     } else if( sp.effect() == "summon" || sp.effect() == "fertilize_plant" ||
                sp.effect() == "effect_on_condition" ) {
-        ImGui::Text( "%s: %d", aoe_string_temp.c_str(), sp.aoe( pc ) );
+        lines.emplace_back( string_format( "%s: %d", aoe_string_temp, sp.aoe( pc ) ) );
     } else if( sp.effect() == "ter_transform" ) {
-        ImGui::Text( "%s: %s", aoe_string_temp.c_str(), sp.aoe_string( pc ).c_str() );
+        lines.emplace_back( string_format( "%s: %s", aoe_string_temp, sp.aoe_string( pc ) ) );
     } else if( sp.effect() == "banishment" ) {
         if( sp.aoe( pc ) > 0 ) {
-            ImGui::Text( _( "%s: %d" ), aoe_string_temp.c_str(), sp.aoe( pc ) );
+            lines.emplace_back( string_format( _( "%s: %d" ), aoe_string_temp, sp.aoe( pc ) ) );
         }
     }
 
@@ -3096,38 +3053,31 @@ void spellcasting_callback::display_spell_info( size_t index )
                 //~ amount of damage per second, abbreviated
                 dot_string = string_format( _( ", %d/sec" ), static_cast<int>( sp.damage_dot( pc ) ) );
             }
-            ImGui::TextColored( sp.damage_type_color(),
-                                "%s: %s %s%s", _( "Damage" ),
-                                sp.damage_string( pc ).c_str(),
-                                sp.damage_type_string().c_str(),
-                                dot_string.c_str() );
+            lines.emplace_back( colorize( string_format( "%s: %s %s%s", _( "Damage" ),
+                                          sp.damage_string( pc ), sp.damage_type_string(), dot_string ),
+                                          sp.damage_type_color() ) );
         } else if( damage < 0 ) {
-            ImGui::Text( "%s: ", _( "Healing" ) );
-            ImGui::SameLine( 0, 0 );
-            ImGui::TextColored( c_light_green,
-                                "%s", sp.damage_string( pc ).c_str() );
+            lines.emplace_back( string_format( "%s: %s", _( "Healing" ),
+                                               colorize( sp.damage_string( pc ), c_light_green ) ) );
         }
     } else if( sp.effect() == "short_range_teleport" ) {
         if( sp.aoe( pc ) > 0 ) {
-            ImGui::Text( "%s: %d", _( "Variance" ), sp.aoe( pc ) );
+            lines.emplace_back( string_format( "%s: %d", _( "Variance" ), sp.aoe( pc ) ) );
         }
     } else if( sp.effect() == "fertilize_plant" ) {
         if( damage > 0 ) {
-            ImGui::Text( "%s: ", _( "Fertility Increase" ) );
-            ImGui::SameLine( 0, 0 );
-            ImGui::TextColored( c_light_green,
-                                "%s percent of a season", sp.damage_string( pc ).c_str() );
+            lines.emplace_back( string_format( "%s: %s", _( "Fertility Increase" ),
+                                               colorize( string_format( "%s percent of a season", sp.damage_string( pc ) ),
+                                                       c_light_green ) ) );
         }
     } else if( sp.effect() == "spawn_item" ) {
         if( sp.has_flag( spell_flag::SPAWN_GROUP ) ) {
             // todo: more user-friendly presentation
-            const std::string s = string_format( _( "Spawn item group %1$s %2$d times" ),
-                                                 sp.effect_data(),
-                                                 sp.damage( pc ) );
-            ImGui::Text( "%s", s.c_str() );
+            lines.emplace_back( string_format( _( "Spawn item group %1$s %2$d times" ),
+                                               sp.effect_data(), sp.damage( pc ) ) );
         } else {
-            ImGui::Text( "%s %d %s", _( "Spawn" ), sp.damage( pc ),
-                         item::nname( itype_id( sp.effect_data() ), sp.damage( pc ) ).c_str() );
+            lines.emplace_back( string_format( "%s %d %s", _( "Spawn" ), sp.damage( pc ),
+                                               item::nname( itype_id( sp.effect_data() ), sp.damage( pc ) ) ) );
         }
     } else if( sp.effect() == "summon" ) {
         std::string monster_name = "FIXME";
@@ -3141,7 +3091,7 @@ void spellcasting_callback::display_spell_info( size_t index )
         } else {
             monster_name = monster( mtype_id( sp.effect_data() ) ).get_name( );
         }
-        ImGui::Text( "%s %d %s", _( "Summon" ), sp.damage( pc ), monster_name.c_str() );
+        lines.emplace_back( string_format( "%s %d %s", _( "Summon" ), sp.damage( pc ), monster_name ) );
     } else if( sp.effect() == "targeted_polymorph" ) {
         std::string monster_name = sp.effect_data();
         if( sp.has_flag( spell_flag::POLYMORPH_GROUP ) ) {
@@ -3156,11 +3106,11 @@ void spellcasting_callback::display_spell_info( size_t index )
         } else {
             monster_name = mtype_id( sp.effect_data() )->nname();
         }
-        ImGui::Text( _( "Targets under: %dhp become a %s" ), sp.damage( pc ),
-                     monster_name.c_str() );
+        lines.emplace_back( string_format( _( "Targets under: %dhp become a %s" ), sp.damage( pc ),
+                                           monster_name ) );
     } else if( sp.effect() == "banishment" ) {
-        ImGui::Text( "%s: %s %s", _( "Damage" ), sp.damage_string( pc ).c_str(),
-                     sp.damage_type_string().c_str() );
+        lines.emplace_back( string_format( "%s: %s %s", _( "Damage" ), sp.damage_string( pc ),
+                                           sp.damage_type_string() ) );
     }
 
     // todo: damage over time here, when it gets implemented
@@ -3168,26 +3118,27 @@ void spellcasting_callback::display_spell_info( size_t index )
     // Show duration for spells that endure
     if( sp.duration( pc ) > 0 || sp.has_flag( spell_flag::PERMANENT ) ||
         sp.has_flag( spell_flag::PERMANENT_ALL_LEVELS ) ) {
-        ImGui::Text( "%s: %s", _( "Duration" ), sp.duration_string( pc ).c_str() );
+        lines.emplace_back( string_format( "%s: %s", _( "Duration" ), sp.duration_string( pc ) ) );
     }
 
     if( sp.has_components() ) {
-        ImGui::NewLine();
+        lines.emplace_back();
         if( !sp.components().get_components().empty() ) {
             for( const std::string &line : sp.components().get_folded_components_list(
                      0, c_light_gray, pc.crafting_inventory( pc.pos_bub(), 0, false ), return_true<item> ) ) {
-                cataimgui::TextColoredParagraph( c_white, line );
-                ImGui::NewLine();
+                lines.emplace_back( colorize( line, c_white ) );
             }
         }
         if( !( sp.components().get_tools().empty() && sp.components().get_qualities().empty() ) ) {
             for( const std::string &line : sp.components().get_folded_tools_list(
                      0, c_light_gray, pc.crafting_inventory( pc.pos_bub(), 0, false ) ) ) {
-                cataimgui::TextColoredParagraph( c_white, line );
-                ImGui::NewLine();
+                lines.emplace_back( colorize( line, c_white ) );
             }
         }
     }
+
+    return rml_ui::markup_to_rml( header ) + table +
+           rml_ui::markup_to_rml( string_join( lines, "\n" ) );
 }
 
 bool known_magic::set_invlet( const spell_id &sp, int invlet )
@@ -3459,37 +3410,23 @@ static std::string color_number( const float num )
     }
 }
 
-static void draw_spellbook_info( const spell_type &sp )
+static std::string spellbook_info_rml( const spell_type &sp )
 {
     const spell fake_spell( sp.id );
     Character &pc = get_player_character();
     dialogue d( get_talker_for( pc ), nullptr );
 
-    cataimgui::draw_colored_text( sp.name.translated(), c_light_green );
-    ImGui::SameLine();
-
     const std::string spell_class = sp.spell_class == trait_NONE ? _( "Classless" ) :
                                     sp.spell_class->name();
-    float posX = ImGui::GetCursorPosX() + ImGui::GetColumnWidth() - ImGui::CalcTextSize(
-                     spell_class.c_str() ).x
-                 - ImGui::GetScrollX() - 2 * ImGui::GetStyle().ItemSpacing.x;
-    if( posX > ImGui::GetCursorPosX() ) {
-        ImGui::SetCursorPosX( posX );
-    }
-    ImGui::TextColored( c_yellow, "%s", spell_class.c_str() );
+    std::string rml = "<div style=\"display: flex;\"><div style=\"flex: 1 1 auto;\">" +
+                      rml_ui::markup_to_rml( sp.name.translated(), c_light_green ) + "</div><div>" +
+                      rml_ui::markup_to_rml( spell_class, c_yellow ) + "</div></div><br/>";
 
-    ImGui::NewLine();
-    std::vector<std::string> lines = string_split( sp.description.translated(), '\n' );
-    for( std::string &l : lines ) {
-        cataimgui::TextColoredParagraph( c_white, l );
-        ImGui::NewLine();
-    }
-    ImGui::NewLine();
-
-    cataimgui::draw_colored_text( string_format( "%s: %d", _( "Difficulty" ),
-                                  static_cast<int>( sp.difficulty.evaluate( d ) ) ) );
-    cataimgui::draw_colored_text( string_format( "%s: %d", _( "Max Level" ),
-                                  static_cast<int>( sp.max_level.evaluate( d ) ) ) );
+    std::string text = colorize( sp.description.translated(), c_white ) + "\n\n";
+    text += string_format( "%s: %d", _( "Difficulty" ),
+                           static_cast<int>( sp.difficulty.evaluate( d ) ) ) + "\n";
+    text += string_format( "%s: %d", _( "Max Level" ),
+                           static_cast<int>( sp.max_level.evaluate( d ) ) );
 
     const std::string fx = sp.effect_name;
     std::string damage_string;
@@ -3515,75 +3452,53 @@ static void draw_spellbook_info( const spell_type &sp )
     }
 
     if( has_damage_type ) {
-        cataimgui::draw_colored_text( string_format( "%s: %s",
-                                      _( "Damage Type" ),
-                                      colorize( fake_spell.damage_type_string(), fake_spell.damage_type_color() ) ) );
+        text += "\n" + string_format( "%s: %s", _( "Damage Type" ),
+                                      colorize( fake_spell.damage_type_string(), fake_spell.damage_type_color() ) );
+    }
+    rml += rml_ui::markup_to_rml( text ) + "<br/><br/>";
+
+    rml += "<table><thead><tr><th>" + rml_ui::markup_to_rml( _( "Stat Gain" ) ) + "</th><th>" +
+           rml_ui::markup_to_rml( _( "lvl 0" ) ) + "</th><th>" +
+           rml_ui::markup_to_rml( _( "per lvl" ) ) + "</th><th>" +
+           rml_ui::markup_to_rml( _( "max lvl" ) ) + "</th></tr></thead><tbody>";
+    const auto row = [&]( const std::string & label, const dbl_or_var & min_d,
+    const dbl_or_var & inc_d, const dbl_or_var & max_d, bool check_minmax = false ) {
+        const int min = static_cast<int>( min_d.evaluate( d ) );
+        const float inc = static_cast<float>( inc_d.evaluate( d ) );
+        const int max = static_cast<int>( max_d.evaluate( d ) );
+        if( check_minmax && ( min == 0 || max == 0 ) ) {
+            return;
+        }
+        rml += "<tr><td>" + rml_ui::markup_to_rml( label, c_light_gray ) + "</td><td>" +
+               rml_ui::markup_to_rml( color_number( min ) ) + "</td><td>" +
+               rml_ui::markup_to_rml( color_number( inc ) ) + "</td><td>" +
+               rml_ui::markup_to_rml( color_number( max ) ) + "</td></tr>";
+    };
+
+    if( !damage_string.empty() ) {
+        row( damage_string, sp.min_damage, sp.damage_increment, sp.max_damage, true );
     }
 
-    if( ImGui::BeginTable( "stats", 4,
-                           ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersOuter |
-                           ImGuiTableFlags_BordersInnerV ) ) {
-        ImGui::TableSetupColumn( _( "Stat Gain" ), 0, 10 );
-        ImGui::TableSetupColumn( _( "lvl 0" ), 0, 7 );
-        ImGui::TableSetupColumn( _( "per lvl" ), 0, 7 );
-        ImGui::TableSetupColumn( _( "max lvl" ), 0, 7 );
-        ImGui::TableHeadersRow();
+    row( _( "Range" ), sp.min_range, sp.range_increment, sp.max_range, true );
 
-        const auto row = [&]( const std::string & label, const dbl_or_var & min_d,
-        const dbl_or_var & inc_d, const dbl_or_var & max_d, bool check_minmax = false ) {
-            const int min = static_cast<int>( min_d.evaluate( d ) );
-            const float inc = static_cast<float>( inc_d.evaluate( d ) );
-            const int max = static_cast<int>( max_d.evaluate( d ) );
-            if( check_minmax && ( min == 0 || max == 0 ) ) {
-                return;
-            }
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextColored( c_light_gray, "%s", label.c_str() );
-            ImGui::TableNextColumn();
-            cataimgui::draw_colored_text( color_number( min ) );
-            ImGui::TableNextColumn();
-            cataimgui::draw_colored_text( color_number( inc ) );
-            ImGui::TableNextColumn();
-            cataimgui::draw_colored_text( color_number( max ) );
-        };
-
-        if( !damage_string.empty() ) {
-            row( damage_string, sp.min_damage, sp.damage_increment, sp.max_damage, true );
-        }
-
-        row( _( "Range" ), sp.min_range, sp.range_increment, sp.max_range, true );
-
-        if( !aoe_string.empty() ) {
-            row( aoe_string, sp.min_aoe, sp.aoe_increment, sp.max_aoe, true );
-        }
-
-        row( _( "Duration" ), sp.min_duration, sp.duration_increment, sp.max_duration, true );
-        row( _( "Cast Cost" ), sp.base_energy_cost, sp.energy_increment, sp.final_energy_cost, false );
-        row( _( "Cast Time" ), sp.base_casting_time, sp.casting_time_increment, sp.final_casting_time,
-             false );
-
-        ImGui::EndTable();
+    if( !aoe_string.empty() ) {
+        row( aoe_string, sp.min_aoe, sp.aoe_increment, sp.max_aoe, true );
     }
+
+    row( _( "Duration" ), sp.min_duration, sp.duration_increment, sp.max_duration, true );
+    row( _( "Cast Cost" ), sp.base_energy_cost, sp.energy_increment, sp.final_energy_cost, false );
+    row( _( "Cast Time" ), sp.base_casting_time, sp.casting_time_increment, sp.final_casting_time,
+         false );
+
+    return rml + "</tbody></table>";
 }
 
-float spellbook_callback::desired_extra_space_right( )
+std::string spellbook_callback::right_panel_rml( uilist *menu )
 {
-    return 38 * ImGui::CalcTextSize( "X" ).x;
-}
-
-void spellbook_callback::refresh( uilist *menu )
-{
-    ImGui::TableSetColumnIndex( 2 );
-    ImVec2 info_size = ImGui::GetContentRegionAvail();
-    if( ImGui::BeginChild( "spellbook info", info_size,
-                           ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY,
-                           ImGuiWindowFlags_None ) ) {
-        if( menu->selected >= 0 && static_cast<size_t>( menu->selected ) < spells.size() ) {
-            draw_spellbook_info( spells[menu->selected] );
-        }
+    if( menu->selected < 0 || static_cast<size_t>( menu->selected ) >= spells.size() ) {
+        return std::string();
     }
-    ImGui::EndChild();
+    return spellbook_info_rml( spells[menu->selected] );
 }
 
 bool fake_spell::is_valid() const

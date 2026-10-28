@@ -65,6 +65,13 @@ int uilist_impl::hovered_category() const
     return hovered_child( "tabs" );
 }
 
+bool uilist_impl::hovering_panel() const
+{
+    // #body holds #left, #list-column and #right, in that order
+    const int part = hovered_child( "body" );
+    return part == 0 || part == 2;
+}
+
 void uilist_impl::show( const std::string &id, const std::string &rml )
 {
     std::string &last = shown[id];
@@ -223,14 +230,24 @@ void uilist_impl::on_redraw()
 
     std::string left;
     std::string right;
+    std::string right_footer;
     if( menu.callback != nullptr ) {
         left = menu.callback->left_panel_rml( &menu );
         right = menu.callback->right_panel_rml( &menu );
+        right_footer = menu.callback->right_panel_footer_rml( &menu );
     }
     set_class( "left", "hidden", left.empty() );
-    show( "left", left );
-    set_class( "right", "hidden", right.empty() );
-    show( "right", right );
+    show( "left-content", left );
+    set_class( "right", "hidden", right.empty() && right_footer.empty() );
+    set_class( "body", "with-right", !right.empty() || !right_footer.empty() );
+    show( "right-content", right );
+    set_class( "right-footer", "hidden", right_footer.empty() );
+    show( "right-footer", right_footer );
+    // After the content, which a new selection may just have replaced
+    if( pending_scroll ) {
+        scroll( "right-content", *pending_scroll );
+        pending_scroll.reset();
+    }
 
     std::string description;
     if( menu.desc_enabled ) {
@@ -917,8 +934,14 @@ void uilist::query_once( input_context &ctxt, int timeout,
     const auto iter = keymap.find( ret_evt );
 
     // Hovering a row previews it, clicking one picks it, and clicking a tab
-    // switches to it
+    // switches to it. The wheel over a side panel scrolls that, which RmlUi
+    // does itself, rather than the selection.
     bool mouse_handled = false;
+    if( ret_act == "SCROLL_UP" || ret_act == "SCROLL_DOWN" ) {
+        if( shared_ptr_fast<uilist_impl> current_ui = ui.lock() ) {
+            mouse_handled = current_ui->hovering_panel();
+        }
+    }
     if( ret_act == "MOUSE_MOVE" || ret_act == "SELECT" ) {
         if( shared_ptr_fast<uilist_impl> current_ui = ui.lock() ) {
             const int hovered = current_ui->hovered_entry();
@@ -939,7 +962,9 @@ void uilist::query_once( input_context &ctxt, int timeout,
         mouse_handled = mouse_handled || ret_act == "MOUSE_MOVE";
     }
 
-    scrollby( scroll_amount_from_action( ret_act ) );
+    if( !mouse_handled ) {
+        scrollby( scroll_amount_from_action( ret_act ) );
+    }
 
     if( filtering && ret_act == "UILIST.FILTER" ) {
         inputfilter();
@@ -1004,6 +1029,11 @@ void uilist::query_once( input_context &ctxt, int timeout,
 void uilist::set_hide( bool val )
 {
     create_or_get_ui()->hidden = val;
+}
+
+void uilist::scroll_right_panel( rml_ui::scroll how )
+{
+    create_or_get_ui()->pending_scroll = how;
 }
 /**
  * cleanup

@@ -17,6 +17,7 @@
 #include "bodypart.h"
 #include "cached_options.h"
 #include "cata_imgui.h"
+#include "cata_utility.h"
 #include "catacharset.h"
 #include "character.h"
 #include "coordinates.h"
@@ -972,34 +973,31 @@ int monster::print_info( const catacurses::window &w, int vStart, int vLines, in
     return ++vStart;
 }
 
-void monster::print_info_imgui() const
+std::string monster::info_markup() const
 {
     const map &here = get_map();
+    std::vector<std::string> lines;
 
-    ImGui::TextUnformatted( get_origin( type->src ).c_str() );
+    lines.emplace_back( get_origin( type->src ) );
 
     if( debug_mode ) {
-        ImGui::TextUnformatted( type->id.c_str() );
+        lines.emplace_back( type->id.str() );
     }
-    ImGui::NewLine();
+    lines.emplace_back();
 
     // Print health bar, monster name, then statuses on the first line.
     nc_color bar_color = c_white;
     std::string bar_str;
     get_HP_Bar( bar_color, bar_str );
-    ImGui::TextColored( bar_color, "%s", bar_str.c_str() );
     std::string unbar_str = std::string( 5 - utf8_width( bar_str ), '.' );
-    ImGui::SameLine( 0, 0 );
-    ImGui::TextColored( c_white, "%s", unbar_str.c_str() );
     nc_color symbol_color = basic_symbol_color();
-    ImGui::SameLine();
-    ImGui::TextColored( symbol_color, "%s %s", name().c_str(),
-                        get_effect_status().c_str() );
+    lines.emplace_back( colorize( bar_str, bar_color ) + colorize( unbar_str, c_white ) + " " +
+                        colorize( string_format( "%s %s", name(), get_effect_status() ), symbol_color ) );
 
     if( debug_mode ) {
         dialogue d( get_talker_for( const_cast<monster *>( this ) ), get_talker_for( get_avatar() ) );
         for( const std::pair<const std::string, mtype_special_attack> &attack : type->special_attacks ) {
-            ImGui::Text( "%s: %g", attack.first.c_str(), attack.second->cooldown.evaluate( d ) );
+            lines.emplace_back( string_format( "%s: %g", attack.first, attack.second->cooldown.evaluate( d ) ) );
         }
     }
 
@@ -1010,7 +1008,7 @@ void monster::print_info_imgui() const
     // Hostility indicator on the second line.
     std::pair<std::string, nc_color> att = get_attitude();
     if( player_knows ) {
-        ImGui::TextColored( att.second, "%s", att.first.c_str() );
+        lines.emplace_back( colorize( att.first, att.second ) );
     }
 
     // Awareness indicator in the third line.
@@ -1018,47 +1016,37 @@ void monster::print_info_imgui() const
                              _( "Can't see to your current location" );
 
     if( player_knows ) {
-        cataimgui::draw_colored_text( senses_str, ( player_knows && sees_player ) ? c_red : c_green );
+        lines.emplace_back( colorize( senses_str, ( player_knows && sees_player ) ? c_red : c_green ) );
     }
 
     const std::string speed_desc = speed_description(
                                        speed_rating(),
                                        has_flag( mon_flag_IMMOBILE ) || has_flag( json_flag_CANNOT_MOVE ),
                                        type->speed_desc );
-    cataimgui::draw_colored_text( speed_desc, c_white );
+    lines.emplace_back( colorize( speed_desc, c_white ) );
 
     // Monster description on following lines.
-    ImGui::NewLine();
-    ImGui::TextWrapped( "%s", type->get_description().c_str() );
-    ImGui::NewLine();
+    lines.emplace_back();
+    lines.emplace_back( type->get_description() );
+    lines.emplace_back();
 
     if( !mission_fused.empty() ) {
         // Mission monsters fused into this monster
-        const std::string fused_desc = string_format( _( "Parts of %s protrude from its body." ),
-                                       enumerate_as_string( mission_fused ) );
-        ImGui::TextWrapped( "%s", fused_desc.c_str() );
+        lines.emplace_back( string_format( _( "Parts of %s protrude from its body." ),
+                                           enumerate_as_string( mission_fused ) ) );
     }
 
     // Riding indicator on next line after description.
     if( has_effect( effect_ridden ) && mounted_player ) {
-        ImGui::Text( _( "Rider: %s" ), mounted_player->disp_name().c_str() );
+        lines.emplace_back( string_format( _( "Rider: %s" ), mounted_player->disp_name() ) );
     }
 
     // Show monster size on the last line
     if( size_bonus > 0 ) {
-        ImGui::Text( _( " It is %s." ), size_names.at( get_size() ).translated().c_str() );
+        lines.emplace_back( string_format( _( " It is %s." ), size_names.at( get_size() ).translated() ) );
     }
 
-    if( get_option<bool>( "ENABLE_ASCII_ART" ) ) {
-        const ascii_art_id art = type->get_picture_id();
-        if( art.is_valid() ) {
-            cataimgui::PushMonoFont();
-            for( const std::string &line : art->picture ) {
-                cataimgui::draw_colored_text( line, c_white );
-            }
-            ImGui::PopFont();
-        }
-    }
+    return string_join( lines, "\n" );
 }
 
 std::vector<std::string> monster::extended_description() const

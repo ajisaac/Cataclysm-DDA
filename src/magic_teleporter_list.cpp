@@ -184,7 +184,6 @@ class teleporter_callback : public uilist_callback
         std::map<int, tripoint_abs_omt> index_pairs;
     public:
         explicit teleporter_callback( std::map<int, tripoint_abs_omt> &ip ) : index_pairs( ip ) {}
-        // TODO: bring back the overmap preview that draw_overmap_chunk_imgui() drew below this
         std::string right_panel_rml( uilist *menu ) override {
             const int entnum = menu->previewing;
             if( entnum < 0 || static_cast<size_t>( entnum ) >= index_pairs.size() ) {
@@ -193,7 +192,10 @@ class teleporter_callback : public uilist_callback
             avatar &player_character = get_avatar();
             int dist = rl_dist( player_character.pos_abs_omt(), index_pairs[entnum] );
             return rml_ui::markup_to_rml( string_format( _( "Distance: %d %s" ), dist,
-                                          index_pairs[entnum].to_string() ) );
+                                          index_pairs[entnum].to_string() ) ) +
+                   "<div style=\"font-family: cata-mono; margin-top: 8dp;\">" +
+                   rml_ui::markup_to_rml( overmap_ui::overmap_chunk_markup( player_character,
+                                          index_pairs[entnum], 29, 21 ) ) + "</div>";
         }
 };
 } // namespace

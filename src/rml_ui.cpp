@@ -621,6 +621,36 @@ void document::focus( const std::string &id )
     pending_focus = id;
 }
 
+void document::scroll( const std::string &id, rml_ui::scroll how )
+{
+    Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr;
+    if( !element ) {
+        return;
+    }
+    const float line = element->GetLineHeight();
+    const float page = std::max( line, element->GetClientHeight() - line );
+    switch( how ) {
+        case rml_ui::scroll::top:
+            element->SetScrollTop( 0.f );
+            break;
+        case rml_ui::scroll::bottom:
+            element->SetScrollTop( element->GetScrollHeight() );
+            break;
+        case rml_ui::scroll::line_up:
+            element->SetScrollTop( element->GetScrollTop() - line );
+            break;
+        case rml_ui::scroll::line_down:
+            element->SetScrollTop( element->GetScrollTop() + line );
+            break;
+        case rml_ui::scroll::page_up:
+            element->SetScrollTop( element->GetScrollTop() - page );
+            break;
+        case rml_ui::scroll::page_down:
+            element->SetScrollTop( element->GetScrollTop() + page );
+            break;
+    }
+}
+
 main_menu_replica::main_menu_replica() : document( "main_menu_replica.rml" ) {}
 
 void main_menu_replica::update( const std::vector<std::string> &items, int selected )

@@ -66,6 +66,16 @@ float dp_ratio();
 /// at the largest whole multiple of its size that fits.
 float imgui_px_scale();
 
+/// How to scroll an element; see document::scroll().
+enum class scroll : int {
+    top,
+    bottom,
+    line_up,
+    line_down,
+    page_up,
+    page_down
+};
+
 /**
  * Bracket one pass of ui_adaptor::redraw_invalidated(). Between the two,
  * every enabled document's adaptor is redrawn in stack order; end_redraw_pass()
@@ -143,6 +153,9 @@ class document
         /// Give the element with this id keyboard focus once the document is
         /// next shown -- RmlUi cannot focus an element while it is hidden.
         void focus( const std::string &id );
+        /// Scroll the element with this id, which needs `overflow: auto`. A
+        /// page is its height less a line, so a line of context stays.
+        void scroll( const std::string &id, rml_ui::scroll how );
 
     private:
         friend void shutdown();

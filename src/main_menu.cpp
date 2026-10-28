@@ -581,12 +581,6 @@ void main_menu::load_char_templates()
 
 bool main_menu::opening_screen()
 {
-    // The RmlUi replica is only wanted while this screen is up, and
-    // opening_screen() returns from several places, so retire it on scope exit.
-    on_out_of_scope hide_rml_menu( []() {
-        rml_ui::hide_main_menu();
-    } );
-
     // set holiday based on local system time
     current_holiday = get_holiday_from_time();
 
@@ -640,12 +634,16 @@ bool main_menu::opening_screen()
 
     background_pane background;
 
+    // Experimental RmlUi replica, drawn alongside for comparison. Inert unless
+    // built with -DRMLUI=ON. Constructed below `ui` so that ui_manager::redraw(),
+    // which only invalidates the top adaptor, still reaches the catacurses menu;
+    // RmlUi draws last, so the replica is on top either way.
+    rml_ui::main_menu_replica rml_replica;
+
     ui_adaptor ui;
     ui.on_redraw( [&]( const ui_adaptor & ) {
         print_menu( w_open, sel1, menu_offset, sel_line );
-        // Draw the experimental RmlUi replica alongside, for comparison.
-        // No-op unless built with -DRMLUI=ON.
-        rml_ui::show_main_menu( vMenuItems, sel1 );
+        rml_replica.update( vMenuItems, sel1 );
     } );
     ui.on_screen_resize( [this]( ui_adaptor & ui ) {
         init_windows();

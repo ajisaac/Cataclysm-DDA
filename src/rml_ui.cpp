@@ -1,5 +1,7 @@
 #include "rml_ui.h"
 
+#include "ui_manager.h"
+
 #if !defined(CATA_RMLUI)
 
 // Stubs so call sites need no guards of their own.
@@ -9,16 +11,27 @@ void init( const SDL_Renderer_Ptr &, int, int ) {}
 void shutdown() {}
 void resize( int, int ) {}
 void render() {}
-void show_main_menu( const std::vector<std::string> &, int ) {}
-void hide_main_menu() {}
+void begin_redraw_pass() {}
+void end_redraw_pass() {}
 bool active()
 {
     return false;
 }
+
+document::document( const std::string &, const std::string & ) {}
+document::~document() = default;
+Rml::ElementDocument *document::get() const
+{
+    return doc;
+}
+
+main_menu_replica::main_menu_replica() : document( std::string(), std::string() ) {}
+void main_menu_replica::update( const std::vector<std::string> &, int ) {}
 } // namespace rml_ui
 
 #else
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,6 +40,7 @@ bool active()
 
 #include "debug.h"
 #include "path_info.h"
+#include "rml_markup.h"
 #include "rml_render_sdl.h"
 
 namespace
@@ -63,14 +77,33 @@ Rml::Context *context = nullptr;
 SDL_Renderer *saved_renderer = nullptr;
 bool initialised = false;
 
-Rml::ElementDocument *menu_document = nullptr;
-Rml::Element *menu_items_container = nullptr;
-std::vector<std::string> cached_items;
-int cached_selection = -1;
+// Every document with a loaded Rml::ElementDocument.
+std::vector<rml_ui::document *> live_documents;
+// Documents whose adaptor has been redrawn so far this pass, bottom of the
+// ui_manager stack first.
+std::vector<rml_ui::document *> pass_documents;
+// The stacking order last applied to the context, so documents are only
+// reordered when the stack actually changes.
+std::vector<rml_ui::document *> applied_order;
 
-// Deliberately offset to the right so the original catacurses menu stays
-// visible underneath for side-by-side comparison.
-const char *menu_document_rml = R"RML(
+void forget_document( std::vector<rml_ui::document *> &list, const rml_ui::document *doc )
+{
+    list.erase( std::remove( list.begin(), list.end(), doc ), list.end() );
+}
+
+// The fg-/bg- classes rml_ui::markup_to_rml() emits. Built on first use rather
+// than in init(), which runs from WinCreate() before the palette is loaded.
+Rml::SharedPtr<Rml::StyleSheetContainer> palette_sheet;
+
+const Rml::SharedPtr<Rml::StyleSheetContainer> &get_palette_sheet()
+{
+    if( !palette_sheet ) {
+        palette_sheet = Rml::Factory::InstanceStyleSheetString( rml_ui::palette_rcss() );
+    }
+    return palette_sheet;
+}
+
+const char *main_menu_rml = R"RML(
 <rml>
 <head>
 <style>
@@ -132,66 +165,21 @@ body
 </rml>
 )RML";
 
-/// Turn the game's "<M|m>OTD" hotkey markup into RML, accenting the hotkey
-/// letter. Everything outside the brackets is emitted as-is; the first
-/// alternative inside them is what gets shown.
-std::string markup_to_rml( const std::string &label )
+/// The main menu's "<M|m>OTD" labels, split the way shortcut_text() splits
+/// them, with the hotkey in a span the replica's stylesheet can accent.
+std::string hotkey_label_to_rml( const std::string &label )
 {
-    std::string out;
-    out.reserve( label.size() + 32 );
-    for( size_t i = 0; i < label.size(); ++i ) {
-        if( label[i] != '<' ) {
-            out += label[i];
-            continue;
-        }
-        const size_t close = label.find( '>', i );
-        if( close == std::string::npos ) {
-            out += label[i];
-            continue;
-        }
-        std::string alternatives = label.substr( i + 1, close - i - 1 );
-        const size_t bar = alternatives.find( '|' );
-        if( bar != std::string::npos ) {
-            alternatives = alternatives.substr( 0, bar );
-        }
-        out += "<span class=\"key\">";
-        out += alternatives;
-        out += "</span>";
-        i = close;
+    const size_t pos = label.find_first_of( '<' );
+    const size_t pos_end = label.find_first_of( '>' );
+    if( pos_end == std::string::npos || pos >= pos_end ) {
+        return rml_ui::markup_to_rml( label );
     }
-    return out;
-}
-
-void rebuild_menu_items( const std::vector<std::string> &items )
-{
-    if( !menu_items_container || !menu_document ) {
-        return;
-    }
-    while( Rml::Element *child = menu_items_container->GetFirstChild() ) {
-        menu_items_container->RemoveChild( child );
-    }
-    for( const std::string &label : items ) {
-        Rml::ElementPtr element = menu_document->CreateElement( "div" );
-        element->SetClass( "item", true );
-        element->SetInnerRML( markup_to_rml( label ) );
-        menu_items_container->AppendChild( std::move( element ) );
-    }
-    cached_items = items;
-    cached_selection = -1;
-}
-
-void apply_selection( int selected )
-{
-    if( !menu_items_container || selected == cached_selection ) {
-        return;
-    }
-    const int count = static_cast<int>( menu_items_container->GetNumChildren() );
-    for( int i = 0; i < count; ++i ) {
-        if( Rml::Element *child = menu_items_container->GetChild( i ) ) {
-            child->SetClass( "selected", i == selected );
-        }
-    }
-    cached_selection = selected;
+    const size_t sep = std::min( label.find_first_of( '|', pos ), pos_end );
+    return rml_ui::markup_to_rml( label.substr( 0, pos ) ) +
+           "<span class=\"key\">" +
+           rml_ui::markup_to_rml( label.substr( pos + 1, sep - pos - 1 ) ) +
+           "</span>" +
+           rml_ui::markup_to_rml( label.substr( pos_end + 1 ) );
 }
 
 } // namespace
@@ -233,13 +221,6 @@ void init( const SDL_Renderer_Ptr &renderer, int width, int height )
         return;
     }
 
-    menu_document = context->LoadDocumentFromMemory( menu_document_rml, "[cata-main-menu]" );
-    if( menu_document ) {
-        menu_items_container = menu_document->GetElementById( "items" );
-    } else {
-        DebugLog( D_ERROR, DC_ALL ) << "RmlUi: LoadDocumentFromMemory failed";
-    }
-
     initialised = true;
     DebugLog( D_INFO, DC_ALL ) << "RmlUi: initialised at " << width << "x" << height;
 }
@@ -250,10 +231,16 @@ void shutdown()
         return;
     }
     initialised = false;
-    menu_items_container = nullptr;
-    menu_document = nullptr;
-    cached_items.clear();
-    cached_selection = -1;
+    // Rml::Shutdown() destroys every document along with the context, so leave
+    // any document objects that outlive it holding nothing rather than a
+    // dangling pointer.
+    for( document *live : live_documents ) {
+        live->doc = nullptr;
+    }
+    live_documents.clear();
+    pass_documents.clear();
+    applied_order.clear();
+    palette_sheet.reset();
     context = nullptr;
     saved_renderer = nullptr;
     Rml::Shutdown();
@@ -268,24 +255,42 @@ void resize( int width, int height )
     }
 }
 
-void show_main_menu( const std::vector<std::string> &items, int selected )
+void begin_redraw_pass()
 {
-    if( !initialised || !menu_document ) {
-        return;
-    }
-    if( items != cached_items ) {
-        rebuild_menu_items( items );
-    }
-    apply_selection( selected );
-    if( !menu_document->IsVisible() ) {
-        menu_document->Show();
-    }
+    pass_documents.clear();
 }
 
-void hide_main_menu()
+void end_redraw_pass()
 {
-    if( menu_document && menu_document->IsVisible() ) {
-        menu_document->Hide();
+    if( !initialised ) {
+        return;
+    }
+    // A document that was not redrawn this pass is below a disable_uis_below
+    // adaptor, so it should not be seen.
+    for( document *doc : live_documents ) {
+        Rml::ElementDocument *element = doc->get();
+        const bool wanted = std::find( pass_documents.begin(), pass_documents.end(),
+                                       doc ) != pass_documents.end();
+        if( !element || element->IsVisible() == wanted ) {
+            continue;
+        }
+        if( wanted ) {
+            // No focus: input still goes through input_context, and focusing
+            // would also let RmlUi pull the document to the front on its own.
+            element->Show( Rml::ModalFlag::None, Rml::FocusFlag::None );
+        } else {
+            element->Hide();
+        }
+    }
+    // Pulling each to the front in turn, bottom first, leaves the context in
+    // stack order.
+    if( pass_documents != applied_order ) {
+        for( document *doc : pass_documents ) {
+            if( Rml::ElementDocument *element = doc->get() ) {
+                element->PullToFront();
+            }
+        }
+        applied_order = pass_documents;
     }
 }
 
@@ -321,29 +326,6 @@ void render()
     SDL_GetRenderDrawBlendMode( saved_renderer, &saved_blend );
 
     context->Update();
-
-    // One-shot: report where RmlUi actually laid the panel out, so a panel that
-    // is invisible because it is zero-sized or off-screen is distinguishable
-    // from one that is not being drawn at all.
-    static bool logged_layout = false;
-    if( !logged_layout && menu_document ) {
-        logged_layout = true;
-        DebugLog( D_INFO, DC_ALL ) << "RmlUi: menu document visible="
-                                   << menu_document->IsVisible();
-        const Rml::Vector2i dims = context->GetDimensions();
-        if( Rml::Element *panel = menu_document->GetElementById( "menu" ) ) {
-            DebugLog( D_INFO, DC_ALL ) << "RmlUi: context " << dims.x << "x" << dims.y
-                                       << ", #menu at (" << panel->GetAbsoluteLeft() << ","
-                                       << panel->GetAbsoluteTop() << ") size "
-                                       << panel->GetClientWidth() << "x"
-                                       << panel->GetClientHeight()
-                                       << ", items=" << ( menu_items_container ?
-                                               menu_items_container->GetNumChildren() : -1 );
-        } else {
-            DebugLog( D_ERROR, DC_ALL ) << "RmlUi: #menu element not found";
-        }
-    }
-
     context->Render();
 
     SDL_SetRenderClipRect( saved_renderer, had_clip ? &saved_clip : nullptr );
@@ -355,6 +337,87 @@ void render()
 bool active()
 {
     return initialised;
+}
+
+document::document( const std::string &rml, const std::string &source_url )
+{
+    if( !initialised || !context ) {
+        return;
+    }
+    doc = context->LoadDocumentFromMemory( rml, source_url );
+    if( !doc ) {
+        DebugLog( D_ERROR, DC_ALL ) << "RmlUi: failed to load document " << source_url;
+        return;
+    }
+    live_documents.push_back( this );
+
+    // Every document gets the palette, so game text converted by
+    // markup_to_rml() shows in its own colors without each document asking.
+    if( const Rml::SharedPtr<Rml::StyleSheetContainer> &palette = get_palette_sheet() ) {
+        const Rml::StyleSheetContainer *own = doc->GetStyleSheetContainer();
+        doc->SetStyleSheetContainer( own ? own->CombineStyleSheetContainer( *palette ) : palette );
+    }
+
+    // Draws nothing into the display buffer, so it has no position: being
+    // redrawn is just how this document learns it is still enabled, and where
+    // it sits in the stack.
+    adaptor = std::make_unique<ui_adaptor>();
+    adaptor->is_rml = true;
+    adaptor->on_redraw( [this]( ui_adaptor & ui ) {
+        // No catacurses window here, so leave the cursor to the UIs that have one.
+        ui.disable_cursor();
+        pass_documents.push_back( this );
+    } );
+}
+
+document::~document()
+{
+    // Pop the adaptor first so no redraw pass can see this document mid-teardown.
+    adaptor.reset();
+    forget_document( live_documents, this );
+    forget_document( pass_documents, this );
+    forget_document( applied_order, this );
+    if( doc ) {
+        // Detaches from the context immediately, so it is not drawn again.
+        doc->Close();
+    }
+}
+
+Rml::ElementDocument *document::get() const
+{
+    return doc;
+}
+
+main_menu_replica::main_menu_replica() : document( main_menu_rml, "[cata-main-menu]" ) {}
+
+void main_menu_replica::update( const std::vector<std::string> &items, int selected )
+{
+    Rml::ElementDocument *menu = get();
+    Rml::Element *container = menu ? menu->GetElementById( "items" ) : nullptr;
+    if( !container ) {
+        return;
+    }
+
+    if( items != cached_items ) {
+        while( Rml::Element *child = container->GetFirstChild() ) {
+            container->RemoveChild( child );
+        }
+        for( const std::string &label : items ) {
+            Rml::ElementPtr element = menu->CreateElement( "div" );
+            element->SetClass( "item", true );
+            element->SetInnerRML( hotkey_label_to_rml( label ) );
+            container->AppendChild( std::move( element ) );
+        }
+        cached_items = items;
+    }
+
+    // SetClass() is a no-op when the class is already in that state.
+    const int count = static_cast<int>( container->GetNumChildren() );
+    for( int i = 0; i < count; ++i ) {
+        if( Rml::Element *child = container->GetChild( i ) ) {
+            child->SetClass( "selected", i == selected );
+        }
+    }
 }
 
 } // namespace rml_ui

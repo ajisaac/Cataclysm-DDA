@@ -77,6 +77,9 @@ class ui_adaptor
 {
     public:
         bool is_imgui;
+        // Owned by an rml_ui::document. Like `is_imgui`, redrawn on every pass,
+        // which is how the document learns it is still enabled in the stack.
+        bool is_rml;
         bool is_on_top;
         using redraw_callback_t = std::function<void( ui_adaptor & )>;
         using screen_resize_callback_t = std::function<void( ui_adaptor & )>;

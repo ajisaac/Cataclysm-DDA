@@ -11,6 +11,7 @@
 #include "cata_scope_helpers.h"
 #include "cursesdef.h"
 #include "point.h"
+#include "rml_ui.h"
 
 #if defined(EMSCRIPTEN)
 #include <emscripten.h>
@@ -31,21 +32,21 @@ static std::optional<SDL_Rect> prev_clip_rect;
 static uint64_t prev_clip_rect_generation = 0;
 static ui_stack_t ui_stack;
 
-ui_adaptor::ui_adaptor() : is_imgui( false ), disabling_uis_below( false ),
+ui_adaptor::ui_adaptor() : is_imgui( false ), is_rml( false ), disabling_uis_below( false ),
     is_debug_message_ui( false ),
     invalidated( false ), deferred_resize( false )
 {
     ui_stack.emplace_back( *this );
 }
 
-ui_adaptor::ui_adaptor( ui_adaptor::disable_uis_below ) : is_imgui( false ),
+ui_adaptor::ui_adaptor( ui_adaptor::disable_uis_below ) : is_imgui( false ), is_rml( false ),
     disabling_uis_below( true ),
     is_debug_message_ui( false ), invalidated( false ), deferred_resize( false )
 {
     ui_stack.emplace_back( *this );
 }
 
-ui_adaptor::ui_adaptor( ui_adaptor::debug_message_ui ) : is_imgui( false ),
+ui_adaptor::ui_adaptor( ui_adaptor::debug_message_ui ) : is_imgui( false ), is_rml( false ),
     disabling_uis_below( true ),
     is_debug_message_ui( true ), invalidated( false ), deferred_resize( false )
 {
@@ -379,6 +380,10 @@ void ui_adaptor::redraw_invalidated( )
         // the area invalidated by the debug message popup.
         restart_redrawing = false;
 
+        // RmlUi documents re-register as visible from their redraw callbacks
+        // below, so this pass decides which of them are shown and in what order.
+        rml_ui::begin_redraw_pass();
+
         // Find the first enabled UI. From now on enabling and disabling UIs
         // have no effect until the end of this call.
         auto first = ui_stack.rbegin();
@@ -428,7 +433,7 @@ void ui_adaptor::redraw_invalidated( )
         if( !restart_redrawing ) {
             for( auto it = first_enabled; !needs_redraw && it != ui_stack_orig->end(); ++it ) {
                 const ui_adaptor &ui = *it;
-                if( ( ui.invalidated || ui.is_imgui ) && ui.redraw_cb ) {
+                if( ( ui.invalidated || ui.is_imgui || ui.is_rml ) && ui.redraw_cb ) {
                     needs_redraw = true;
                 }
             }
@@ -445,7 +450,7 @@ void ui_adaptor::redraw_invalidated( )
             for( auto it = first_enabled; !restart_redrawing && it != ui_stack_orig->end(); ++it ) {
                 ui_adaptor &ui = *it;
                 ui.is_on_top = it == top_ui;
-                if( ui.invalidated || ui.is_imgui ) {
+                if( ui.invalidated || ui.is_imgui || ui.is_rml ) {
                     if( ui.redraw_cb ) {
                         ui.default_cursor();
                         ui.redraw_cb( ui );
@@ -467,6 +472,7 @@ void ui_adaptor::redraw_invalidated( )
             }
         }
     } while( restart_redrawing );
+    rml_ui::end_redraw_pass();
 #if defined(EMSCRIPTEN)
     emscripten_sleep( 1 );
 #endif

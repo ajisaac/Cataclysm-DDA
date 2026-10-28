@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 if (BUILD_TESTING)
-    file(GLOB CATACLYSM_DDA_TEST_SOURCES
+    file(GLOB CATACLYSM_DDA_TEST_SOURCES CONFIGURE_DEPENDS
             ${CMAKE_SOURCE_DIR}/tests/*.cpp)
 
     # Enabling benchmarks

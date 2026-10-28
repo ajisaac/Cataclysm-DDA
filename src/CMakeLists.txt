@@ -13,7 +13,9 @@ if (WIN32)
             OBJECT_DEPENDS "${RSRC_RC_DEP}")
 endif ()
 
-file(GLOB CATACLYSM_DDA_SOURCES
+# CONFIGURE_DEPENDS so a new source file is picked up by the next build,
+# without having to re-run CMake configure by hand.
+file(GLOB CATACLYSM_DDA_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cata_allocator_c.c)
 
@@ -34,7 +36,7 @@ endif()
 
 list(REMOVE_ITEM CATACLYSM_DDA_SOURCES ${MAIN_CPP} ${MESSAGES_CPP})
 
-file(GLOB CATACLYSM_DDA_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
+file(GLOB CATACLYSM_DDA_HEADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 
 # Get GIT version strings
 add_custom_target(

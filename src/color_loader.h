@@ -18,12 +18,7 @@ class color_loader
     public:
         static constexpr size_t COLOR_NAMES_COUNT = 16;
 
-    private:
-        static ColorType from_rgb( int r, int g, int b );
-
-        std::map<std::string, ColorType> consolecolors;
-
-        // color names as read from the json file
+        // color names as read from the json file, in palette index order
         static const std::array<std::string, COLOR_NAMES_COUNT> &main_color_names() {
             static const std::array<std::string, COLOR_NAMES_COUNT> names{ { "BLACK", "RED", "GREEN",
                     "BROWN", "BLUE", "MAGENTA", "CYAN", "GRAY", "DGRAY", "LRED", "LGREEN", "YELLOW",
@@ -31,6 +26,11 @@ class color_loader
                 } };
             return names;
         }
+
+    private:
+        static ColorType from_rgb( int r, int g, int b );
+
+        std::map<std::string, ColorType> consolecolors;
 
         void load_colors( const JsonObject &jsobj ) {
             for( const std::string &color : main_color_names() ) {

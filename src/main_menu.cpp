@@ -634,10 +634,10 @@ bool main_menu::opening_screen()
 
     background_pane background;
 
-    // Experimental RmlUi replica, drawn alongside for comparison. Inert unless
-    // built with -DRMLUI=ON. Constructed below `ui` so that ui_manager::redraw(),
-    // which only invalidates the top adaptor, still reaches the catacurses menu;
-    // RmlUi draws last, so the replica is on top either way.
+    // Experimental RmlUi replica, drawn alongside for comparison. Constructed
+    // below `ui` so that ui_manager::redraw(), which only invalidates the top
+    // adaptor, still reaches the catacurses menu; RmlUi draws last, so the
+    // replica is on top either way.
     rml_ui::main_menu_replica rml_replica;
 
     ui_adaptor ui;

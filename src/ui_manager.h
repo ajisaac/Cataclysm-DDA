@@ -232,6 +232,7 @@ class ui_adaptor
         /* See the `ui_manager` namespace */
         static void invalidate( const rectangle<point> &rect, bool reenable_uis_below );
         static bool has_imgui();
+        static bool has_rml();
         static void redraw();
         static void redraw_invalidated();
         static void screen_resized();

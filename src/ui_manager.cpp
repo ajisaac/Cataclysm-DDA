@@ -328,6 +328,16 @@ bool ui_adaptor::has_imgui()
     return false;
 }
 
+bool ui_adaptor::has_rml()
+{
+    for( auto ui : ui_stack ) {
+        if( ui.get().is_rml ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ui_adaptor::redraw()
 {
     if( !ui_stack.empty() ) {

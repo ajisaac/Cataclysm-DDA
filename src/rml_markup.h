@@ -10,8 +10,8 @@
 /**
  * Conversion from the game's text markup to RML, for the RmlUi layer.
  *
- * Kept apart from rml_ui so that it builds, and is tested, whether or not
- * RmlUi is compiled in.
+ * Kept apart from rml_ui and free of RmlUi itself, so it can be tested
+ * without an RmlUi context.
  */
 namespace rml_ui
 {

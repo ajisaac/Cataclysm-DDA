@@ -2,8 +2,6 @@
 #ifndef CATA_SRC_RML_RENDER_SDL_H
 #define CATA_SRC_RML_RENDER_SDL_H
 
-#if defined(CATA_RMLUI)
-
 #include <vector>
 
 #include <RmlUi/Core/RenderInterface.h>
@@ -48,7 +46,5 @@ class rml_sdl_render_interface : public Rml::RenderInterface
         // Reused across draws so RenderGeometry does not allocate per call.
         std::vector<float> translated_xy;
 };
-
-#endif // CATA_RMLUI
 
 #endif // CATA_SRC_RML_RENDER_SDL_H

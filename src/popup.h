@@ -219,20 +219,7 @@ class query_popup
         bool fullscr;
         keyboard_mode pref_kbd_mode;
 
-        struct button {
-            button( const std::string &text, const point & );
-            bool contains( const point &p ) const;
-
-            std::string text;
-            point pos;
-            int width;
-        };
-
         std::weak_ptr<query_popup_impl> p_impl;
-
-        // UI caches
-        mutable std::vector<std::string> folded_msg;
-        mutable std::vector<button> buttons;
 
         void invalidate_ui() const;
 

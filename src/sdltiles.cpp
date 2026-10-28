@@ -794,7 +794,7 @@ static void WinCreate()
 #endif
 
     imclient = std::make_unique<cataimgui::client>( renderer, window, geometry );
-    rml_ui::init( renderer, WindowWidth, WindowHeight );
+    rml_ui::init( renderer );
 
     renderer_coordinator.seed_renderer_policy( renderer_name );
 
@@ -4177,7 +4177,6 @@ static bool apply_resize_layout( int w, int h )
     WindowWidth = w;
     WindowHeight = h;
     refresh_drawable_dims();
-    rml_ui::resize( w, h );
 #if defined(__ANDROID__)
     ( void )logical_changed;
     return false;
@@ -5514,6 +5513,9 @@ static void CheckMessages()
         SDL_Event ev_display = ev;
         convert_event_to_display_buffer_coords( &ev_display );
         imclient->process_input( &ev_display, imgui_buf_w, imgui_buf_h );
+        // RmlUi scales window coordinates to its own output-pixel space, so it
+        // takes the raw event.
+        rml_ui::process_event( ev );
 
         // Window events: SDL3 flattens the SDL_WINDOWEVENT+subtype to top-level events.
         // IsWindowEvent/GetWindowEventID normalize across versions.
@@ -6478,7 +6480,9 @@ input_event input_manager::get_input_event( const keyboard_mode preferred_keyboa
 
     if( needupdate ) {
         refresh_display();
-    } else if( ui_adaptor::has_imgui() ) {
+    } else if( ui_adaptor::has_imgui() || ui_adaptor::has_rml() ) {
+        // ImGui and RmlUi do not mark the display for update the way catacurses
+        // windows do, so a redraw that only changed them still needs presenting.
         try_sdl_update();
     }
 

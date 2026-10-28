@@ -1,36 +1,5 @@
 #include "rml_ui.h"
 
-#include "ui_manager.h"
-
-#if !defined(CATA_RMLUI)
-
-// Stubs so call sites need no guards of their own.
-namespace rml_ui
-{
-void init( const SDL_Renderer_Ptr &, int, int ) {}
-void shutdown() {}
-void resize( int, int ) {}
-void render() {}
-void begin_redraw_pass() {}
-void end_redraw_pass() {}
-bool active()
-{
-    return false;
-}
-
-document::document( const std::string & ) {}
-document::~document() = default;
-Rml::ElementDocument *document::get() const
-{
-    return doc;
-}
-
-main_menu_replica::main_menu_replica() : document( std::string() ) {}
-void main_menu_replica::update( const std::vector<std::string> &, int ) {}
-} // namespace rml_ui
-
-#else
-
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -42,6 +11,7 @@ void main_menu_replica::update( const std::vector<std::string> &, int ) {}
 #include "path_info.h"
 #include "rml_markup.h"
 #include "rml_render_sdl.h"
+#include "ui_manager.h"
 
 namespace
 {
@@ -76,6 +46,84 @@ std::unique_ptr<rml_sdl_render_interface> render_interface;
 Rml::Context *context = nullptr;
 SDL_Renderer *saved_renderer = nullptr;
 bool initialised = false;
+// Output pixels per window coordinate: what SDL mouse positions are scaled by,
+// and the context's dp ratio.
+float pixel_density = 1.f;
+
+Rml::Vector2i output_size()
+{
+    int w = 0;
+    int h = 0;
+    if( !SDL_GetRenderOutputSize( saved_renderer, &w, &h ) ) {
+        return Rml::Vector2i( 0, 0 );
+    }
+    return Rml::Vector2i( w, h );
+}
+
+// Checked every frame rather than hooked to the game's resize handling, since
+// a DPI-only change, such as moving the window to another monitor, does not
+// go through that path.
+void sync_to_window()
+{
+    const Rml::Vector2i size = output_size();
+    if( size.x > 0 && size.y > 0 && size != context->GetDimensions() ) {
+        context->SetDimensions( size );
+    }
+    float density = SDL_GetWindowPixelDensity( SDL_GetRenderWindow( saved_renderer ) );
+    if( density <= 0.f ) {
+        density = 1.f;
+    }
+    if( density != pixel_density || density != context->GetDensityIndependentPixelRatio() ) {
+        pixel_density = density;
+        context->SetDensityIndependentPixelRatio( density );
+    }
+}
+
+int key_modifier_state()
+{
+    const SDL_Keymod mods = SDL_GetModState();
+    int state = 0;
+    if( mods & SDL_KMOD_CTRL ) {
+        state |= Rml::Input::KM_CTRL;
+    }
+    if( mods & SDL_KMOD_SHIFT ) {
+        state |= Rml::Input::KM_SHIFT;
+    }
+    if( mods & SDL_KMOD_ALT ) {
+        state |= Rml::Input::KM_ALT;
+    }
+    if( mods & SDL_KMOD_GUI ) {
+        state |= Rml::Input::KM_META;
+    }
+    if( mods & SDL_KMOD_CAPS ) {
+        state |= Rml::Input::KM_CAPSLOCK;
+    }
+    if( mods & SDL_KMOD_NUM ) {
+        state |= Rml::Input::KM_NUMLOCK;
+    }
+    return state;
+}
+
+// RmlUi numbers the buttons left, right, middle; SDL left, middle, right.
+int mouse_button_index( int sdl_button )
+{
+    switch( sdl_button ) {
+        case SDL_BUTTON_LEFT:
+            return 0;
+        case SDL_BUTTON_RIGHT:
+            return 1;
+        case SDL_BUTTON_MIDDLE:
+            return 2;
+        default:
+            return sdl_button - 1;
+    }
+}
+
+void move_mouse( float x, float y, int modifiers )
+{
+    context->ProcessMouseMove( static_cast<int>( x * pixel_density ),
+                               static_cast<int>( y * pixel_density ), modifiers );
+}
 
 // Every document with a loaded Rml::ElementDocument.
 std::vector<rml_ui::document *> live_documents;
@@ -125,7 +173,7 @@ std::string hotkey_label_to_rml( const std::string &label )
 namespace rml_ui
 {
 
-void init( const SDL_Renderer_Ptr &renderer, int width, int height )
+void init( const SDL_Renderer_Ptr &renderer )
 {
     if( initialised || !renderer ) {
         return;
@@ -150,7 +198,7 @@ void init( const SDL_Renderer_Ptr &renderer, int width, int height )
         DebugLog( D_ERROR, DC_ALL ) << "RmlUi: failed to load font face " << font;
     }
 
-    context = Rml::CreateContext( "cata", Rml::Vector2i( width, height ) );
+    context = Rml::CreateContext( "cata", output_size() );
     if( !context ) {
         DebugLog( D_ERROR, DC_ALL ) << "RmlUi: CreateContext failed";
         Rml::Shutdown();
@@ -159,8 +207,11 @@ void init( const SDL_Renderer_Ptr &renderer, int width, int height )
         return;
     }
 
+    sync_to_window();
     initialised = true;
-    DebugLog( D_INFO, DC_ALL ) << "RmlUi: initialised at " << width << "x" << height;
+    const Rml::Vector2i size = context->GetDimensions();
+    DebugLog( D_INFO, DC_ALL ) << "RmlUi: initialised at " << size.x << "x" << size.y
+                               << ", pixel density " << pixel_density;
 }
 
 void shutdown()
@@ -181,15 +232,44 @@ void shutdown()
     palette_sheet.reset();
     context = nullptr;
     saved_renderer = nullptr;
+    pixel_density = 1.f;
     Rml::Shutdown();
     render_interface.reset();
     system_interface.reset();
 }
 
-void resize( int width, int height )
+void process_event( const SDL_Event &ev )
 {
-    if( context ) {
-        context->SetDimensions( Rml::Vector2i( width, height ) );
+    if( !initialised || !context ) {
+        return;
+    }
+    const int modifiers = key_modifier_state();
+    switch( ev.type ) {
+        case SDL_EVENT_MOUSE_MOTION:
+            move_mouse( ev.motion.x, ev.motion.y, modifiers );
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP: {
+            // Move first, so a click with no motion before it -- say, on a
+            // popup that opened under a resting cursor -- lands where it was made.
+            move_mouse( ev.button.x, ev.button.y, modifiers );
+            const int button = mouse_button_index( ev.button.button );
+            if( ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN ) {
+                context->ProcessMouseButtonDown( button, modifiers );
+            } else {
+                context->ProcessMouseButtonUp( button, modifiers );
+            }
+            break;
+        }
+        case SDL_EVENT_MOUSE_WHEEL:
+            // SDL counts scrolling up as positive, RmlUi as negative.
+            context->ProcessMouseWheel( Rml::Vector2f( 0.f, -ev.wheel.y ), modifiers );
+            break;
+        case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+            context->ProcessMouseLeave();
+            break;
+        default:
+            break;
     }
 }
 
@@ -238,10 +318,12 @@ void render()
         return;
     }
 
+    sync_to_window();
+
     // draw_window() sets logical presentation to the display_buffer size when
     // scaling_factor > 1 (sdltiles.cpp) and never resets it, so by the time we
     // draw, renderer coordinates are buffer-space and get scaled up to the
-    // window. Our context is sized in window pixels, so drop to 1:1 for the
+    // window. Our context is sized in output pixels, so drop to 1:1 for the
     // duration of the draw -- otherwise the overlay lands off-screen.
     int saved_logical_w = 0;
     int saved_logical_h = 0;
@@ -307,6 +389,7 @@ document::document( const std::string &file )
         // No catacurses window here, so leave the cursor to the UIs that have one.
         ui.disable_cursor();
         pass_documents.push_back( this );
+        on_redraw();
     } );
 }
 
@@ -326,6 +409,40 @@ document::~document()
 Rml::ElementDocument *document::get() const
 {
     return doc;
+}
+
+void document::set_inner_rml( const std::string &id, const std::string &rml )
+{
+    if( Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr ) {
+        element->SetInnerRML( rml );
+    }
+}
+
+void document::set_class( const std::string &id, const std::string &name, bool active )
+{
+    if( Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr ) {
+        element->SetClass( name, active );
+    }
+}
+
+int document::hovered_child( const std::string &id ) const
+{
+    Rml::Element *container = doc && context ? doc->GetElementById( id ) : nullptr;
+    if( !container ) {
+        return -1;
+    }
+    for( Rml::Element *element = context->GetHoverElement(); element;
+         element = element->GetParentNode() ) {
+        if( element->GetParentNode() != container ) {
+            continue;
+        }
+        for( int ind = 0; ind < container->GetNumChildren(); ++ind ) {
+            if( container->GetChild( ind ) == element ) {
+                return ind;
+            }
+        }
+    }
+    return -1;
 }
 
 main_menu_replica::main_menu_replica() : document( "main_menu_replica.rml" ) {}
@@ -361,5 +478,3 @@ void main_menu_replica::update( const std::vector<std::string> &items, int selec
 }
 
 } // namespace rml_ui
-
-#endif // CATA_RMLUI

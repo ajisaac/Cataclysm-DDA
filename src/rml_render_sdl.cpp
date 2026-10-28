@@ -1,7 +1,5 @@
 #include "rml_render_sdl.h"
 
-#if defined(CATA_RMLUI)
-
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -167,5 +165,3 @@ void rml_sdl_render_interface::SetScissorRegion( Rml::Rectanglei region )
     const SDL_Rect rect{ region.Left(), region.Top(), region.Width(), region.Height() };
     SDL_SetRenderClipRect( renderer, &rect );
 }
-
-#endif // CATA_RMLUI

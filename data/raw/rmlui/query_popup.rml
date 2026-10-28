@@ -1,0 +1,74 @@
+<rml>
+<head>
+    <title>Query popup</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <style>
+        /* Centered and fitted to its content by default. .on-top pins the
+           popup to the top edge; .full-screen gives it the classic 80x24
+           popup area instead of fitting it. */
+        #root
+        {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #root.on-top
+        {
+            align-items: flex-start;
+        }
+        #popup
+        {
+            max-width: 720dp;
+            padding: 16dp 20dp;
+            background-color: #141821f2;
+            border: 1dp #39465c;
+            border-radius: 8dp;
+        }
+        #root.full-screen #popup
+        {
+            width: 720dp;
+            min-height: 480dp;
+        }
+        /* Game text lines up with spaces, so keep them. */
+        #message
+        {
+            white-space: pre-wrap;
+        }
+        #buttons
+        {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        #buttons .button
+        {
+            margin: 12dp 0 0 8dp;
+            padding: 4dp 12dp;
+            border-radius: 4dp;
+            background-color: #232b3a;
+            color: #b7b2a4;
+        }
+        /* Clicking a hovered button picks it; see query_popup::query_once(). */
+        #buttons .button:hover
+        {
+            background-color: #2a3446;
+        }
+        #buttons .button.selected
+        {
+            background-color: #2b3a52;
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by query_popup_impl in src/popup.cpp. -->
+    <div id="root">
+        <div id="popup">
+            <div id="message"></div>
+            <div id="buttons"></div>
+        </div>
+    </div>
+</body>
+</rml>

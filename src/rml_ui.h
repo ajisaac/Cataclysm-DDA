@@ -16,32 +16,41 @@ class ElementDocument;
 } // namespace Rml
 
 /**
- * Experimental RmlUi layer, built behind the `RMLUI` CMake flag.
+ * The RmlUi layer the game's UI is moving to.
  *
  * RmlUi draws at present time, after the display buffer has been blitted, so
  * it always sits above both the catacurses cell grid and ImGui. Among
  * themselves, documents follow the ui_manager stack: see rml_ui::document.
  *
- * Everything here is a no-op unless CATA_RMLUI is defined, so the normal build
- * is unaffected and call sites need no guards of their own.
+ * This header does not include RmlUi, so callers do not pay for its headers.
  */
 namespace rml_ui
 {
 
-/// Bring up RmlUi against an existing SDL_Renderer. Safe to call twice.
-void init( const SDL_Renderer_Ptr &renderer, int width, int height );
+/**
+ * Bring up RmlUi against an existing SDL_Renderer. Safe to call twice.
+ *
+ * The context works in the renderer's output pixels, with `dp` scaled by the
+ * window's pixel density, so documents keep their physical size on HiDPI
+ * displays. render() keeps both in step with the window.
+ */
+void init( const SDL_Renderer_Ptr &renderer );
 
 /// Tear down. Safe to call without a prior init(). Documents still alive
 /// afterwards become inert.
 void shutdown();
 
-/// Tell RmlUi the output size changed.
-void resize( int width, int height );
-
 /// Update and draw. Call inside the frame, before presenting.
 void render();
 
-/// Whether the spike is compiled in and initialised.
+/**
+ * Pass an SDL event on to RmlUi, in the window coordinates SDL reported it
+ * in. Only mouse events are handled so far: keyboard input still goes through
+ * input_context alone. RmlUi sees every event, not instead of the game.
+ */
+void process_event( const SDL_Event &ev );
+
+/// Whether init() has succeeded and shutdown() has not been called since.
 bool active();
 
 /**
@@ -67,9 +76,9 @@ void end_redraw_pass();
  * and ImGui window regardless of stack position, so a catacurses window opened
  * on top of a document ends up underneath it.
  *
- * If RmlUi is compiled out, not initialised, or the document fails to load,
- * no adaptor is pushed and get() returns nullptr, so callers can construct one
- * unconditionally.
+ * If RmlUi is not initialised -- as in tests -- or the document fails to
+ * load, no adaptor is pushed and get() returns nullptr, so callers can
+ * construct one unconditionally.
  */
 class document
 {
@@ -87,6 +96,28 @@ class document
 
         /// The loaded document, or nullptr. See the class comment.
         Rml::ElementDocument *get() const;
+
+    protected:
+        /**
+         * Called on every redraw pass in which this document is enabled, the
+         * place to bring it up to date with game state -- the counterpart of
+         * cataimgui::window::draw_controls(). Keep it cheap when nothing has
+         * changed, since it runs on every pass.
+         */
+        virtual void on_redraw() {}
+
+        /**
+         * Small DOM helpers, so a subclass can drive its document without
+         * including RmlUi. Each is a no-op when the document or the element
+         * with that id is missing.
+         */
+        /// Replace the content of the element with this id.
+        void set_inner_rml( const std::string &id, const std::string &rml );
+        /// Turn a class on the element with this id on or off.
+        void set_class( const std::string &id, const std::string &name, bool active );
+        /// Index of the child of the element with this id that the mouse is
+        /// over, directly or through one of its descendants, or -1.
+        int hovered_child( const std::string &id ) const;
 
     private:
         friend void shutdown();

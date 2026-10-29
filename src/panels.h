@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "coords_fwd.h"
+#include "point.h"
+#include "rml_ui.h"
 #include "translation.h"
 #include "type_id.h"
 
@@ -56,6 +58,10 @@ struct draw_args {
         widget *get_widget() const {
             return _wgt.is_null() ? nullptr : const_cast<widget *>( &*_wgt );
         }
+
+        // When set, the draw function also writes the panel's content here as
+        // RML, for sidebar_hud. Left empty, the panel shows what is under it.
+        std::string *rml = nullptr;
     private:
         widget_id _wgt;
 };
@@ -157,6 +163,41 @@ class panel_manager
         std::map<std::string, panel_layout> layouts;
 
         friend widget;
+};
+
+/**
+ * The sidebar, drawn with RmlUi from data/raw/rmlui/sidebar.rml over the
+ * catacurses sidebar. That one is still drawn underneath, so it shows whenever
+ * another UI over the game hides this. game::draw_panels() places each panel
+ * on the cells it covers there, so the two line up exactly.
+ */
+class sidebar_hud : public rml_ui::document
+{
+    public:
+        sidebar_hud();
+        ~sidebar_hud() override;
+
+        /// The HUD of the game's main UI while that is up, else nullptr.
+        static sidebar_hud *current();
+
+        /// Start a game::draw_panels() pass. Panels not placed before finish()
+        /// are dropped, since they are no longer shown.
+        void begin();
+        /// Place the panel at this index on this rectangle of console cells.
+        void place( int index, const point &pos, const point &size );
+        /// Replace the panel's content, RML from its draw function.
+        void set_content( int index, const std::string &rml );
+        void finish();
+
+    private:
+        struct panel {
+            point pos;
+            point size;
+            std::string rml;
+            bool placed = false;
+        };
+        std::map<int, panel> panels;
+        std::string shown;
 };
 
 #endif // CATA_SRC_PANELS_H

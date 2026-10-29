@@ -3096,7 +3096,14 @@ shared_ptr_fast<ui_adaptor> game::create_or_get_main_ui_adaptor()
 {
     shared_ptr_fast<ui_adaptor> ui = main_ui_adaptor.lock();
     if( !ui ) {
-        main_ui_adaptor = ui = make_shared_fast<ui_adaptor>();
+        // The RmlUi sidebar lives as long as the main UI, and just above it in
+        // the stack, so that any other UI opened over the game hides it
+        struct main_ui_with_hud {
+            ui_adaptor ui;
+            sidebar_hud hud;
+        };
+        const shared_ptr_fast<main_ui_with_hud> both = make_shared_fast<main_ui_with_hud>();
+        main_ui_adaptor = ui = shared_ptr_fast<ui_adaptor>( both, &both->ui );
         ui->on_redraw( []( ui_adaptor & ui ) {
             g->draw( ui );
         } );
@@ -3362,8 +3369,14 @@ void game::draw_panels( bool force_draw )
         }
     }
     log_height = std::max( TERMY - log_height, 3 );
+    sidebar_hud *hud = sidebar_hud::current();
+    if( hud ) {
+        hud->begin();
+    }
     // Draw each panel having render() true
+    int index = -1;
     for( const window_panel &panel : mgr.get_current_layout().panels() ) {
+        ++index;
         if( panel.render() ) {
             // height clamped to window height.
             int h = std::min( panel.get_height(), TERMY - y );
@@ -3373,17 +3386,29 @@ void game::draw_panels( bool force_draw )
             }
             h += spacer;
             if( panel.toggle && panel.render() && h > 0 ) {
+                const point panel_pos( sidebar_right ? TERMX - panel.get_width() : 0, y );
                 if( panel.always_draw || draw_this_turn ) {
-                    catacurses::window w = catacurses::newwin( h, panel.get_width(),
-                                           point( sidebar_right ? TERMX - panel.get_width() : 0, y ) );
-                    int tmp_h = panel.draw( { u, w, panel.get_widget() } );
+                    catacurses::window w = catacurses::newwin( h, panel.get_width(), panel_pos );
+                    draw_args args( u, w, panel.get_widget() );
+                    std::string rml;
+                    args.rml = hud ? &rml : nullptr;
+                    int tmp_h = panel.draw( args );
+                    if( hud ) {
+                        hud->set_content( index, rml );
+                    }
                     h += tmp_h;
                     // lines skipped for rendering -> reclaim space in the sidebar
                     if( tmp_h < 0 ) {
+                        if( hud ) {
+                            hud->place( index, panel_pos, point( panel.get_width(), h ) );
+                        }
                         y += h;
                         log_height -= tmp_h;
                         continue;
                     }
+                }
+                if( hud ) {
+                    hud->place( index, panel_pos, point( panel.get_width(), h ) );
                 }
                 if( show_panel_adm ) {
                     const std::string panel_name = panel.get_name();
@@ -3411,6 +3436,9 @@ void game::draw_panels( bool force_draw )
                 y += h;
             }
         }
+    }
+    if( hud ) {
+        hud->finish();
     }
     previous_turn = current_turn;
 }

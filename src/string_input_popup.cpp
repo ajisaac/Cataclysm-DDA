@@ -12,6 +12,8 @@
 #include "output.h"
 #include "point.h"
 #include "ret_val.h"
+#include "rml_markup.h"
+#include "rml_ui.h"
 #include "translation.h"
 #include "translations.h"
 #include "try_parse_integer.h"
@@ -30,9 +32,43 @@
 #endif
 
 #include <algorithm>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
+
+// The popup's document. string_input_popup keeps the text editing, and pushes
+// what to show here before each redraw.
+class string_input_popup_rml : public rml_ui::document
+{
+    public:
+        string_input_popup_rml() : rml_ui::document( "string_input_popup.rml" ) {}
+
+        // Show this content in the element with this id, hidden if empty
+        void show( const std::string &id, const std::string &rml ) {
+            set_class( id, "hidden", rml.empty() );
+            std::string &last = shown[id];
+            if( last != rml ) {
+                last = rml;
+                set_inner_rml( id, rml );
+            }
+        }
+
+        void show_entry_width( const std::string &style ) {
+            if( style != entry_style ) {
+                entry_style = style;
+                set_attribute( "entry", "style", style );
+            }
+        }
+
+        void scroll_description( rml_ui::scroll how ) {
+            scroll( "description", how );
+        }
+
+    private:
+        std::map<std::string, std::string> shown;
+        std::string entry_style;
+};
 
 string_input_popup::string_input_popup() = default;
 
@@ -324,6 +360,40 @@ void string_input_popup::draw( ui_adaptor *const ui, const utf8_wrapper &ret,
     }
 }
 
+void string_input_popup::update_rml( string_input_popup_rml &doc, const utf8_wrapper &ret,
+                                     const utf8_wrapper &edit ) const
+{
+    doc.show( "title", _title.empty() ? std::string() :
+              rml_ui::markup_to_rml( _title, _title_color ) );
+    doc.show( "description", _description.empty() ? std::string() :
+              rml_ui::markup_to_rml( _description, _desc_color ) );
+
+    // What was typed shows as typed, with the caret on the character at
+    // _position, or on a blank after the end. Text being composed in an IME
+    // shows at the caret instead.
+    const size_t position = static_cast<size_t>( std::clamp( _position, 0,
+                            static_cast<int>( ret.length() ) ) );
+    const std::string string_classes = rml_ui::color_to_rml_classes( _string_color );
+    const std::string caret_classes = rml_ui::color_to_rml_classes( _cursor_color );
+    std::string caret;
+    std::string after;
+    if( !edit.empty() ) {
+        caret = rml_ui::escape_rml( edit.str() );
+        after = ret.substr( position ).str();
+    } else if( position < ret.length() ) {
+        caret = rml_ui::escape_rml( ret.substr( position, 1 ).str() );
+        after = ret.substr( position + 1 ).str();
+    } else {
+        caret = "&nbsp;";
+    }
+    doc.show( "entry", "<span class=\"" + string_classes + "\">" +
+              rml_ui::escape_rml( ret.substr( 0, position ).str() ) + "</span><span class=\"" +
+              caret_classes + "\">" + caret + "</span><span class=\"" + string_classes + "\">" +
+              rml_ui::escape_rml( after ) + "</span>" );
+    // As wide as the field was in console cells; see input_popup.cpp for the factor
+    doc.show_entry_width( string_format( "min-width: %.1fem;", _width * 0.56f ) );
+}
+
 void string_input_popup::query( const bool loop, const bool draw_only )
 {
     query_string( loop, draw_only );
@@ -386,7 +456,16 @@ const std::string &string_input_popup::query_string( const bool loop, const bool
         create_context();
     }
 
-    if( desc_view_ptr ) {
+    // A popup is drawn with RmlUi, for as long as this query runs. An entry
+    // line embedded in a window(), or only drawn, stays on the cell grid.
+    std::unique_ptr<string_input_popup_rml> doc;
+    if( !draw_only && !custom_window ) {
+        doc = std::make_unique<string_input_popup_rml>();
+        if( !_description.empty() ) {
+            ctxt->register_action( "PAGE_UP" );
+            ctxt->register_action( "PAGE_DOWN" );
+        }
+    } else if( desc_view_ptr ) {
         desc_view_ptr->set_up_navigation( *ctxt, scrolling_key_scheme::no_scheme, true );
     }
 
@@ -397,19 +476,6 @@ const std::string &string_input_popup::query_string( const bool loop, const bool
         _position = ret.length();
     }
     const int scrmax = std::max( 0, _endx - _startx );
-
-    std::unique_ptr<ui_adaptor> ui;
-    if( !draw_only && !custom_window ) {
-        ui = std::make_unique<ui_adaptor>();
-        ui->position_from_window( w_full );
-        ui->on_screen_resize( [this]( ui_adaptor & ui ) {
-            create_window();
-            ui.position_from_window( w_full );
-        } );
-        ui->on_redraw( [&]( ui_adaptor & ui ) {
-            draw( &ui, ret, edit );
-        } );
-    }
 
     int ch = 0;
 
@@ -452,7 +518,8 @@ const std::string &string_input_popup::query_string( const bool loop, const bool
             shift = width_before_start + width_at_start;
         }
 
-        if( ui ) {
+        if( doc ) {
+            update_rml( *doc, ret, edit );
             ui_manager::redraw();
         } else {
             draw( nullptr, ret, edit );
@@ -481,7 +548,10 @@ const std::string &string_input_popup::query_string( const bool loop, const bool
             continue;
         }
 
-        if( desc_view_ptr && desc_view_ptr->handle_navigation( action, *ctxt ) ) {
+        if( doc && !_description.empty() && ( action == "PAGE_UP" || action == "PAGE_DOWN" ) ) {
+            doc->scroll_description( action == "PAGE_UP" ? rml_ui::scroll::page_up :
+                                     rml_ui::scroll::page_down );
+        } else if( !doc && desc_view_ptr && desc_view_ptr->handle_navigation( action, *ctxt ) ) {
             // NO FURTHER ACTION REQUIRED
         } else if( action == "TEXT.QUIT" ) {
 #if defined(__ANDROID__)

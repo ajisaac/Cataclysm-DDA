@@ -233,6 +233,12 @@ class ui_adaptor
         static void invalidate( const rectangle<point> &rect, bool reenable_uis_below );
         static bool has_imgui();
         static bool has_rml();
+        /**
+         * Whether a UI that draws, and is not RmlUi, is above this one. RmlUi
+         * draws after everything else, so an RmlUi document under such a UI
+         * is hidden rather than drawn over it.
+         */
+        bool has_non_rml_above() const;
         static void redraw();
         static void redraw_invalidated();
         static void screen_resized();

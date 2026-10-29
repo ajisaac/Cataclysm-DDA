@@ -31,6 +31,7 @@
 #include "panels.h"
 #include "pimpl.h"
 #include "point.h"
+#include "rml_markup.h"
 #include "string_formatter.h"
 #include "talker.h"
 #include "translations.h"
@@ -1026,31 +1027,19 @@ int widget::custom_draw_multiline( const std::string &widget_string, const catac
     return row_num;
 }
 
-// Drawing function, provided as a callback to the window_panel constructor.
-// Handles rendering a widget's content into a window panel.
-static int custom_draw_func( const draw_args &args )
+// The text a widget's panel shows, one line per row of the panel, within widt
+// columns. height_diff is set to the rows the panel gives back to the sidebar
+// for parts that turned out empty. Given rml, the panel's RML goes there too,
+// built from the same rows so that both skip the same ones.
+static std::string panel_text( const avatar &u, widget *wgt, const int widt, int &height_diff,
+                               std::string *rml )
 {
-    const avatar &u = args._ava;
-    const catacurses::window &w = args._win;
-    widget *wgt = args.get_widget();
-
-    // Get full window width
-    const int width = catacurses::getmaxx( w );
-    // Leave 1 character space for margin on left and right
-    const int margin = 1;
-    const int widt = width - 2 * margin;
     // Whether to subtract height lines from the drawn panel space
     const bool disable_empty = wgt->has_flag( json_flag_W_DISABLED_WHEN_EMPTY );
-
-    // Quit if there is nothing to draw or no space to draw it
-    if( wgt == nullptr || width <= 0 ) {
-        return 0;
-    }
-
-    int height_diff = 0;
     const bool skip_pad = wgt->has_flag( json_flag_W_NO_PADDING );
 
-    werase( w );
+    height_diff = 0;
+    std::vector<std::string> rows;
     if( wgt->_style == "sidebar" ) {
         // noop
     } else if( wgt->_style == "layout" ) {
@@ -1058,6 +1047,7 @@ static int custom_draw_func( const draw_args &args )
             // Layout widgets in rows
             std::vector<string_id<widget>> widgets = wgt->widgets( !wgt->_clauses.empty() );
             int row_num = 0;
+            std::string rml_rows;
             for( const widget_id &row_wid : widgets ) {
                 widget row_widget = row_wid.obj();
 
@@ -1067,9 +1057,17 @@ static int custom_draw_func( const draw_args &args )
                     // reclaim the skipped height in the sidebar
                     height_diff -= row_widget._height;
                 } else {
-                    // draw normally
-                    row_num = widget::custom_draw_multiline( txt, w, margin, widt, row_num );
+                    rows.push_back( txt );
+                    row_num += static_cast<int>( std::count( txt.begin(), txt.end(), '\n' ) ) + 1;
+                    if( rml != nullptr ) {
+                        const std::string row_rml = row_widget.layout_rml( u, widt );
+                        rml_rows += "<div class=\"w-row\">" +
+                                    ( row_rml.empty() ? "&nbsp;" : row_rml ) + "</div>";
+                    }
                 }
+            }
+            if( rml != nullptr ) {
+                *rml = "<div class=\"w-rows\">" + rml_rows + "</div>";
             }
 
             if( wgt->has_flag( json_flag_W_DYNAMIC_HEIGHT ) ) {
@@ -1089,8 +1087,10 @@ static int custom_draw_func( const draw_args &args )
                 // reclaim the skipped height in the sidebar
                 height_diff -= wgt->_height;
             } else {
-                // draw normally
-                widget::custom_draw_multiline( txt, w, margin, widt, 0 );
+                rows.push_back( txt );
+                if( rml != nullptr ) {
+                    *rml = wgt->layout_rml( u, widt );
+                }
             }
         }
     } else {
@@ -1100,9 +1100,41 @@ static int custom_draw_func( const draw_args &args )
             // reclaim the skipped height in the sidebar
             height_diff -= wgt->_height;
         } else {
-            // draw normally
-            widget::custom_draw_multiline( txt, w, margin, widt, 0 );
+            rows.push_back( txt );
+            if( rml != nullptr ) {
+                *rml = wgt->layout_rml( u, widt );
+            }
         }
+    }
+    return string_join( rows, "\n" );
+}
+
+// Drawing function, provided as a callback to the window_panel constructor.
+// Handles rendering a widget's content into a window panel, and for the
+// RmlUi sidebar when it asks, into RML.
+static int custom_draw_func( const draw_args &args )
+{
+    const avatar &u = args._ava;
+    const catacurses::window &w = args._win;
+    widget *wgt = args.get_widget();
+
+    // Get full window width
+    const int width = catacurses::getmaxx( w );
+    // Leave 1 character space for margin on left and right
+    const int margin = 1;
+    const int widt = width - 2 * margin;
+
+    // Quit if there is nothing to draw or no space to draw it
+    if( wgt == nullptr || width <= 0 ) {
+        return 0;
+    }
+
+    int height_diff = 0;
+    const std::string text = panel_text( u, wgt, widt, height_diff, args.rml );
+
+    werase( w );
+    if( wgt->_style != "sidebar" ) {
+        widget::custom_draw_multiline( text, w, margin, widt, 0 );
     }
     wnoutrefresh( w );
 
@@ -1999,6 +2031,97 @@ std::string widget::layout( const avatar &ava, unsigned int max_width, int label
     }
     return ret.find( '\n' ) != std::string::npos || max_width == 0 ?
            ret : trim_by_length( ret, max_width );
+}
+
+// A graph widget's value as a bar, filled as far as graph() fills its symbols
+static std::string graph_bar_rml( widget &wgt, const int value )
+{
+    const int depth = utf8_width( wgt._symbols ) - 1;
+    const int max_graph_val = wgt._width * depth;
+    double fraction = 0.0;
+    if( wgt._var_max > 0 && wgt._var_max != INT_MAX ) {
+        fraction = static_cast<double>( value ) / wgt._var_max;
+    } else if( max_graph_val > 0 ) {
+        fraction = static_cast<double>( value ) / max_graph_val;
+    }
+    fraction = std::clamp( fraction, 0.0, 1.0 );
+    const nc_color color = wgt.value_color( value );
+    const std::string fill = color == c_unset ? std::string() :
+                             rml_ui::color_to_rml_fill_class( color );
+    // As wide as the graph's symbols were, in roughly character widths
+    return string_format( "<div class=\"w-bar\" style=\"width: %.1fem;\">"
+                          "<div class=\"w-fill %s\" style=\"width: %.0f%%;\"></div></div>",
+                          std::max( 1, wgt._width ) * 0.55, fill, fraction * 100.0 );
+}
+
+std::string widget::layout_rml( const avatar &ava, const unsigned int max_width )
+{
+    if( _style == "layout" ) {
+        std::vector<string_id<widget>> wgts = widgets( !_clauses.empty() );
+        if( wgts.empty() ) {
+            return std::string();
+        }
+        if( _arrange == "rows" ) {
+            std::string ret = "<div class=\"w-rows\">";
+            for( const widget_id &wid : wgts ) {
+                widget cur_child = wid.obj();
+                const std::string child = cur_child.layout_rml( ava, max_width );
+                // An empty row still takes its line, as in layout()
+                ret += "<div class=\"w-row\">" + ( child.empty() ? "&nbsp;" : child ) + "</div>";
+            }
+            return ret + "</div>";
+        }
+        // Columns share the width; with "minimum_columns", ones with a set width
+        // keep it and the last takes what is left
+        const int num_widgets = wgts.size();
+        const int child_width = ( static_cast<int>( max_width ) - _padding * ( num_widgets - 1 ) ) /
+                                num_widgets;
+        std::string ret = "<div class=\"w-cols\">";
+        for( size_t i = 0; i < wgts.size(); i++ ) {
+            widget cur_child = wgts[i].obj();
+            std::string style;
+            if( _arrange == "minimum_columns" && cur_child._width > 0 && i + 1 < wgts.size() ) {
+                style = string_format( " style=\"flex: 0 0 auto; min-width: %.1fem;\"",
+                                       cur_child._width * 0.55 );
+            }
+            const int width = cur_child._width > 0 ? cur_child._width : child_width;
+            ret += "<div class=\"w-col\"" + style + ">" +
+                   cur_child.layout_rml( ava, std::max( width, 0 ) ) + "</div>";
+        }
+        return ret + "</div>";
+    }
+
+    // Not a layout: a label, with the value as text, or as a bar for a
+    // horizontal graph. Skipped when empty and asked to, as in layout().
+    const std::string shown = show( ava, max_width );
+    if( has_flag( json_flag_W_DISABLED_WHEN_EMPTY ) &&
+        string_empty_or_whitespace( remove_color_tags( shown ) ) ) {
+        return std::string();
+    }
+
+    std::string value;
+    if( _style == "graph" && _arrange != "rows" ) {
+        value = graph_bar_rml( *this, get_var_value( ava ) );
+    } else {
+        // No more lines than layout() shows; several mean something drawn in
+        // characters, like the body graph, which wants the monospace font
+        std::vector<std::string> lines = string_split( shown, '\n' );
+        if( _height > 0 && lines.size() > static_cast<size_t>( _height ) ) {
+            lines.resize( _height );
+        }
+        value = string_format( "<span class=\"w-value%s\">%s</span>",
+                               lines.size() > 1 ? " w-pre" : "",
+                               rml_ui::markup_to_rml( string_join( lines, "\n" ) ) );
+    }
+
+    std::string label;
+    if( !has_flag( json_flag_W_LABEL_NONE ) && !_label.empty() ) {
+        label = "<span class=\"w-label\">" + rml_ui::markup_to_rml( _label.translated() ) +
+                "</span>";
+    }
+    const char *align = _text_align == widget_alignment::LEFT ? "left" :
+                        _text_align == widget_alignment::CENTER ? "center" : "right";
+    return string_format( "<div class=\"w-leaf align-%s\">%s%s</div>", align, label, value );
 }
 
 std::string format_widget_multiline( const std::vector<std::string> &keys, int max_height,

@@ -43,12 +43,24 @@ std::string markup_to_rml( std::string_view text, const nc_color &base_color,
                            report_color_error color_error = report_color_error::yes );
 
 /**
+ * Escape text to show exactly as written, color tags and all -- for what a
+ * player typed, say. Newlines still become `<br/>`.
+ */
+std::string escape_rml( std::string_view text );
+
+/**
  * The RML classes for one color, mapped the way catacurses::wattron() does:
  * "fg-NAME", plus " bg-NAME" unless the background is the default black.
  * NAME is the lowercased palette entry from colors.json, e.g. "lred" or
  * "dgray". Bold brightens the foreground and blink the background.
  */
 std::string color_to_rml_classes( const nc_color &color );
+
+/**
+ * The class that fills an element's background with this color's foreground,
+ * "bg-NAME" -- for bars and swatches colored by game value.
+ */
+std::string color_to_rml_fill_class( const nc_color &color );
 
 /**
  * RCSS defining every class color_to_rml_classes() can return, from the

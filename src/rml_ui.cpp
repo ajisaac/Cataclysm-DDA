@@ -219,23 +219,6 @@ const Rml::SharedPtr<Rml::StyleSheetContainer> &get_palette_sheet()
     return palette_sheet;
 }
 
-/// The main menu's "<M|m>OTD" labels, split the way shortcut_text() splits
-/// them, with the hotkey in a span the replica's stylesheet can accent.
-std::string hotkey_label_to_rml( const std::string &label )
-{
-    const size_t pos = label.find_first_of( '<' );
-    const size_t pos_end = label.find_first_of( '>' );
-    if( pos_end == std::string::npos || pos >= pos_end ) {
-        return rml_ui::markup_to_rml( label );
-    }
-    const size_t sep = std::min( label.find_first_of( '|', pos ), pos_end );
-    return rml_ui::markup_to_rml( label.substr( 0, pos ) ) +
-           "<span class=\"key\">" +
-           rml_ui::markup_to_rml( label.substr( pos + 1, sep - pos - 1 ) ) +
-           "</span>" +
-           rml_ui::markup_to_rml( label.substr( pos_end + 1 ) );
-}
-
 } // namespace
 
 namespace rml_ui
@@ -388,11 +371,13 @@ void end_redraw_pass()
         return;
     }
     // A document that was not redrawn this pass is below a disable_uis_below
-    // adaptor, so it should not be seen.
+    // adaptor, so it should not be seen; nor should one under a catacurses or
+    // ImGui UI, which RmlUi would otherwise draw over.
     for( document *doc : live_documents ) {
         Rml::ElementDocument *element = doc->get();
         const bool wanted = std::find( pass_documents.begin(), pass_documents.end(),
-                                       doc ) != pass_documents.end();
+                                       doc ) != pass_documents.end() &&
+                            !doc->adaptor->has_non_rml_above();
         if( !element || element->IsVisible() == wanted ) {
             continue;
         }
@@ -468,6 +453,13 @@ void render()
     SDL_SetRenderDrawBlendMode( saved_renderer, saved_blend );
     SDL_SetRenderLogicalPresentation( saved_renderer, saved_logical_w, saved_logical_h,
                                       saved_presentation );
+}
+
+void release_gpu_resources()
+{
+    if( initialised ) {
+        Rml::ReleaseTextures( render_interface.get() );
+    }
 }
 
 bool active()
@@ -621,6 +613,23 @@ void document::focus( const std::string &id )
     pending_focus = id;
 }
 
+void document::blur( const std::string &id )
+{
+    if( pending_focus == id ) {
+        pending_focus.clear();
+    }
+    if( Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr ) {
+        element->Blur();
+    }
+}
+
+void document::update_layout()
+{
+    if( doc ) {
+        doc->UpdateDocument();
+    }
+}
+
 void document::scroll( const std::string &id, rml_ui::scroll how )
 {
     Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr;
@@ -648,38 +657,6 @@ void document::scroll( const std::string &id, rml_ui::scroll how )
         case rml_ui::scroll::page_down:
             element->SetScrollTop( element->GetScrollTop() + page );
             break;
-    }
-}
-
-main_menu_replica::main_menu_replica() : document( "main_menu_replica.rml" ) {}
-
-void main_menu_replica::update( const std::vector<std::string> &items, int selected )
-{
-    Rml::ElementDocument *menu = get();
-    Rml::Element *container = menu ? menu->GetElementById( "items" ) : nullptr;
-    if( !container ) {
-        return;
-    }
-
-    if( items != cached_items ) {
-        while( Rml::Element *child = container->GetFirstChild() ) {
-            container->RemoveChild( child );
-        }
-        for( const std::string &label : items ) {
-            Rml::ElementPtr element = menu->CreateElement( "div" );
-            element->SetClass( "item", true );
-            element->SetInnerRML( hotkey_label_to_rml( label ) );
-            container->AppendChild( std::move( element ) );
-        }
-        cached_items = items;
-    }
-
-    // SetClass() is a no-op when the class is already in that state.
-    const int count = static_cast<int>( container->GetNumChildren() );
-    for( int i = 0; i < count; ++i ) {
-        if( Rml::Element *child = container->GetChild( i ) ) {
-            child->SetClass( "selected", i == selected );
-        }
     }
 }
 

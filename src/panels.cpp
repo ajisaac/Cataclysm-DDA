@@ -37,6 +37,8 @@
 #include "overmapbuffer.h"
 #include "path_info.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "sdltiles.h"
 #include "string_formatter.h"
 #include "translations.h"
 #include "type_id.h"
@@ -333,6 +335,20 @@ static void draw_messages( const draw_args &args )
 {
     const catacurses::window &w = args._win;
 
+    // Before display_messages(), which marks the recent ones seen. The panel
+    // clips whatever does not fit, at the top unless the log runs from there.
+    if( args.rml != nullptr ) {
+        std::vector<std::string> lines = Messages::sidebar_markup( getmaxy( w ) );
+        if( !log_from_top ) {
+            std::reverse( lines.begin(), lines.end() );
+        }
+        *args.rml = log_from_top ? "<div class=\"log\">" : "<div class=\"log from-bottom\">";
+        for( const std::string &line : lines ) {
+            *args.rml += "<div>" + rml_ui::markup_to_rml( line ) + "</div>";
+        }
+        *args.rml += "</div>";
+    }
+
     werase( w );
     int line = getmaxy( w ) - 1;
     int maxlength = getmaxx( w );
@@ -347,6 +363,89 @@ static void draw_mminimap( const draw_args &args )
     werase( w );
     g->draw_pixel_minimap( w );
     wnoutrefresh( w );
+}
+
+// =======
+// RML HUD
+// =======
+
+static sidebar_hud *current_hud = nullptr;
+
+sidebar_hud::sidebar_hud() : rml_ui::document( "sidebar.rml" )
+{
+    // Without RmlUi, as in tests, draw_panels() need not feed it at all
+    if( get() != nullptr ) {
+        current_hud = this;
+    }
+}
+
+sidebar_hud::~sidebar_hud()
+{
+    if( current_hud == this ) {
+        current_hud = nullptr;
+    }
+}
+
+sidebar_hud *sidebar_hud::current()
+{
+    return current_hud;
+}
+
+void sidebar_hud::begin()
+{
+    for( auto &entry : panels ) {
+        entry.second.placed = false;
+    }
+}
+
+void sidebar_hud::place( const int index, const point &pos, const point &size )
+{
+    panel &p = panels[index];
+    p.pos = pos;
+    p.size = size;
+    p.placed = true;
+}
+
+void sidebar_hud::set_content( const int index, const std::string &rml )
+{
+    panels[index].rml = rml;
+}
+
+void sidebar_hud::finish()
+{
+    for( auto it = panels.begin(); it != panels.end(); ) {
+        it = it->second.placed ? std::next( it ) : panels.erase( it );
+    }
+
+    // Console cells are in display buffer pixels, which is shown at the same
+    // whole multiple of its size as ImGui is
+    const float scale = rml_ui::imgui_px_scale();
+    const window_dimensions cell = get_window_dimensions( point::zero, point( 1, 1 ) );
+    const float cell_w = cell.window_size_pixel.x * scale;
+    const float cell_h = cell.window_size_pixel.y * scale;
+    // A row per cell, with glyphs no wider than a cell: the monospace font's
+    // are half as wide as they are tall
+    const float font_size = std::min( cell_h * 0.9f, cell_w * 1.9f );
+
+    std::string rml = string_format(
+                          "<div id=\"hud\" style=\"font-size: %.1fpx; line-height: %.1fpx;\">",
+                          font_size, cell_h );
+    for( const auto &entry : panels ) {
+        const panel &p = entry.second;
+        const window_dimensions dim = get_window_dimensions( p.pos, p.size );
+        rml += string_format(
+                   "<div class=\"panel%s\" style=\"left: %.0fpx; top: %.0fpx; width: %.0fpx; "
+                   "height: %.0fpx; padding: 0 %.0fpx;\">", p.rml.empty() ? " empty" : "",
+                   dim.window_pos_pixel.x * scale, dim.window_pos_pixel.y * scale,
+                   dim.window_size_pixel.x * scale, dim.window_size_pixel.y * scale, cell_w );
+        rml += p.rml + "</div>";
+    }
+    rml += "</div>";
+
+    if( rml != shown ) {
+        shown = rml;
+        set_inner_rml( "root", rml );
+    }
 }
 
 // ============

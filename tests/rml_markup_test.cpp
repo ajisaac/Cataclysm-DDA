@@ -57,6 +57,13 @@ TEST_CASE( "rml_markup_turns_color_tags_into_spans", "[rml]" )
     }
 }
 
+TEST_CASE( "rml_escape_keeps_text_as_written", "[rml]" )
+{
+    CHECK( rml_ui::escape_rml( "<color_red>a & b</color>" ) ==
+           "&lt;color_red&gt;a &amp; b&lt;/color&gt;" );
+    CHECK( rml_ui::escape_rml( "one\ntwo" ) == "one<br/>two" );
+}
+
 TEST_CASE( "rml_markup_maps_colors_to_palette_classes", "[rml]" )
 {
     CHECK( rml_ui::color_to_rml_classes( c_red ) == "fg-red" );
@@ -67,6 +74,9 @@ TEST_CASE( "rml_markup_maps_colors_to_palette_classes", "[rml]" )
     CHECK( rml_ui::color_to_rml_classes( c_white_red ) == "fg-white bg-red" );
     // Blink selects the bright background.
     CHECK( rml_ui::color_to_rml_classes( i_white ) == "fg-black bg-white" );
+    // A fill takes the foreground color, ignoring the background.
+    CHECK( rml_ui::color_to_rml_fill_class( c_light_red ) == "bg-lred" );
+    CHECK( rml_ui::color_to_rml_fill_class( c_white_red ) == "bg-white" );
 }
 
 TEST_CASE( "rml_palette_rcss_defines_every_class", "[rml]" )

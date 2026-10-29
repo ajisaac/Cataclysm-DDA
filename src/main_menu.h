@@ -15,6 +15,12 @@
 #include "point.h"
 #include "worldfactory.h"
 
+class main_menu_rml;
+
+/**
+ * The title screen, drawn with RmlUi from data/raw/rmlui/main_menu.rml. Input
+ * and actions stay here; the document only shows the state pushed to it.
+ */
 class main_menu
 {
     public:
@@ -29,8 +35,6 @@ class main_menu
         std::vector<std::string> mmenu_title;
         std::string mmenu_motd;
         std::string mmenu_credits;
-        int mmenu_motd_len;
-        int mmenu_credits_len;
         std::vector<std::string> vMenuItems; // MOTD, New Game, Load Game, etc.
         std::vector<std::string> vWorldSubItems;
         std::vector<std::string> vNewGameSubItems;
@@ -75,46 +79,15 @@ class main_menu
         int sel1 = 1;
         int sel2 = 1;
         size_t last_world_pos = 0;
+        // First of the tab's options shown, when they are too many to show at once
         int sub_opt_off = 0;
-        point LAST_TERM;
-        catacurses::window w_open;
-        point menu_offset;
         std::vector<std::string> templates;
-        int extra_w = 0;
         std::vector<save_t> savegames;
-        std::vector<std::pair<inclusive_rectangle<point>, std::pair<int, int>>> main_menu_sub_button_map;
-        std::vector<std::pair<inclusive_rectangle<point>, int>> main_menu_button_map;
 
-        /**
-         * Prints a horizontal list of options
-         *
-         * @param w_in Window we are printing in
-         * @param vItems Main menu items
-         * @param iSel Which index of vItems is selected. This menu item will be highlighted to
-         * make it stand out from the other menu items.
-         * @param offset Offset of menu items
-         * @param spacing: How many spaces to print between each menu item
-         * @returns A list of horizontal offsets, one for each menu item
-         */
-        std::vector<int> print_menu_items( const catacurses::window &w_in,
-                                           const std::vector<std::string> &vItems, size_t iSel,
-                                           point offset, int spacing = 1, bool main = false );
-
-        /**
-         * Called by @ref opening_screen, this prints all the text that you see on the main menu
-         *
-         * @param w_open Window to print menu in
-         * @param iSel which index in vMenuItems is selected
-         * @param offset Menu location in window
-         */
-        void print_menu( const catacurses::window &w_open, int iSel, const point &offset, int sel_line );
-
-        void display_text( const std::string &text, const std::string &title, int &selected );
-
-        void display_sub_menu( int sel, const point &bottom_left, int sel_line );
-
-        void init_windows();
-
+        // The options under the selected tab, as game markup, or empty for a tab without
+        std::vector<std::string> sub_options() const;
+        // Push the menu's state to its document, before a redraw
+        void show_rml( main_menu_rml &doc );
         holiday get_holiday_from_time();
 
         holiday current_holiday = holiday::none;

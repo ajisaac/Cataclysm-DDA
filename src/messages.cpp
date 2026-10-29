@@ -5,7 +5,9 @@
 #include <cmath>
 #include <deque>
 #include <iterator>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_set>
@@ -27,9 +29,11 @@
 #include "output.h"
 #include "panels.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "rml_ui.h"
 #include "rng.h"
+#include "sdltiles.h"
 #include "string_formatter.h"
-#include "string_input_popup.h"
 #include "translation.h"
 #include "translations.h"
 #include "type_id.h"
@@ -523,6 +527,61 @@ namespace Messages
 {
 namespace
 {
+// The message log screen's document. The dialog keeps the state and handles
+// the input, and pushes what to show here before each redraw.
+class message_log_rml : public rml_ui::document
+{
+    public:
+        message_log_rml() : rml_ui::document( "message_log.rml" ) {}
+
+        // Show this content in the element with this id; returns whether it changed
+        bool show( const std::string &id, const std::string &rml ) {
+            std::string &last = shown[id];
+            if( last == rml ) {
+                return false;
+            }
+            last = rml;
+            set_inner_rml( id, rml );
+            return true;
+        }
+
+        void mark( const std::string &id, const std::string &name, bool active ) {
+            set_class( id, name, active );
+        }
+
+        void place( const std::string &style ) {
+            if( style != panel_style ) {
+                panel_style = style;
+                set_attribute( "panel", "style", style );
+            }
+        }
+
+        // Scroll the list, after laying it out if its content was just set
+        void scroll_list( rml_ui::scroll how, bool after_layout = false ) {
+            if( after_layout ) {
+                update_layout();
+            }
+            scroll( "list", how );
+        }
+
+        void start_filter( const std::string &text ) {
+            set_value( "filter", text );
+            focus( "filter" );
+        }
+
+        void stop_filter() {
+            blur( "filter" );
+        }
+
+        std::optional<std::string> filter_text() const {
+            return get_value( "filter" );
+        }
+
+    private:
+        std::map<std::string, std::string> shown;
+        std::string panel_style;
+};
+
 // NOLINTNEXTLINE(cata-xy)
 class dialog
 {
@@ -530,250 +589,119 @@ class dialog
         dialog();
         void run();
     private:
-        void init( ui_adaptor &ui );
-        void show();
-        void input();
+        void show( message_log_rml &doc ) const;
+        std::string list_rml() const;
+        void input( message_log_rml &doc );
         void do_filter( const std::string &filter_str );
-        static std::vector<std::string> filter_help_text( int width );
+        static std::string filter_help_text();
 
-        const nc_color border_color;
-        const nc_color filter_color;
         const nc_color time_color;
-        const nc_color bracket_color;
         const nc_color filter_help_color;
 
-        // border_width padding_width         border_width
-        //      v           v                     v
-        //
-        //      | 12 seconds Never mind. x 2      |
-        //
-        //       '-----v---' '---------v---------'
-        //        time_width       msg_width
-        static constexpr int border_width = 1;
-        static constexpr int padding_width = 1;
-        int time_width = 0;
-        int msg_width = 0;
-
-        size_t max_lines = 0; // Max number of lines the window can show at once
-
-        int w_x = 0;
-        int w_y = 0;
-        int w_width = 0;
-        int w_height = 0; // Main window position
-        catacurses::window w; // Main window
-
-        int w_fh_x = 0;
-        int w_fh_y = 0;
-        int w_fh_width = 0;
-        int w_fh_height = 0; // Filter help window position
-        catacurses::window w_filter_help; // Filter help window
-
-        std::vector<std::string> help_text; // Folded filter help text
-
-        string_input_popup filter;
         bool filtering = false;
         std::string filter_str;
 
         input_context ctxt;
+        // For typing a filter, which the document's text field edits
+        input_context filter_ctxt;
 
-        // Message indices and folded strings
-        std::vector<std::pair<size_t, std::string>> folded_all;
-        // Indices of filtered messages
-        std::vector<size_t> folded_filtered;
-
-        size_t offset = 0; // Index of the first printed message
+        // Indices into the history of the messages shown, in display order,
+        // and their RML, rebuilt only when the filter changes
+        std::vector<size_t> filtered;
+        std::string list;
 
         bool canceled = false;
-        bool errored = false;
-
-        bool first_init = true;
 };
 } // namespace
 } // namespace Messages
 
 Messages::dialog::dialog()
-    : border_color( BORDER_COLOR ), filter_color( c_white ),
-      time_color( c_light_blue ), bracket_color( c_dark_gray ),
-      filter_help_color( c_cyan )
+    : time_color( c_light_blue ), filter_help_color( c_cyan ),
+      ctxt( "MESSAGE_LOG" ), filter_ctxt( "STRING_INPUT", keyboard_mode::keychar )
 {
+    ctxt.register_action( "UP", to_translation( "Scroll up" ) );
+    ctxt.register_action( "DOWN", to_translation( "Scroll down" ) );
+    ctxt.register_action( "PAGE_UP" );
+    ctxt.register_action( "PAGE_DOWN" );
+    ctxt.register_action( "FILTER" );
+    ctxt.register_action( "RESET_FILTER" );
+    ctxt.register_action( "QUIT" );
+    ctxt.register_action( "HELP_KEYBINDINGS" );
+    ctxt.register_action( "SCROLL_UP" );
+    ctxt.register_action( "SCROLL_DOWN" );
+
+    filter_ctxt.register_action( "TEXT.CONFIRM" );
+    filter_ctxt.register_action( "TEXT.QUIT" );
 }
 
-void Messages::dialog::init( ui_adaptor &ui )
+std::string Messages::dialog::list_rml() const
 {
+    std::vector<std::string> times;
+    times.reserve( filtered.size() );
+    for( const size_t msg_ind : filtered ) {
+        const time_point msg_time = player_messages.history( msg_ind ).timestamp_in_turns;
+        times.push_back( to_string_clipped( calendar::turn - msg_time, clipped_align::right ) );
+    }
+
+    // A time shows on the newest message of a run at that time, as the old
+    // log printed from new to old; the rest of the run are marked beside it
+    std::string rml;
+    for( size_t i = 0; i < filtered.size(); ++i ) {
+        // Wrapping below 0 lands past the end, which the size checks reject
+        const size_t newer = log_from_top ? i - 1 : i + 1;
+        const size_t older = log_from_top ? i + 1 : i - 1;
+        const bool has_newer = newer < filtered.size() && times[newer] == times[i];
+        const bool has_older = older < filtered.size() && times[older] == times[i];
+
+        const game_message &msg = player_messages.history( filtered[i] );
+        rml += has_newer || has_older ? "<div class=\"msg in-run\"><div class=\"time\">" :
+               "<div class=\"msg\"><div class=\"time\">";
+        if( !has_newer ) {
+            rml += rml_ui::markup_to_rml( times[i], time_color );
+        }
+        rml += "</div><div class=\"text\">" +
+               rml_ui::markup_to_rml( msg.get_with_count(), msgtype_to_color( msg.type, false ) ) +
+               "</div></div>";
+    }
+    return rml;
+}
+
+void Messages::dialog::show( message_log_rml &doc ) const
+{
+    // Between the sidebars where there is room, as the old window was
     const int left_panel_width = panel_manager::get_manager().get_width_left();
     const int right_panel_width = panel_manager::get_manager().get_width_right();
-    w_height = TERMY;
-    w_y = 0;
-    // try to center and not obscure sidebar
-    w_x = std::max( left_panel_width, right_panel_width );
-    w_width = TERMX - 2 * w_x;
-    if( w_width < w_height * 3 ) {
+    int w_x = std::max( left_panel_width, right_panel_width );
+    int w_width = TERMX - 2 * w_x;
+    if( w_width < TERMY * 3 ) {
         // try not to obscure sidebar
         w_x = left_panel_width;
         w_width = TERMX - left_panel_width - right_panel_width;
     }
+    const float scale = rml_ui::imgui_px_scale();
+    const window_dimensions dim = get_window_dimensions( point( w_x, 0 ), point( w_width, TERMY ) );
+    doc.place( string_format( "left: %.0fpx; top: %.0fpx; width: %.0fpx; height: %.0fpx;",
+                              dim.window_pos_pixel.x * scale, dim.window_pos_pixel.y * scale,
+                              dim.window_size_pixel.x * scale, dim.window_size_pixel.y * scale ) );
 
-    w = catacurses::newwin( w_height, w_width, point( w_x, w_y ) );
-
-    if( first_init ) {
-        ctxt = input_context( "MESSAGE_LOG" );
-        ctxt.register_action( "UP", to_translation( "Scroll up" ) );
-        ctxt.register_action( "DOWN", to_translation( "Scroll down" ) );
-        ctxt.register_action( "PAGE_UP" );
-        ctxt.register_action( "PAGE_DOWN" );
-        ctxt.register_action( "FILTER" );
-        ctxt.register_action( "RESET_FILTER" );
-        ctxt.register_action( "QUIT" );
-        ctxt.register_action( "HELP_KEYBINDINGS" );
-        ctxt.register_action( "SCROLL_UP" );
-        ctxt.register_action( "SCROLL_DOWN" );
-
-        // Calculate time string display width. The translated strings are expected to
-        // be aligned, so we choose an arbitrary duration here to calculate the width.
-        time_width = utf8_width( to_string_clipped( 1_turns, clipped_align::right ) );
+    // A new list starts at its newest end
+    if( doc.show( "list", list ) ) {
+        doc.scroll_list( log_from_top ? rml_ui::scroll::top : rml_ui::scroll::bottom, true );
     }
 
-    if( border_width * 2 + time_width + padding_width >= w_width ||
-        border_width * 2 >= w_height ) {
-
-        errored = true;
-        return;
-    }
-    msg_width = w_width - border_width * 2 - time_width - padding_width;
-    max_lines = static_cast<size_t>( w_height - border_width * 2 );
-
-    // Initialize filter help text and window
-    w_fh_width = w_width;
-    w_fh_x = w_x;
-    help_text = filter_help_text( w_fh_width - border_width * 2 );
-    w_fh_height = help_text.size() + border_width * 2;
-    w_fh_y = w_y + w_height - w_fh_height;
-    w_filter_help = catacurses::newwin( w_fh_height, w_fh_width, point( w_fh_x, w_fh_y ) );
-
-    // Initialize filter input
-    filter.window( w_filter_help, point( border_width + 2, w_fh_height - 1 ),
-                   w_fh_width - border_width - 2 );
-
-    // Initialize folded messages
-    folded_all.clear();
-    folded_filtered.clear();
-    const size_t msg_count = size();
-    for( size_t ind = 0; ind < msg_count; ++ind ) {
-        const size_t msg_ind = log_from_top ? ind : msg_count - 1 - ind;
-        const game_message &msg = player_messages.history( msg_ind );
-        const auto &folded = foldstring( msg.get_with_count(), msg_width );
-        for( const auto &it : folded ) {
-            folded_filtered.emplace_back( folded_all.size() );
-            folded_all.emplace_back( msg_ind, it );
-        }
-    }
-
-    do_filter( filter_str );
-
-    ui.position_from_window( w );
-
-    first_init = false;
-}
-
-void Messages::dialog::show()
-{
-    werase( w );
-    draw_border( w, border_color );
-
-    scrollbar()
-    .offset_x( 0 )
-    .offset_y( border_width )
-    .content_size( folded_filtered.size() )
-    .viewport_pos( offset )
-    .viewport_size( max_lines )
-    .apply( w );
-
-    // Range of window lines to print
-    size_t line_from = 0;
-    size_t line_to;
-    if( offset < folded_filtered.size() ) {
-        line_to = std::min( max_lines, folded_filtered.size() - offset );
-    } else {
-        line_to = 0;
-    }
-
-    if( !log_from_top ) {
-        // Always print from new to old
-        std::swap( line_from, line_to );
-    }
-    std::string prev_time_str;
-    bool printing_range = false;
-    for( size_t line = line_from; line != line_to; ) {
-        // Decrement here if printing from bottom to get the correct line number
-        if( !log_from_top ) {
-            --line;
-        }
-
-        const size_t folded_ind = offset + line;
-        const size_t msg_ind = folded_all[folded_filtered[folded_ind]].first;
-        const game_message &msg = player_messages.history( msg_ind );
-
-        nc_color col = msgtype_to_color( msg.type, false );
-
-        // Print current line
-        print_colored_text( w, point( border_width + time_width + padding_width, border_width + line ),
-                            col, col, folded_all[folded_filtered[folded_ind]].second );
-
-        // Generate aligned time string
-        const time_point msg_time = msg.timestamp_in_turns;
-        const std::string time_str = to_string_clipped( calendar::turn - msg_time, clipped_align::right );
-
-        if( time_str != prev_time_str ) {
-            // Time changed, print time string
-            prev_time_str = time_str;
-            right_print( w, border_width + line, border_width + msg_width + padding_width,
-                         time_color, time_str );
-            printing_range = false;
-        } else {
-            // Print line brackets to mark ranges of time
-            if( printing_range ) {
-                const size_t last_line = log_from_top ? line - 1 : line + 1;
-                mvwputch( w, point( border_width + time_width - 1, border_width + last_line ), bracket_color,
-                          LINE_XOXO );
-            }
-            mvwputch( w, point( border_width + time_width - 1, border_width + line ), bracket_color,
-                      log_from_top ? LINE_XXOO : LINE_OXXO );
-            printing_range = true;
-        }
-
-        // Decrement for !log_from_top is done at the beginning
-        if( log_from_top ) {
-            ++line;
-        }
-    }
-
+    doc.mark( "help", "hidden", !filtering );
+    doc.mark( "filter-row", "hidden", !filtering );
     if( filtering ) {
-        wnoutrefresh( w );
-        // Print the help text
-        werase( w_filter_help );
-        draw_border( w_filter_help, border_color );
-        for( size_t line = 0; line < help_text.size(); ++line ) {
-            nc_color col = filter_help_color;
-            print_colored_text( w_filter_help, point( border_width, border_width + line ), col, col,
-                                help_text[line] );
-        }
-        mvwprintz( w_filter_help, point( border_width, w_fh_height - 1 ), border_color, "< " );
-        mvwprintz( w_filter_help, point( w_fh_width - border_width - 2, w_fh_height - 1 ), border_color,
-                   " >" );
-        wnoutrefresh( w_filter_help );
-
-        // This line is preventing this method from being const
-        filter.query( false, true ); // Draw only
+        doc.show( "help", rml_ui::markup_to_rml( filter_help_text(), filter_help_color ) );
+        doc.show( "footer", rml_ui::markup_to_rml( string_format(
+                      _( "%s or %s to finish filtering" ), filter_ctxt.get_desc( "TEXT.CONFIRM" ),
+                      filter_ctxt.get_desc( "TEXT.QUIT" ) ) ) );
+    } else if( filter_str.empty() ) {
+        doc.show( "footer", rml_ui::markup_to_rml( string_format(
+                      _( "< Press %s to filter, %s to reset >" ),
+                      ctxt.get_desc( "FILTER" ), ctxt.get_desc( "RESET_FILTER" ) ) ) );
     } else {
-        if( filter_str.empty() ) {
-            mvwprintz( w, point( border_width, w_height - 1 ), border_color,
-                       _( "< Press %s to filter, %s to reset >" ),
-                       ctxt.get_desc( "FILTER" ), ctxt.get_desc( "RESET_FILTER" ) );
-        } else {
-            mvwprintz( w, point( border_width, w_height - 1 ), border_color, "< %s >", filter_str );
-            mvwprintz( w, point( border_width + 2, w_height - 1 ), filter_color, "%s", filter_str );
-        }
-        wnoutrefresh( w );
+        doc.show( "footer", "&lt; " + rml_ui::escape_rml( filter_str ) + " &gt;" );
     }
 }
 
@@ -791,74 +719,52 @@ void Messages::dialog::do_filter( const std::string &filter_str )
         filter_text = filter_str;
     }
 
-    // Start filtering the log
-    folded_filtered.clear();
-    for( size_t folded_ind = 0; folded_ind < folded_all.size(); ) {
-        const size_t msg_ind = folded_all[folded_ind].first;
+    // The newest first if the log runs from the top, else the oldest
+    filtered.clear();
+    const size_t msg_count = size();
+    for( size_t ind = 0; ind < msg_count; ++ind ) {
+        const size_t msg_ind = log_from_top ? ind : msg_count - 1 - ind;
         const game_message &msg = player_messages.history( msg_ind );
-        const bool match = ( !has_type_filter || filter_type == msg.type ) &&
-                           ci_find_substr( remove_color_tags( msg.get_with_count() ), filter_text ) >= 0;
-
-        // Always advance the index, but only add to filtered list if the original message matches
-        for( ; folded_ind < folded_all.size() && folded_all[folded_ind].first == msg_ind; ++folded_ind ) {
-            if( match ) {
-                folded_filtered.emplace_back( folded_ind );
-            }
+        if( ( !has_type_filter || filter_type == msg.type ) &&
+            ci_find_substr( remove_color_tags( msg.get_with_count() ), filter_text ) >= 0 ) {
+            filtered.push_back( msg_ind );
         }
     }
-
-    // Reset view
-    if( log_from_top || max_lines > folded_filtered.size() ) {
-        offset = 0;
-    } else {
-        offset = folded_filtered.size() - max_lines;
-    }
+    list = list_rml();
 }
 
-void Messages::dialog::input()
+void Messages::dialog::input( message_log_rml &doc )
 {
     canceled = false;
     if( filtering ) {
-        filter.query( false );
-        if( filter.confirmed() || filter.canceled() ) {
-            filtering = false;
+        const std::string action = filter_ctxt.handle_input();
+        // RmlUi has already applied any typing to the field, and the list
+        // follows it as it changes
+        const std::optional<std::string> text = doc.filter_text();
+        if( text && *text != filter_str ) {
+            filter_str = *text;
+            do_filter( filter_str );
         }
-        if( !filter.canceled() ) {
-            const std::string &new_filter_str = filter.text();
-            if( new_filter_str != filter_str ) {
-                filter_str = new_filter_str;
-
-                do_filter( filter_str );
-            }
-        } else {
-            filter.text( filter_str );
+        if( action == "TEXT.CONFIRM" || action == "TEXT.QUIT" ) {
+            filtering = false;
+            doc.stop_filter();
         }
     } else {
         const std::string &action = ctxt.handle_input();
-        if( ( action == "DOWN" || action == "SCROLL_DOWN" ) &&
-            offset + max_lines < folded_filtered.size() ) {
-            ++offset;
-        } else if( ( action == "UP" || action == "SCROLL_UP" ) && offset > 0 ) {
-            --offset;
+        // The wheel scrolls the list by itself, in RmlUi
+        if( action == "DOWN" ) {
+            doc.scroll_list( rml_ui::scroll::line_down );
+        } else if( action == "UP" ) {
+            doc.scroll_list( rml_ui::scroll::line_up );
         } else if( action == "PAGE_DOWN" ) {
-            if( offset + max_lines * 2 <= folded_filtered.size() ) {
-                offset += max_lines;
-            } else if( max_lines <= folded_filtered.size() ) {
-                offset = folded_filtered.size() - max_lines;
-            } else {
-                offset = 0;
-            }
+            doc.scroll_list( rml_ui::scroll::page_down );
         } else if( action == "PAGE_UP" ) {
-            if( offset >= max_lines ) {
-                offset -= max_lines;
-            } else {
-                offset = 0;
-            }
+            doc.scroll_list( rml_ui::scroll::page_up );
         } else if( action == "FILTER" ) {
             filtering = true;
+            doc.start_filter( filter_str );
         } else if( action == "RESET_FILTER" ) {
             filter_str.clear();
-            filter.text( filter_str );
             do_filter( filter_str );
         } else if( action == "QUIT" ) {
             canceled = true;
@@ -868,22 +774,16 @@ void Messages::dialog::input()
 
 void Messages::dialog::run()
 {
-    ui_adaptor ui;
-    ui.on_screen_resize( [this]( ui_adaptor & ui ) {
-        init( ui );
-    } );
-    ui.mark_resize();
-    ui.on_redraw( [this]( const ui_adaptor & ) {
-        show();
-    } );
-
-    while( !errored && !canceled ) {
+    message_log_rml doc;
+    do_filter( filter_str );
+    while( !canceled ) {
+        show( doc );
         ui_manager::redraw();
-        input();
+        input( doc );
     }
 }
 
-std::vector<std::string> Messages::dialog::filter_help_text( int width )
+std::string Messages::dialog::filter_help_text()
 {
     const char *const &help_fmt = _(
                                       "<color_light_gray>The default is to search the entire message log.  "
@@ -918,7 +818,7 @@ std::vector<std::string> Messages::dialog::filter_help_text( int width )
             }
         }
     }
-    return foldstring( string_format( help_fmt, type_text ), width );
+    return string_format( help_fmt, type_text );
 }
 
 void Messages::display_messages()
@@ -926,6 +826,27 @@ void Messages::display_messages()
     dialog dlg;
     dlg.run();
     player_messages.curmes = calendar::turn;
+}
+
+std::vector<std::string> Messages::sidebar_markup( const size_t max_messages )
+{
+    std::vector<std::string> lines;
+    for( int i = static_cast<int>( size() ) - 1; i >= 0 && lines.size() < max_messages; --i ) {
+        const game_message &m = player_messages.messages[i];
+        if( message_exceeds_ttl( m ) ) {
+            break;
+        }
+        // As in display_messages(), which only skips these when drawing upwards
+        if( !log_from_top && m.is_in_cooldown() ) {
+            continue;
+        }
+        std::string message_text = m.get_with_count();
+        if( !m.is_recent( player_messages.curmes ) ) {
+            message_text = remove_color_tags( message_text );
+        }
+        lines.push_back( colorize( message_text, m.get_color( player_messages.curmes ) ) );
+    }
+    return lines;
 }
 
 void Messages::display_messages( const catacurses::window &ipk_target, const int left,

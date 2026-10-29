@@ -1759,6 +1759,7 @@ recipe_result renderer_resource_coordinator::recipe_device_reset()
     if( imclient ) {
         imclient->destroy_backend_device_objects();
     }
+    rml_ui::release_gpu_resources();
     // SDL3 documents a device reset as invalidating every texture, so cached
     // atlas bundles are rejected by the texture-generation bump and replayed
     // explicitly below over every live tileset.

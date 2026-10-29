@@ -1,0 +1,69 @@
+<rml>
+<head>
+    <title>Text entry popup</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <style>
+        #root
+        {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #popup
+        {
+            max-width: 720dp;
+            padding: 16dp 20dp;
+            background-color: #141821f2;
+            border: 1dp #39465c;
+            border-radius: 8dp;
+        }
+        .hidden
+        {
+            display: none;
+        }
+        /* Game text lines up with spaces, so keep them. The wheel scrolls a
+           long description, as do page up and down. */
+        #description
+        {
+            white-space: pre-wrap;
+            max-height: 60vh;
+            overflow-y: auto;
+            margin-bottom: 12dp;
+        }
+        #row
+        {
+            display: flex;
+            align-items: flex-start;
+        }
+        #title
+        {
+            flex: 0 0 auto;
+            margin-right: 8dp;
+        }
+        /* string_input_popup edits the text itself; this only shows it, with
+           the caret as a span. Long text wraps rather than scrolling. */
+        #entry
+        {
+            flex: 1 1 auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            padding-bottom: 2dp;
+            border-bottom: 1dp #6d7b92;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by string_input_popup in src/string_input_popup.cpp. -->
+    <div id="root">
+        <div id="popup">
+            <div id="description" class="hidden"></div>
+            <div id="row">
+                <div id="title" class="hidden"></div>
+                <div id="entry"></div>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

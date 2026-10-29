@@ -20,6 +20,7 @@
 class JsonObject;
 class input_context;
 class scrolling_text_view;
+class string_input_popup_rml;
 class translation;
 class ui_adaptor;
 class utf8_wrapper;
@@ -27,6 +28,10 @@ struct point;
 
 /**
  * Shows a window querying the user for input.
+ *
+ * As a popup it is drawn with RmlUi (data/raw/rmlui/string_input_popup.rml),
+ * while the editing itself stays here. Given a window() instead, it prints
+ * just the entry line into that catacurses window, for screens that embed it.
  *
  * Returns the input that was entered. If the user cancels the input (e.g. by pressing Escape),
  * an empty string is returned. An empty string may also be returned when the user does not enter
@@ -108,6 +113,9 @@ class string_input_popup // NOLINT(cata-xy)
         void add_to_history( const std::string &value ) const;
         void update_input_history( utf8_wrapper &ret, bool up );
         void draw( ui_adaptor *ui, const utf8_wrapper &ret, const utf8_wrapper &edit ) const;
+        // Push what the RmlUi popup should show, before a redraw
+        void update_rml( string_input_popup_rml &doc, const utf8_wrapper &ret,
+                         const utf8_wrapper &edit ) const;
 
     public:
         string_input_popup();

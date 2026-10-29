@@ -1,0 +1,103 @@
+<rml>
+<head>
+    <title>Message log</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <style>
+        /* #panel is placed between the sidebars, as the old log window was;
+           see Messages::dialog in src/messages.cpp. */
+        #root
+        {
+            width: 100%;
+            height: 100%;
+        }
+        .hidden
+        {
+            display: none;
+        }
+        #panel
+        {
+            position: absolute;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            padding: 10dp 14dp;
+            background-color: #10141cf5;
+            border-left: 1dp #1d2430;
+            border-right: 1dp #1d2430;
+        }
+        /* Up and down, page up and down, and the wheel scroll it. */
+        #list
+        {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+        }
+        .msg
+        {
+            display: flex;
+        }
+        /* The time shows once for a run of messages at the same time, and a
+           line beside the rest marks the run. */
+        .time
+        {
+            flex: 0 0 auto;
+            width: 9em;
+            padding-right: 8dp;
+            margin-right: 8dp;
+            text-align: right;
+            white-space: nowrap;
+        }
+        .msg.in-run .time
+        {
+            border-right: 1dp #3a4152;
+        }
+        .text
+        {
+            flex: 1 1 auto;
+            min-width: 0;
+            white-space: pre-wrap;
+        }
+        #help
+        {
+            margin-top: 8dp;
+            padding-top: 8dp;
+            border-top: 1dp #1d2430;
+            white-space: pre-wrap;
+        }
+        #footer
+        {
+            margin-top: 6dp;
+            color: #8d96a6;
+        }
+        /* Typing filters the list as it changes. */
+        input.text
+        {
+            display: block;
+            margin-top: 6dp;
+            padding: 4dp 8dp;
+            background-color: #0d1017;
+            border: 1dp #5a7aa8;
+            border-radius: 4dp;
+            color: #ffffff;
+            caret-color: #ffffff;
+        }
+        input.text selection
+        {
+            background-color: #2b3a52;
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div id="panel">
+            <div id="list"></div>
+            <div id="help" class="hidden"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter"/>
+            </div>
+            <div id="footer"></div>
+        </div>
+    </div>
+</body>
+</rml>

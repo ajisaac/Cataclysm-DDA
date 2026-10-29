@@ -1,0 +1,121 @@
+<rml>
+<head>
+    <title>Sidebar</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <style>
+        /* Each panel sits on the console cells the catacurses sidebar draws
+           it on, with a line per cell row and a font size to fit; see
+           sidebar_hud::finish() in src/panels.cpp. Inside, widgets come from
+           widget::layout_rml() in src/widget.cpp. */
+        #root
+        {
+            width: 100%;
+            height: 100%;
+        }
+        .panel
+        {
+            position: absolute;
+            box-sizing: border-box;
+            overflow: hidden;
+            background-color: #10141c;
+            border-bottom: 1px #1d2430;
+            color: #c9ccd3;
+        }
+        /* The minimap draws itself in pixels below, so let it show. */
+        .panel.empty
+        {
+            background-color: transparent;
+            border-bottom: 0px;
+        }
+
+        /* Widgets: rows stack, one line each; columns share the width. */
+        .w-row
+        {
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .w-cols
+        {
+            display: flex;
+        }
+        .w-col
+        {
+            flex: 1 1 0px;
+            min-width: 0px;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        .w-col + .w-col
+        {
+            margin-left: 0.6em;
+        }
+        /* A label, then its value: to the right of the line by default. */
+        .w-leaf
+        {
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .w-leaf.align-right
+        {
+            text-align: right;
+        }
+        .w-leaf.align-center
+        {
+            text-align: center;
+        }
+        .w-label
+        {
+            float: left;
+            margin-right: 0.4em;
+            color: #8d96a6;
+        }
+        .w-leaf.align-left .w-label
+        {
+            float: none;
+        }
+        /* Several lines of a value are drawn in characters, so keep the grid. */
+        .w-pre
+        {
+            display: inline-block;
+            text-align: left;
+            font-family: cata-mono;
+            white-space: pre;
+        }
+        /* Graphs: a bar filled to the value, in the value's color. */
+        .w-bar
+        {
+            display: inline-block;
+            vertical-align: middle;
+            height: 0.5em;
+            max-width: 100%;
+            background-color: #262d3a;
+            border-radius: 0.25em;
+        }
+        .w-fill
+        {
+            height: 100%;
+            background-color: #8fa1bd;
+            border-radius: 0.25em;
+        }
+
+        /* The message log, wrapped to the panel. */
+        .log
+        {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .log.from-bottom
+        {
+            justify-content: flex-end;
+        }
+        .log div
+        {
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+</body>
+</rml>

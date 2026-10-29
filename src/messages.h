@@ -36,6 +36,9 @@ bool has_undisplayed_messages();
 void display_messages();
 void display_messages( const catacurses::window &ipk_target, int left, int top, int right,
                        int bottom );
+// The messages display_messages() would show, newest first and at most this
+// many, as game markup. Call it before display_messages(), which marks them seen.
+std::vector<std::string> sidebar_markup( size_t max_messages );
 void serialize( JsonOut &json );
 void deserialize( const JsonObject &json );
 

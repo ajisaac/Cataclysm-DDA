@@ -97,6 +97,32 @@ std::string markup_to_rml( std::string_view text, report_color_error color_error
     return rml;
 }
 
+std::string escape_rml( std::string_view text )
+{
+    std::string rml;
+    rml.reserve( text.size() + text.size() / 4 );
+    for( const char c : text ) {
+        switch( c ) {
+            case '&':
+                rml += "&amp;";
+                break;
+            case '<':
+                rml += "&lt;";
+                break;
+            case '>':
+                rml += "&gt;";
+                break;
+            case '\n':
+                rml += "<br/>";
+                break;
+            default:
+                rml += c;
+                break;
+        }
+    }
+    return rml;
+}
+
 std::string markup_to_rml( std::string_view text, const nc_color &base_color,
                            report_color_error color_error )
 {
@@ -122,6 +148,14 @@ std::string color_to_rml_classes( const nc_color &color )
         classes += "bg-" + palette_names()[bg];
     }
     return classes;
+}
+
+std::string color_to_rml_fill_class( const nc_color &color )
+{
+    const cata_cursesport::pairs &pair =
+        cata_cursesport::colorpairs[color.to_color_pair_index()];
+    const int fg = pair.FG + ( color.is_bold() ? bright_offset : 0 );
+    return in_palette( fg ) ? "bg-" + palette_names()[fg] : std::string();
 }
 
 std::string palette_rcss()

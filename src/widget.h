@@ -345,6 +345,11 @@ class widget
         // label area, so the returned string is equal to max_width.
         std::string layout( const avatar &ava, unsigned int max_width = 0, int label_width = 0,
                             bool skip_pad = false );
+        // The same layout as RML, for the RmlUi sidebar: labels and values as
+        // elements that its stylesheet lines up, rather than padded with
+        // spaces, and graphs as bars. A widget layout() would skip for being
+        // empty gives an empty string here too.
+        std::string layout_rml( const avatar &ava, unsigned int max_width = 0 );
         // Display labeled widget, with value (number, graph, or string) from an avatar
         std::string show( const avatar &ava, unsigned int max_width );
         // Return a window_panel for rendering this widget at given width (and possibly height)

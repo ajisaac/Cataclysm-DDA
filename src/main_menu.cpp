@@ -43,11 +43,12 @@
 #include "messages.h"
 #include "music.h"
 #include "options.h"
-#include "rml_ui.h"
 #include "output.h"
 #include "overmapbuffer.h"
 #include "path_info.h"
 #include "popup.h"
+#include "rml_markup.h"
+#include "rml_ui.h"
 #include "safemode_ui.h"
 #include "scenario.h"
 #include "sdlsound.h"
@@ -100,281 +101,167 @@ void main_menu::on_error()
     sfx::play_variant_sound( "menu_error", "default", 100 );
 }
 
-//CJK characters have a width of 2, etc
-static int utf8_width_notags( const char *s )
+// The main menu's document. main_menu keeps the state and handles the input,
+// and pushes what to show here before each redraw.
+class main_menu_rml : public rml_ui::document
 {
-    int len = strlen( s );
-    const char *ptr = s;
-    int w = 0;
-    bool inside_tag = false;
-    while( len > 0 ) {
-        uint32_t ch = UTF8_getch( &ptr, &len );
-        if( ch == UNKNOWN_UNICODE ) {
-            continue;
-        }
-        if( ch == '<' ) {
-            inside_tag = true;
-        } else if( ch == '>' ) {
-            inside_tag = false;
-            continue;
-        }
-        if( inside_tag ) {
-            continue;
-        }
-        w += mk_wcwidth( ch );
-    }
-    return w;
-}
+    public:
+        main_menu_rml() : rml_ui::document( "main_menu.rml" ) {}
 
-std::vector<int> main_menu::print_menu_items( const catacurses::window &w_in,
-        const std::vector<std::string> &vItems,
-        size_t iSel, point offset, int spacing, bool main )
-{
-    const point win_offset( getbegx( w_in ), getbegy( w_in ) );
-    std::vector<int> ret;
-    std::string text;
-    for( size_t i = 0; i < vItems.size(); ++i ) {
-        if( i > 0 ) {
-            text += std::string( spacing, ' ' );
-        }
-        ret.push_back( utf8_width_notags( text.c_str() ) );
-
-        std::string temp = shortcut_text( iSel == i ? hilite( c_yellow ) : c_yellow, vItems[i] );
-        text += string_format( "[%s]", colorize( temp, iSel == i ? hilite( c_white ) : c_white ) );
-    }
-
-    int text_width = utf8_width_notags( text.c_str() );
-    if( text_width > getmaxx( w_in ) ) {
-        offset.y -= std::ceil( text_width / getmaxx( w_in ) );
-    }
-
-    std::vector<std::string> menu_txt = foldstring( text, getmaxx( w_in ), ']' );
-
-    int y_off = 0;
-    int sel_opt = 0;
-    for( const std::string &txt : menu_txt ) {
-        trim_and_print( w_in, offset + point( 0, y_off ), getmaxx( w_in ), c_white, txt );
-        if( !main ) {
-            y_off++;
-            continue;
-        }
-        std::vector<std::string> tmp_chars = utf8_display_split( remove_color_tags( txt ) );
-        for( int x = 0; static_cast<size_t>( x ) < tmp_chars.size(); x++ ) {
-            if( tmp_chars[x] == "[" ) {
-                for( int x2 = x; static_cast<size_t>( x2 ) < tmp_chars.size(); x2++ ) {
-                    if( tmp_chars[x2] == "]" ) {
-                        inclusive_rectangle<point> rec( win_offset + offset + point( x, y_off ),
-                                                        win_offset + offset + point( x2, y_off ) );
-                        main_menu_button_map.emplace_back( rec, sel_opt++ );
-                        break;
-                    }
-                }
+        // Show this content in the element with this id; returns whether it changed
+        bool show( const std::string &id, const std::string &rml ) {
+            std::string &last = shown[id];
+            if( last == rml ) {
+                return false;
             }
+            last = rml;
+            set_inner_rml( id, rml );
+            return true;
         }
-        y_off++;
-    }
 
-    return ret;
-}
+        void mark( const std::string &id, const std::string &name, bool active ) {
+            set_class( id, name, active );
+        }
 
-void main_menu::display_sub_menu( int sel, const point &bottom_left, int sel_line )
+        void scroll_text( rml_ui::scroll how ) {
+            scroll( "text", how );
+        }
+
+        // The menu bar's tab, or the shown option, that the mouse is over, or -1
+        int hovered_tab() const {
+            return hovered_child( "menu" );
+        }
+        int hovered_option() const {
+            return hovered_child( "sub" );
+        }
+
+    private:
+        std::map<std::string, std::string> shown;
+};
+
+std::vector<std::string> main_menu::sub_options() const
 {
-    main_menu_sub_button_map.clear();
-    std::vector<std::string> sub_opts;
-    int xlen = 0;
-    main_menu_opts sel_o = static_cast<main_menu_opts>( sel );
-    switch( sel_o ) {
-        case main_menu_opts::CREDITS:
-            display_text( mmenu_credits, _( "Credits" ), sel_line );
-            return;
-        case main_menu_opts::MOTD:
-            //~ Message Of The Day
-            display_text( mmenu_motd, _( "MOTD" ), sel_line );
-            return;
+    std::vector<std::string> options;
+    switch( static_cast<main_menu_opts>( sel1 ) ) {
         case main_menu_opts::SETTINGS:
-            for( int i = 0; static_cast<size_t>( i ) < vSettingsSubItems.size(); ++i ) {
-                nc_color clr = i == sel2 ? hilite( c_yellow ) : c_yellow;
-                sub_opts.push_back( shortcut_text( clr, vSettingsSubItems[i] ) );
-                int len = utf8_width( shortcut_text( clr, vSettingsSubItems[i] ), true );
-                if( len > xlen ) {
-                    xlen = len;
-                }
+            for( const std::string &item : vSettingsSubItems ) {
+                options.push_back( shortcut_text( c_yellow, item ) );
             }
             break;
         case main_menu_opts::NEWCHAR:
-            for( int i = 0; static_cast<size_t>( i ) < vNewGameSubItems.size(); i++ ) {
-                nc_color clr = i == sel2 ? hilite( c_yellow ) : c_yellow;
-                sub_opts.push_back( shortcut_text( clr, vNewGameSubItems[i] ) );
-                int len = utf8_width( shortcut_text( clr, vNewGameSubItems[i] ), true );
-                if( len > xlen ) {
-                    xlen = len;
-                }
+            for( const std::string &item : vNewGameSubItems ) {
+                options.push_back( shortcut_text( c_yellow, item ) );
             }
             break;
         case main_menu_opts::LOADCHAR:
-        case main_menu_opts::WORLD: {
-            const bool extra_opt = sel == getopt( main_menu_opts::WORLD );
-            if( extra_opt ) {
-                sub_opts.emplace_back( colorize( _( "Create World" ), sel2 == 0 ? hilite( c_yellow ) : c_yellow ) );
-                xlen = utf8_width( sub_opts.back(), true );
+        case main_menu_opts::WORLD:
+            if( sel1 == getopt( main_menu_opts::WORLD ) ) {
+                options.push_back( colorize( _( "Create World" ), c_yellow ) );
             }
-            int i = 0;
             for( const auto& [name, world] : world_generator->get_all_worlds() ) {
-                int savegames_count = world->world_saves.size();
-                nc_color clr = c_white;
-                if( name == "TUTORIAL" || name == "DEFENSE" ) {
-                    clr = c_light_cyan;
-                }
-                sub_opts.push_back( colorize( string_format( "%s (%d)", name, savegames_count ),
-                                              ( sel2 == i + ( extra_opt ? 1 : 0 ) ) ? hilite( clr ) : clr ) );
-                int len = utf8_width( sub_opts.back(), true );
-                if( len > xlen ) {
-                    xlen = len;
-                }
-                i++;
+                const nc_color clr = name == "TUTORIAL" || name == "DEFENSE" ? c_light_cyan :
+                                     c_white;
+                const int saves = static_cast<int>( world->world_saves.size() );
+                options.push_back( colorize( string_format( "%s (%d)", name, saves ), clr ) );
             }
-        }
-        break;
+            break;
+        case main_menu_opts::MOTD:
+        case main_menu_opts::CREDITS:
+        case main_menu_opts::TUTORIAL:
         case main_menu_opts::HELP:
         case main_menu_opts::QUIT:
         default:
-            return;
+            break;
     }
-
-    if( sub_opts.empty() ) {
-        return;
-    }
-
-    point top_left( bottom_left + point( 0, -( sub_opts.size() + 1 ) ) );
-
-    // If sel2 somehow outgrew the options vector, clamp it back.
-    sel2 = std::min<int>( sel2, sub_opts.size() );
-
-    int height = sub_opts.size();
-    if( top_left.y < 0 ) {
-        // Options don't fit screen. Decrease height till they do.
-        height += top_left.y;
-        top_left.y = 0;
-
-        // Calculate an offset from which to draw the options
-        if( sel2 - 1 < sub_opt_off ) {
-            // Trying to go below the showed options, decrease our offset
-            sub_opt_off = sel2;
-        } else if( sel2 + 1 > sub_opt_off + height ) {
-            // We are going over the list the other way around - increase offset
-            sub_opt_off = sel2 - height + 1;
-        }
-    } else {
-        // Options fit the screen, no offset required.
-        sub_opt_off = 0;
-    }
-
-    catacurses::window w_sub = catacurses::newwin( height + 2, xlen + 4, top_left );
-    werase( w_sub );
-    draw_border( w_sub, c_white );
-
-    // Print as many options as decided previously, starting from the index sub_opt_offset
-    for( int y = 0; y < height; y++ ) {
-        int opt_index = sub_opt_off + y;
-        bool is_selection = sel2 == opt_index;
-        std::string opt = ( is_selection ? "» " : "  " ) + sub_opts[opt_index];
-        int padding = ( xlen + 2 ) - utf8_width( opt, true );
-        opt.append( padding, ' ' );
-        nc_color clr = is_selection ? hilite( c_white ) : c_white;
-        trim_and_print( w_sub, point( 1, y + 1 ), xlen + 2, clr, opt );
-        inclusive_rectangle<point> rec( top_left + point( 1, y  + 1 ),
-                                        top_left + point( xlen + 2, y + 1 ) );
-        main_menu_sub_button_map.emplace_back( rec, std::pair<int, int> { sel, y } );
-    }
-    if( static_cast<size_t>( height ) != sub_opts.size() ) {
-        draw_scrollbar( w_sub, sel2, height, sub_opts.size(), point::south, c_white,
-                        false );
-    }
-    wnoutrefresh( w_sub );
+    return options;
 }
 
-void main_menu::print_menu( const catacurses::window &w_open, int iSel, const point &offset,
-                            int sel_line )
+void main_menu::show_rml( main_menu_rml &doc )
 {
-    main_menu_button_map.clear();
-
-    // Clear Lines
-    werase( w_open );
-
-    // Define window size
-    int window_width = getmaxx( w_open );
-    int window_height = getmaxy( w_open );
-
-    // Draw horizontal line
-    mvwhline( w_open, point( 1, window_height - 4 ), c_white, LINE_OXOX, window_width - 2 );
-
-    if( iSel == getopt( main_menu_opts::NEWCHAR ) ) {
-        center_print( w_open, window_height - 2, c_yellow, vNewGameHints[sel2] );
+    // ASCII art when there is some, or a line of text
+    const bool art = mmenu_title.size() > 1;
+    doc.mark( "title", "art", art );
+    if( art ) {
+        std::vector<std::string> lines;
+        for( const std::string &line : mmenu_title ) {
+            lines.push_back( rml_ui::markup_to_rml( line, c_white ) );
+        }
+        doc.show( "title", string_join( lines, "<br/>" ) );
     } else {
-        center_print( w_open, window_height - 2, c_red,
-                      _( "Bugs?  Suggestions?  Use links in MOTD to report them." ) );
+        doc.show( "title", rml_ui::markup_to_rml( mmenu_title[0], c_light_cyan ) );
+    }
+    doc.show( "version", rml_ui::markup_to_rml( string_format( _( "Version: %s" ),
+              getVersionString() ), c_light_blue ) );
+
+    const bool halloween = get_option<bool>( "SEASONAL_TITLE" ) &&
+                           current_holiday == holiday::halloween;
+    doc.mark( "spider", "hidden", !halloween );
+    doc.mark( "graves", "hidden", !halloween );
+    if( halloween ) {
+        doc.show( "spider", rml_ui::markup_to_rml( halloween_spider(), c_white ) );
+        doc.show( "graves", rml_ui::markup_to_rml( halloween_graves(), c_white ) );
     }
 
-    center_print( w_open, window_height - 1, c_light_cyan, string_format( _( "Tip of the day: %s" ),
-                  vdaytip ) );
-
-    int iLine = 0;
-    const int iOffsetX = ( window_width - FULL_SCREEN_WIDTH ) / 2;
-
-    if( get_option<bool>( "SEASONAL_TITLE" ) ) {
-        switch( current_holiday ) {
-            case holiday::new_year:
-            case holiday::easter:
-                break;
-            case holiday::halloween:
-                fold_and_print_from( w_open, point::zero, 30, 0, c_white, halloween_spider() );
-                fold_and_print_from( w_open, point( getmaxx( w_open ) - 25, offset.y - 8 ),
-                                     25, 0, c_white, halloween_graves() );
-                break;
-            case holiday::thanksgiving:
-            case holiday::christmas:
-            case holiday::none:
-            case holiday::num_holiday:
-            default:
-                break;
+    // The MOTD and credits show as text, scrolled back to the top when it changes
+    const main_menu_opts tab = static_cast<main_menu_opts>( sel1 );
+    const bool text_tab = tab == main_menu_opts::MOTD || tab == main_menu_opts::CREDITS;
+    doc.mark( "text-panel", "hidden", !text_tab );
+    if( text_tab ) {
+        //~ Message Of The Day
+        doc.show( "text-title", rml_ui::markup_to_rml( tab == main_menu_opts::MOTD ? _( "MOTD" ) :
+                  _( "Credits" ) ) );
+        if( doc.show( "text", rml_ui::markup_to_rml( tab == main_menu_opts::MOTD ? mmenu_motd :
+                      mmenu_credits, c_light_gray ) ) ) {
+            doc.scroll_text( rml_ui::scroll::top );
         }
     }
 
-    if( mmenu_title.size() > 1 ) {
-        for( const std::string &i_title : mmenu_title ) {
-            nc_color cur_color = c_white;
-            nc_color base_color = c_white;
-            print_colored_text( w_open, point( iOffsetX, iLine++ ), cur_color, base_color, i_title );
+    // The other tabs' options, as many as fit around the selection
+    const std::vector<std::string> options = sub_options();
+    const int option_count = static_cast<int>( options.size() );
+    doc.mark( "sub-panel", "hidden", options.empty() );
+    if( !options.empty() ) {
+        // If sel2 somehow outgrew the options, clamp it back
+        sel2 = std::clamp( sel2, 0, option_count - 1 );
+        constexpr int max_shown = 12;
+        const int shown_count = std::min( option_count, max_shown );
+        if( sel2 < sub_opt_off ) {
+            sub_opt_off = sel2;
+        } else if( sel2 >= sub_opt_off + shown_count ) {
+            sub_opt_off = sel2 - shown_count + 1;
         }
-    } else {
-        center_print( w_open, iLine++, c_light_cyan, mmenu_title[0] );
+        sub_opt_off = std::clamp( sub_opt_off, 0, option_count - shown_count );
+
+        std::string sub;
+        for( int i = sub_opt_off; i < sub_opt_off + shown_count; ++i ) {
+            sub += i == sel2 ? "<div class=\"option selected\">" : "<div class=\"option\">";
+            sub += rml_ui::markup_to_rml( options[i], c_white ) + "</div>";
+        }
+        doc.show( "sub", sub );
+        doc.mark( "sub-position", "hidden", option_count <= shown_count );
+        doc.show( "sub-position", option_count <= shown_count ? std::string() :
+                  rml_ui::markup_to_rml( string_format( _( "%1$d-%2$d of %3$d" ), sub_opt_off + 1,
+                                         sub_opt_off + shown_count, option_count ) ) );
     }
 
-    iLine++;
-    center_print( w_open, iLine, c_light_blue, string_format( _( "Version: %s" ),
-                  getVersionString() ) );
-
-    int menu_length = 0;
+    std::string menu;
     for( size_t i = 0; i < vMenuItems.size(); ++i ) {
-        menu_length += utf8_width_notags( vMenuItems[i].c_str() ) + 2;
-        if( !vMenuHotkeys[i].empty() ) {
-            menu_length += utf8_width( vMenuHotkeys[i][0] );
-        }
+        menu += static_cast<int>( i ) == sel1 ? "<div class=\"item selected\">" :
+                "<div class=\"item\">";
+        menu += rml_ui::markup_to_rml( shortcut_text( c_yellow, vMenuItems[i] ), c_white ) +
+                "</div>";
     }
-    const int free_space = std::max( 0, window_width - menu_length - offset.x );
-    const int spacing = free_space / ( static_cast<int>( vMenuItems.size() ) + 1 );
-    const int width_of_spacing = spacing * ( vMenuItems.size() + 1 );
-    const int adj_offset = std::max( 0, ( free_space - width_of_spacing ) / 2 );
-    const int final_offset = offset.x + adj_offset + spacing;
+    doc.show( "menu", menu );
 
-    std::vector<int> offsets =
-        print_menu_items( w_open, vMenuItems, iSel, point( final_offset, offset.y ), spacing, true );
-
-    wnoutrefresh( w_open );
-
-    const point p_offset( catacurses::getbegx( w_open ), catacurses::getbegy( w_open ) );
-
-    display_sub_menu( iSel, p_offset + point( offsets[iSel], offset.y - 2 ), sel_line );
+    if( tab == main_menu_opts::NEWCHAR && sel2 >= 0 &&
+        static_cast<size_t>( sel2 ) < vNewGameHints.size() ) {
+        doc.show( "hint", rml_ui::markup_to_rml( vNewGameHints[sel2], c_yellow ) );
+    } else {
+        doc.show( "hint", rml_ui::markup_to_rml(
+                      _( "Bugs?  Suggestions?  Use links in MOTD to report them." ), c_red ) );
+    }
+    doc.show( "tip", rml_ui::markup_to_rml( string_format( _( "Tip of the day: %s" ), vdaytip ),
+                                            c_light_cyan ) );
 }
 
 std::vector<std::string> main_menu::load_file( const std::string &path,
@@ -401,33 +288,6 @@ holiday main_menu::get_holiday_from_time()
     return ::get_holiday_from_time( 0, true );
 }
 
-void main_menu::init_windows()
-{
-    if( LAST_TERM == point( TERMX, TERMY ) ) {
-        return;
-    }
-
-    // main window should also expand to use available display space.
-    // expanding to evenly use up half of extra space, for now.
-    extra_w = ( ( TERMX - FULL_SCREEN_WIDTH ) / 2 ) - 1;
-    int extra_h = ( ( TERMY - FULL_SCREEN_HEIGHT ) / 2 ) - 1;
-    extra_w = ( extra_w > 0 ? extra_w : 0 );
-    extra_h = ( extra_h > 0 ? extra_h : 0 );
-    const int total_w = FULL_SCREEN_WIDTH + extra_w;
-    const int total_h = FULL_SCREEN_HEIGHT + extra_h;
-
-    // position of window within main display
-    const point p0( ( TERMX - total_w ) / 2, ( TERMY - total_h ) / 2 );
-
-    w_open = catacurses::newwin( total_h, total_w, p0 );
-
-    menu_offset.y = total_h - 3;
-    // note: if iMenuOffset is changed,
-    // please update MOTD and credits to indicate how long they can be.
-
-    LAST_TERM = point( TERMX, TERMY );
-}
-
 void main_menu::init_strings()
 {
     // ASCII Art
@@ -440,7 +300,6 @@ void main_menu::init_strings()
         mmenu_motd += ( line.empty() ? " " : line ) + "\n";
     }
     mmenu_motd = colorize( mmenu_motd, c_light_red );
-    mmenu_motd_len = foldstring( mmenu_motd, FULL_SCREEN_WIDTH - 2 ).size();
 
     // Credits
     mmenu_credits.clear();
@@ -456,7 +315,6 @@ void main_menu::init_strings()
     if( mmenu_credits.empty() ) {
         mmenu_credits = _( "No credits information found." );
     }
-    mmenu_credits_len = foldstring( mmenu_credits, FULL_SCREEN_WIDTH - 2 ).size();
 
     // fill menu with translated menu items
     vMenuItems.clear();
@@ -540,32 +398,6 @@ void main_menu::init_strings()
     vdaytip = SNIPPET.random_from_category( "tip" ).value_or( translation() ).translated();
 }
 
-void main_menu::display_text( const std::string &text, const std::string &title, int &selected )
-{
-    const int w_open_height = getmaxy( w_open );
-    const int b_height = FULL_SCREEN_HEIGHT - clamp( ( FULL_SCREEN_HEIGHT - w_open_height ) + 4, 0, 4 );
-    const int vert_off = clamp( ( w_open_height - FULL_SCREEN_HEIGHT ) / 2, getbegy( w_open ), TERMY );
-
-    catacurses::window w_border = catacurses::newwin( b_height, FULL_SCREEN_WIDTH,
-                                  point( clamp( ( TERMX - FULL_SCREEN_WIDTH ) / 2, 0, TERMX ), vert_off ) );
-
-    catacurses::window w_text = catacurses::newwin( b_height - 2, FULL_SCREEN_WIDTH - 2,
-                                point( 1 + clamp( ( TERMX - FULL_SCREEN_WIDTH ) / 2, 0, TERMX ), 1 + vert_off ) );
-
-    draw_border( w_border, BORDER_COLOR, title );
-
-    int width = FULL_SCREEN_WIDTH - 2;
-    int height = b_height - 2;
-    const auto vFolded = foldstring( text, width );
-    int iLines = vFolded.size();
-
-    fold_and_print_from( w_text, point::zero, width, selected, c_light_gray, text );
-
-    draw_scrollbar( w_border, selected, height, iLines, point::south, BORDER_COLOR, true );
-    wnoutrefresh( w_border );
-    wnoutrefresh( w_text );
-}
-
 void main_menu::load_char_templates()
 {
     templates.clear();
@@ -619,8 +451,6 @@ bool main_menu::opening_screen()
     avatar &player_character = get_avatar();
     player_character = avatar();
 
-    int sel_line = 0;
-
     // Make [Load Game] the default cursor position if there's game save available
     if( !world_generator->get_all_worlds().empty() ) {
         std::vector<std::string> worlds = world_generator->all_worldnames();
@@ -633,23 +463,9 @@ bool main_menu::opening_screen()
     }
 
     background_pane background;
-
-    // Experimental RmlUi replica, drawn alongside for comparison. Constructed
-    // below `ui` so that ui_manager::redraw(), which only invalidates the top
-    // adaptor, still reaches the catacurses menu; RmlUi draws last, so the
-    // replica is on top either way.
-    rml_ui::main_menu_replica rml_replica;
-
-    ui_adaptor ui;
-    ui.on_redraw( [&]( const ui_adaptor & ) {
-        print_menu( w_open, sel1, menu_offset, sel_line );
-        rml_replica.update( vMenuItems, sel1 );
-    } );
-    ui.on_screen_resize( [this]( ui_adaptor & ui ) {
-        init_windows();
-        ui.position_from_window( w_open );
-    } );
-    ui.mark_resize();
+    main_menu_rml doc;
+    // Filled in now too, for anything shown over it before the loop below
+    show_rml( doc );
 
     if( !queued_world_to_load.empty() ) {
         WORLD *world_to_load{};
@@ -685,6 +501,7 @@ bool main_menu::opening_screen()
 #endif
 
     while( !start ) {
+        show_rml( doc );
         ui_manager::redraw();
         std::string action = ctxt.handle_input();
         input_event sInput = ctxt.get_raw_input();
@@ -696,7 +513,6 @@ bool main_menu::opening_screen()
                 if( sInput.text == hotkey && sel1 != i ) {
                     sel1 = i;
                     sel2 = i == getopt( main_menu_opts::LOADCHAR ) ? last_world_pos : 0;
-                    sel_line = 0;
                     if( i == getopt( main_menu_opts::HELP ) ) {
                         action = "CONFIRM";
                     } else if( i == getopt( main_menu_opts::QUIT ) ) {
@@ -732,41 +548,27 @@ bool main_menu::opening_screen()
             }
         }
 
-        // handle mouse click
+        // Hovering a tab or an option selects it, and clicking picks it
         if( action == "SELECT" || action == "MOUSE_MOVE" ) {
-            std::optional<point> coord = ctxt.get_coordinates_text( catacurses::stdscr );
-            for( const auto &it : main_menu_button_map ) {
-                if( coord.has_value() && it.first.contains( coord.value() ) ) {
-                    if( sel1 != it.second ) {
-                        sel1 = it.second;
-                        sel2 = sel1 == getopt( main_menu_opts::LOADCHAR ) ? last_world_pos : 0;
-                        sel_line = 0;
-                        on_move();
-                    }
-                    if( action == "SELECT" &&
-                        ( sel1 == getopt( main_menu_opts::HELP ) || sel1 == getopt( main_menu_opts::QUIT ) ) ) {
-                        action = "CONFIRM";
-                    }
-                    ui_manager::redraw();
-                    match = true;
-                    break;
+            const int tab = doc.hovered_tab();
+            const int option = doc.hovered_option();
+            if( tab >= 0 ) {
+                if( sel1 != tab ) {
+                    sel1 = tab;
+                    sel2 = sel1 == getopt( main_menu_opts::LOADCHAR ) ? last_world_pos : 0;
+                    on_move();
                 }
-            }
-            if( !match ) {
-                for( const auto &it : main_menu_sub_button_map ) {
-                    if( coord.has_value() && it.first.contains( coord.value() ) ) {
-                        if( sel1 != it.second.first || sel2 != it.second.second ) {
-                            on_move();
-                        }
-                        sel1 = it.second.first;
-                        sel2 = it.second.second;
-                        sel_line = 0;
-                        if( action == "SELECT" ) {
-                            action = "CONFIRM";
-                        }
-                        ui_manager::redraw();
-                        break;
-                    }
+                if( action == "SELECT" &&
+                    ( sel1 == getopt( main_menu_opts::HELP ) || sel1 == getopt( main_menu_opts::QUIT ) ) ) {
+                    action = "CONFIRM";
+                }
+            } else if( option >= 0 ) {
+                if( sel2 != sub_opt_off + option ) {
+                    on_move();
+                }
+                sel2 = sub_opt_off + option;
+                if( action == "SELECT" ) {
+                    action = "CONFIRM";
                 }
             }
         }
@@ -779,7 +581,6 @@ bool main_menu::opening_screen()
             }
 #endif
         } else if( action == "LEFT" || action == "PREV_TAB" || action == "RIGHT" || action == "NEXT_TAB" ) {
-            sel_line = 0;
             sel1 = inc_clamp_wrap( sel1, action == "RIGHT" || action == "NEXT_TAB",
                                    static_cast<int>( main_menu_opts::NUM_MENU_OPTS ) );
             sel2 = sel1 == getopt( main_menu_opts::LOADCHAR ) ? last_world_pos : 0;
@@ -793,16 +594,15 @@ bool main_menu::opening_screen()
             switch( opt ) {
                 case main_menu_opts::MOTD:
                 case main_menu_opts::CREDITS:
-                    if( action == "UP" || action == "PAGE_UP" || action == "SCROLL_UP" ) {
-                        if( sel_line > 0 ) {
-                            sel_line--;
-                        }
-                    } else if( action == "DOWN" || action == "PAGE_DOWN" || action == "SCROLL_DOWN" ) {
-                        int effective_height = sel_line + FULL_SCREEN_HEIGHT - 2;
-                        if( ( opt == main_menu_opts::CREDITS && effective_height < mmenu_credits_len ) ||
-                            ( opt == main_menu_opts::MOTD && effective_height < mmenu_motd_len ) ) {
-                            sel_line++;
-                        }
+                    // The wheel scrolls the text without help, in RmlUi
+                    if( action == "UP" ) {
+                        doc.scroll_text( rml_ui::scroll::line_up );
+                    } else if( action == "DOWN" ) {
+                        doc.scroll_text( rml_ui::scroll::line_down );
+                    } else if( action == "PAGE_UP" ) {
+                        doc.scroll_text( rml_ui::scroll::page_up );
+                    } else if( action == "PAGE_DOWN" ) {
+                        doc.scroll_text( rml_ui::scroll::page_down );
                     }
                     break;
                 case main_menu_opts::LOADCHAR:

@@ -46,6 +46,12 @@ void shutdown();
 void render();
 
 /**
+ * Drop RmlUi's textures, font glyph atlases included, after a renderer device
+ * reset has invalidated them. RmlUi recreates them as it next draws.
+ */
+void release_gpu_resources();
+
+/**
  * Pass an SDL event on to RmlUi, in the window coordinates SDL reported it
  * in. RmlUi sees events as well as the game, not instead of it: mouse events
  * always, and keyboard and text events only while the document holding
@@ -95,9 +101,9 @@ void end_redraw_pass();
  * adaptor higher up hides it -- and documents stack in the same order as
  * their adaptors.
  *
- * Limitation: because RmlUi draws last, a document is above every catacurses
- * and ImGui window regardless of stack position, so a catacurses window opened
- * on top of a document ends up underneath it.
+ * Because RmlUi draws last, a document would be above every catacurses and
+ * ImGui window regardless of stack position. So while a UI of either kind is
+ * above it in the stack, the document is hidden instead.
  *
  * If RmlUi is not initialised -- as in tests -- or the document fails to
  * load, no adaptor is pushed and get() returns nullptr, so callers can
@@ -108,7 +114,7 @@ class document
     public:
         /**
          * @param file Document file under data/raw/rmlui/, e.g.
-         *             "main_menu_replica.rml". Relative paths inside it, such
+         *             "query_popup.rml". Relative paths inside it, such
          *             as a link to common.rcss, resolve from that directory.
          */
         explicit document( const std::string &file );
@@ -156,6 +162,11 @@ class document
         /// Scroll the element with this id, which needs `overflow: auto`. A
         /// page is its height less a line, so a line of context stays.
         void scroll( const std::string &id, rml_ui::scroll how );
+        /// Take keyboard focus from the element with this id, if it has it.
+        void blur( const std::string &id );
+        /// Lay the document out now rather than at the next draw, so that
+        /// content just set can be measured and scrolled -- to its end, say.
+        void update_layout();
 
     private:
         friend void shutdown();
@@ -165,33 +176,6 @@ class document
         Rml::ElementDocument *doc = nullptr;
         std::unique_ptr<ui_adaptor> adaptor;
         std::string pending_focus;
-};
-
-/**
- * RmlUi replica of the main menu, drawn over the catacurses original for
- * side-by-side comparison. A smoke test for rml_ui::document, not a
- * replacement.
- */
-class main_menu_replica : public document
-{
-    public:
-        main_menu_replica();
-
-        /**
-         * @param items Menu labels in the game's own markup, e.g. "<M|m>OTD" --
-         *              the bracketed part marks the hotkey letter and is
-         *              rendered as an accented character rather than printed
-         *              literally.
-         * @param selected Index of the highlighted entry, mirroring main_menu's
-         *                 sel1.
-         *
-         * Cheap to call every redraw: the element list is only rebuilt when
-         * `items` actually changes, and the selection is just a CSS class.
-         */
-        void update( const std::vector<std::string> &items, int selected );
-
-    private:
-        std::vector<std::string> cached_items;
 };
 
 } // namespace rml_ui

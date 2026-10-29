@@ -328,6 +328,17 @@ bool ui_adaptor::has_imgui()
     return false;
 }
 
+bool ui_adaptor::has_non_rml_above() const
+{
+    for( auto it = ui_stack.rbegin(); it != ui_stack.rend() && &it->get() != this; ++it ) {
+        const ui_adaptor &above = it->get();
+        if( !above.is_rml && above.redraw_cb ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool ui_adaptor::has_rml()
 {
     for( auto ui : ui_stack ) {

@@ -1,0 +1,42 @@
+<rml>
+<head>
+    <title>Proficiencies</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* The proficiencies window; see prof_window in src/proficiency_ui.cpp. The proficiencies on the left, the selected one's details on the right. */
+        #header
+        {
+            padding-bottom: 6dp;
+            border-bottom: 1dp #39465c;
+        }
+        #header .button
+        {
+            margin: 0 4dp;
+            padding: 0 6dp;
+        }
+        .prof-desc
+        {
+            margin-top: 6dp;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by prof_window in src/proficiency_ui.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

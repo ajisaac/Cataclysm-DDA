@@ -1,0 +1,51 @@
+<rml>
+<head>
+    <title>Bionics</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* The bionics menu; see avatar::power_bionics() in src/bionics_ui.cpp. The bionics in the tab on the left, and their body parts or description on the right. */
+        /* While a bionic is used, as aiming one does */
+        #window.hidden
+        {
+            display: none;
+        }
+        #header
+        {
+            padding-bottom: 6dp;
+            border-bottom: 1dp #39465c;
+        }
+        .bio-power
+        {
+            margin-left: 12dp;
+        }
+        .bio-side
+        {
+            flex: 0 0 auto;
+            width: 40%;
+        }
+        .bio-desc
+        {
+            margin: 6dp 0;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by avatar::power_bionics() in src/bionics_ui.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

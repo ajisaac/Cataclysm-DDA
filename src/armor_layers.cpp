@@ -33,6 +33,8 @@
 #include "output.h"
 #include "pimpl.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "string_formatter.h"
 #include "translation.h"
 #include "translations.h"
@@ -90,22 +92,14 @@ std::string body_part_names( const std::vector<bodypart_id> &parts )
     return enumerate_as_string( names );
 }
 
-struct mid_pane_status {
-    size_t size;
-    size_t header_lines;
-    int offset;
-};
-
-mid_pane_status draw_mid_pane( const catacurses::window &w_sort_middle,
-                               std::list<item>::const_iterator const worn_item_it,
-                               Character &c, const bodypart_id &bp,
-                               mid_pane_status &status )
+/**
+ * The selected item's details, as RML: its name, then what it adds to
+ * encumbrance, its layer and flags, and its properties and protection, the
+ * names and values of those lined up for a fixed-width font `win_width` wide.
+ */
+std::string mid_pane_rml( std::list<item>::const_iterator const worn_item_it,
+                          Character &c, const bodypart_id &bp, const int win_width )
 {
-    const int win_width = getmaxx( w_sort_middle );
-    const size_t win_height = static_cast<size_t>( getmaxy( w_sort_middle ) );
-    // NOLINTNEXTLINE(cata-use-named-point-constants)
-    status.header_lines = fold_and_print( w_sort_middle, point( 0, 0 ), win_width - 1, c_white,
-                                          worn_item_it->type_name( 1 ) ) - 1;
     const item_penalties penalties = c.worn.get_item_penalties( worn_item_it, c, bp );
     std::vector<std::string> mid_pane_text;
     mid_pane_text.reserve(
@@ -199,19 +193,12 @@ mid_pane_status draw_mid_pane( const catacurses::window &w_sort_middle,
     temp_text = clothing_protection( *worn_item_it, win_width - 1, bp );
     mid_pane_text.insert( mid_pane_text.end(), temp_text.begin(), temp_text.end() );
 
-    status.size = mid_pane_text.size();
-
-    nc_color color = c_light_gray;
-    for( int line = status.offset; line < static_cast<int>( mid_pane_text.size() ); ++line ) {
-        size_t current_line = status.header_lines + 1 + line - status.offset;
-        if( current_line >= win_height ) {
-            return status;
-        } else {
-            print_colored_text( w_sort_middle, point( 0, current_line ), color,
-                                c_light_gray,  mid_pane_text[line] );
-        }
+    std::string rml = "<div class=\"sa-name\">" + rml_ui::markup_to_rml( worn_item_it->type_name( 1 ),
+                      c_white ) + "</div>";
+    for( const std::string &line : mid_pane_text ) {
+        rml += "<div>" + rml_ui::markup_to_rml( line, c_light_gray ) + "</div>";
     }
-    return status;
+    return rml;
 }
 
 std::string clothing_layer( const item &worn_item )
@@ -571,33 +558,33 @@ std::vector<layering_item_info> outfit::items_cover_bp( const Character &c, cons
     return s;
 }
 
-static void draw_grid( const catacurses::window &w, int left_pane_w, int mid_pane_w,
-                       int encumb_top )
+namespace
 {
-    const int win_w = getmaxx( w );
-    const int win_h = getmaxy( w );
+/** Sort armor, from data/raw/rmlui/sort_armor.rml; outfit::sort_armor() fills it. */
+class sort_armor_window : public rml_ui::window
+{
+    public:
+        explicit sort_armor_window( const std::function<void( sort_armor_window & )> &update ) :
+            rml_ui::window( _( "Sort Armor" ), "sort_armor.rml" ), update( update ) {
+            set_body_scrolls( false );
+        }
 
-    draw_border( w );
+        void scroll_pane( const std::string &id, rml_ui::scroll how ) {
+            scroll( id, how );
+        }
+        void reveal( const std::string &id ) {
+            scroll_into_view( id );
+        }
 
-    wattron( w, BORDER_COLOR );
-    mvwhline( w, point( 1, 2 ), 0, win_w - 2 );
-    mvwhline( w, point( left_pane_w + 2, encumb_top - 1 ), 0, mid_pane_w );
-    mvwvline( w, point( left_pane_w + 1, 3 ), 0, win_h - 4 );
-    mvwvline( w, point( left_pane_w + mid_pane_w + 2, 3 ), 0, win_h - 4 );
+    protected:
+        void on_redraw() override {
+            update( *this );
+        }
 
-    // intersections
-    mvwaddch( w, point( 0, 2 ), LINE_XXXO ); // '|-'
-    mvwaddch( w, point( win_w - 1, 2 ), LINE_XOXX ); // '-|'
-    mvwaddch( w, point( left_pane_w + 1, encumb_top - 1 ), LINE_XXXO ); // '|-'
-    mvwaddch( w, point( left_pane_w + mid_pane_w + 2, encumb_top - 1 ), LINE_XOXX ); // '-|'
-    mvwaddch( w, point( left_pane_w + 1, 2 ), LINE_OXXX ); // '^|^'
-    mvwaddch( w, point( left_pane_w + 1, win_h - 1 ), LINE_XXOX ); // '_|_'
-    mvwaddch( w, point( left_pane_w + mid_pane_w + 2, 2 ), LINE_OXXX ); // '^|^'
-    mvwaddch( w, point( left_pane_w + mid_pane_w + 2, win_h - 1 ), LINE_XXOX ); // '_|_'
-    wattroff( w, BORDER_COLOR );
-
-    wnoutrefresh( w );
-}
+    private:
+        std::function<void( sort_armor_window & )> update;
+};
+} // namespace
 
 void outfit::sort_armor( Character &guy )
 {
@@ -611,63 +598,13 @@ void outfit::sort_armor( Character &guy )
     armor_cat.insert( bodypart_str_id::NULL_ID() );
     const int num_of_parts = guy.get_all_body_parts().size();
 
-    int win_h = 0;
-    int win_w = 0;
-    point win;
-
-    int cont_h   = 0;
-    int left_w   = 0;
-    int right_w  = 0;
-    int middle_w = 0;
-    int encumb_top = 0;
-
     int tabindex = 0;
     const int tabcount = num_of_parts + 1;
 
     int leftListIndex  = 0;
-    int leftListOffset = 0;
     int selected       = -1;
 
-    int rightListOffset = 0;
-
-    int leftListLines = 0;
-    int rightListLines = 0;
-
     std::vector<std::list<item>::iterator> tmp_worn;
-
-    // Layout window
-    catacurses::window w_sort_armor;
-    // Subwindows (between lines)
-    catacurses::window w_sort_cat;
-    catacurses::window w_sort_left;
-    catacurses::window w_sort_middle;
-    catacurses::window w_sort_right;
-    catacurses::window w_encumb;
-
-    ui_adaptor ui;
-    ui.on_screen_resize( [&]( ui_adaptor & ui ) {
-        win_h = TERMY;
-        win_w = FULL_SCREEN_WIDTH + ( TERMX - FULL_SCREEN_WIDTH ) * 3 / 4;
-        win.x = TERMX / 2 - win_w / 2;
-        win.y = TERMY / 2 - win_h / 2;
-        cont_h = win_h - 4;
-        left_w = ( win_w - 4 ) / 3;
-        right_w = left_w;
-        middle_w = ( win_w - 4 ) - left_w - right_w;
-        leftListLines = rightListLines = cont_h - 2;
-        w_sort_armor = catacurses::newwin( win_h, win_w, win );
-        w_sort_cat = catacurses::newwin( 1, win_w - 4, win + point( 2, 1 ) );
-        w_sort_left = catacurses::newwin( cont_h, left_w, win + point( 1, 3 ) );
-        w_sort_middle = catacurses::newwin( cont_h - num_of_parts - 2, middle_w,
-                                            win + point( 2 + left_w, 3 ) );
-        w_sort_right = catacurses::newwin( cont_h, right_w,
-                                           win + point( 3 + left_w + middle_w, 3 ) );
-        encumb_top = -1 + 3 + cont_h - num_of_parts;
-        w_encumb = catacurses::newwin( num_of_parts + 1, middle_w,
-                                       win + point( 2 + left_w, encumb_top ) );
-        ui.position_from_window( w_sort_armor );
-    } );
-    ui.mark_resize();
 
     input_context ctxt( "SORT_ARMOR" );
     ctxt.register_cardinal();
@@ -689,6 +626,8 @@ void outfit::sort_armor( Character &guy )
     ctxt.register_action( "HELP_KEYBINDINGS" );
     ctxt.register_action( "SCROLL_ITEM_INFO_UP" );
     ctxt.register_action( "SCROLL_ITEM_INFO_DOWN" );
+    // Clicks on the items, the body part arrows and the close button
+    ctxt.register_action( "SELECT" );
 
     Character &player_character = get_player_character();
     auto do_return_entry = [this, guy_ptr = &guy]() {
@@ -698,13 +637,15 @@ void outfit::sort_armor( Character &guy )
     };
 
     int leftListSize = 0;
-    int rightListSize = 0;
-    mid_pane_status mid_pane;
-    mid_pane.size = 0;
-    mid_pane.offset = 0;
-    mid_pane.header_lines = 1;
+    // What was last shown, to keep the cursor in view and new details at their top
+    std::pair<int, int> shown_cursor( -1, -1 );
 
-    ui.on_redraw( [&]( ui_adaptor & ui ) {
+    std::unique_ptr<sort_armor_window> window = std::make_unique<sort_armor_window>(
+    [&]( sort_armor_window & win ) {
+        const int win_w = FULL_SCREEN_WIDTH + ( TERMX - FULL_SCREEN_WIDTH ) * 3 / 4;
+        const int middle_w = ( win_w - 4 ) - 2 * ( ( win_w - 4 ) / 3 );
+        win.set_size( rml_ui::term_width( win_w ), "96%" );
+
         // Create ptr list of items to display
         tmp_worn.clear();
         const bodypart_id &bp = armor_cat[ tabindex ];
@@ -723,133 +664,87 @@ void outfit::sort_armor( Character &guy )
         }
 
         leftListSize = tmp_worn.size();
-        if( leftListLines > leftListSize ) {
-            leftListOffset = 0;
-        } else if( leftListOffset + leftListLines > leftListSize ) {
-            leftListOffset = leftListSize - leftListLines;
-        }
-        if( leftListOffset > leftListIndex ) {
-            leftListOffset = leftListIndex;
-        } else if( leftListOffset + leftListLines <= leftListIndex ) {
-            leftListOffset = leftListIndex + 1 - leftListLines;
-        }
-
         // Ensure leftListIndex is in bounds
         int new_index_upper_bound = std::max( 0, leftListSize - 1 );
         leftListIndex = std::min( leftListIndex, new_index_upper_bound );
 
-        draw_grid( w_sort_armor, left_w, middle_w, encumb_top );
+        // top bar: the body part, with buttons either side, then the keys
+        const std::string part_name = bp == bodypart_str_id::NULL_ID() ?  _( "All" ) :
+                                      body_part_name_as_heading( bp, 1 );
+        win.set_header( "<div class=\"hbox\"><div class=\"fixed\">" + rml_ui::button_rml( "LEFT",
+                        "&lt;&lt;" ) + rml_ui::colored_rml( part_name, c_yellow ) + rml_ui::button_rml( "RIGHT",
+                                "&gt;&gt;" ) + "</div><div class=\"grow right\">" + rml_ui::markup_to_rml( string_format(
+                                            _( "[<color_yellow>%s</color>] Hide sprite.  "
+                                                    "[<color_yellow>%s</color>] Change side.  "
+                                                    "Press [<color_yellow>%s</color>] for help.  "
+                                                    "Press [<color_yellow>%s</color>] to change keybindings." ),
+                                            ctxt.get_desc( "TOGGLE_CLOTH" ),
+                                            ctxt.get_desc( "CHANGE_SIDE" ),
+                                            ctxt.get_desc( "USAGE_HELP" ),
+                                            ctxt.get_desc( "HELP_KEYBINDINGS" ) ), c_white ) + "</div></div>" );
 
-        werase( w_sort_cat );
-        werase( w_sort_left );
-        werase( w_sort_middle );
-        werase( w_sort_right );
-        werase( w_encumb );
+        const auto pane_head = []( const std::string & right ) {
+            return "<div class=\"hbox sa-head\"><div class=\"grow\">" + rml_ui::colored_rml(
+                       _( "(Innermost)" ), c_light_gray ) + "</div><div class=\"fixed\">" +
+                   rml_ui::colored_rml( right, c_light_gray ) + "</div></div>";
+        };
+        const std::string pane_foot = "<div class=\"sa-foot\">" + rml_ui::colored_rml( _( "(Outermost)" ),
+                                      c_light_gray ) + "</div>";
 
-        // top bar
-        std::string header_title = _( "Sort Armor" );
-        wprintz( w_sort_cat, c_white, header_title );
-        std::string temp = bp == bodypart_str_id::NULL_ID() ?  _( "All" ) : body_part_name_as_heading( bp,
-                           1 );
-        temp = string_format( "  << %s >>", temp );
-        wprintz( w_sort_cat, c_yellow, temp );
-        int keyhint_offset = utf8_width( header_title ) + utf8_width( temp ) + 1;
-        right_print( w_sort_cat, 0, 0, c_white, trim_by_length( string_format(
-                         _( "[<color_yellow>%s</color>] Hide sprite.  "
-                            "[<color_yellow>%s</color>] Change side.  "
-                            "Press [<color_yellow>%s</color>] for help.  "
-                            "Press [<color_yellow>%s</color>] to change keybindings." ),
-                         ctxt.get_desc( "TOGGLE_CLOTH" ),
-                         ctxt.get_desc( "CHANGE_SIDE" ),
-                         ctxt.get_desc( "USAGE_HELP" ),
-                         ctxt.get_desc( "HELP_KEYBINDINGS" ) ), getmaxx( w_sort_cat ) - keyhint_offset ) );
-
-        // Left header
-        std:: string storage_header = string_format( _( "Storage (%s)" ), volume_units_abbr() );
-        trim_and_print( w_sort_left, point::zero, left_w - utf8_width( storage_header ) - 1, c_light_gray,
-                        _( "(Innermost)" ) );
-        right_print( w_sort_left, 0, 0, c_light_gray, storage_header );
-        // Left list
-        const int max_drawindex = std::min( leftListSize - leftListOffset, leftListLines );
-        int storage_character_allowance = 5; //Sufficient for " x.yz", will increase if necessary
-        for( int drawindex = 0; drawindex < max_drawindex; drawindex++ ) {
-            int itemindex = leftListOffset + drawindex;
-
-            if( itemindex == leftListIndex ) {
-                mvwprintz( w_sort_left, point( 0, drawindex + 1 ), c_yellow, ">>" );
-            }
-
+        // Left list: the items, with their storage
+        std::string left;
+        for( int itemindex = 0; itemindex < leftListSize; itemindex++ ) {
             std::string worn_armor_name = tmp_worn[itemindex]->tname();
             // Get storage capacity in user's preferred units
             units::volume worn_armor_capacity = tmp_worn[itemindex]->get_volume_capacity();
             double worn_armor_storage = convert_volume( units::to_milliliter( worn_armor_capacity ) );
-            std::string storage_string = string_format( "%.2f", worn_armor_storage );
-            const int current_character_allowance = worn_armor_storage > 0 ? utf8_width( storage_string ) : 0;
-            storage_character_allowance = std::max( current_character_allowance + 1,
-                                                    storage_character_allowance );
 
             item_penalties const penalties =
                 get_item_penalties( tmp_worn[itemindex], guy, bp );
 
-            const int offset_x = ( itemindex == selected ) ? 4 : 3;
-            // Show armor name and storage capacity (if any)
-            trim_and_print( w_sort_left, point( offset_x, drawindex + 1 ),
-                            left_w - offset_x - storage_character_allowance,
-                            penalties.color_for_stacking_badness(), worn_armor_name );
-
-            if( worn_armor_storage > 0 ) {
-                // two digits, accurate to 1% of preferred storage unit
-                right_print( w_sort_left, drawindex + 1, 0, c_light_gray, storage_string );
-            }
-
+            std::string mark;
             if( tmp_worn[itemindex]->has_flag( json_flag_HIDDEN ) ) {
                 //~ Hint: Letter to show which piece of armor is Hidden in the layering menu
-                mvwprintz( w_sort_left, point( offset_x - 1, drawindex + 1 ), c_cyan, _( "H" ) );
+                mark = rml_ui::colored_rml( _( "H" ), c_cyan );
             }
+            std::string row_class;
+            if( itemindex == leftListIndex ) {
+                row_class += " selected";
+            }
+            if( itemindex == selected ) {
+                // picked up, to be moved
+                row_class += " sa-moving";
+            }
+            left += string_format( "<div id=\"sa-row-%d\" class=\"item line sa-row%s\" data-row=\"%d\">",
+                                   itemindex, row_class, itemindex ) +
+                    "<span class=\"sa-mark\">" + mark + "</span><span class=\"sa-item\">" +
+                    rml_ui::colored_rml( worn_armor_name, penalties.color_for_stacking_badness() ) +
+                    "</span><span class=\"sa-value\">" + ( worn_armor_storage > 0 ?
+                            // two digits, accurate to 1% of preferred storage unit
+                            rml_ui::colored_rml( string_format( "%.2f", worn_armor_storage ), c_light_gray ) :
+                            std::string() ) + "</span></div>";
         }
         if( leftListSize == 0 ) {
-            // NOLINTNEXTLINE(cata-use-named-point-constants)
-            trim_and_print( w_sort_left, point( 0, 1 ), left_w, c_light_blue, _( "<empty>" ) );
+            left = rml_ui::colored_rml( _( "<empty>" ), c_light_blue );
         }
 
-        // Left footer
-        mvwprintz( w_sort_left, point( 0, cont_h - 1 ), c_light_gray, _( "(Outermost)" ) );
-
-        scrollbar() //Left list scrollbar at far left
-        .offset_x( 0 )
-        .offset_y( 4 ) //Header allowance
-        .content_size( leftListSize )
-        .viewport_pos( leftListOffset )
-        .viewport_size( cont_h - 2 )
-        .apply( w_sort_armor );
-
-        // Items stats
+        // Middle: the item's details, over the encumbrance and warmth
+        std::string middle;
         if( leftListSize > 0 ) {
-            draw_mid_pane( w_sort_middle, tmp_worn[leftListIndex], guy, bp, mid_pane );
-            scrollbar() //Mid pane scrollbar
-            .offset_x( left_w + 1 ) //On left of mid pane
-            .offset_y( 4 + mid_pane.header_lines )
-            .content_size( mid_pane.size )
-            .viewport_pos( mid_pane.offset )
-            .viewport_size( cont_h - num_of_parts - 3 - mid_pane.header_lines )
-            .apply( w_sort_armor );
+            middle = mid_pane_rml( tmp_worn[leftListIndex], guy, bp, middle_w - 1 );
         } else {
-            // NOLINTNEXTLINE(cata-use-named-point-constants)
-            fold_and_print( w_sort_middle, point( 1, 0 ), middle_w - 1, c_white,
-                            _( "Nothing to see here!" ) );
+            middle = rml_ui::colored_rml( _( "Nothing to see here!" ), c_white );
+        }
+        std::string encumbrance = "<div>" + rml_ui::colored_rml( _( "Encumbrance and Warmth" ),
+                                  c_white ) + "</div>";
+        for( const std::pair<std::string, std::string> &line : guy.encumbrance_lines(
+                 ( leftListSize > 0 ) ? &*tmp_worn[leftListIndex] : nullptr ) ) {
+            encumbrance += "<div class=\"hbox\"><div class=\"grow\">" + rml_ui::markup_to_rml( line.first ) +
+                           "</div><div class=\"fixed sa-numbers\">" + rml_ui::markup_to_rml( line.second ) +
+                           "</div></div>";
         }
 
-        mvwprintz( w_encumb, point::east, c_white, _( "Encumbrance and Warmth" ) );
-        guy.print_encumbrance( ui, w_encumb, -1,
-                               ( leftListSize > 0 ) ? &*tmp_worn[leftListIndex] : nullptr );
-
-        // Right header
-        std::string encumbrance_header = _( "Encumbrance" );
-        trim_and_print( w_sort_right, point::zero, right_w - utf8_width( encumbrance_header ) - 1,
-                        c_light_gray,
-                        _( "(Innermost)" ) );
-        right_print( w_sort_right, 0, 0, c_light_gray, encumbrance_header );
-
+        // Right list: the items over each body part
         const auto &combine_bp = [&guy]( const bodypart_id & cover ) -> bool {
             const bodypart_id opposite = cover.obj().opposite_part;
             return cover != opposite &&
@@ -857,71 +752,44 @@ void outfit::sort_armor( Character &guy )
         };
 
         cata::flat_set<bodypart_id> rl;
-        // Right list
-        rightListSize = 0;
         for( const bodypart_id &cover : armor_cat ) {
             if( cover == bodypart_str_id::NULL_ID() ) {
                 continue;
             }
             if( !combine_bp( cover ) || rl.count( cover.obj().opposite_part ) == 0 ) {
-                rightListSize += items_cover_bp( guy, cover ).size() + 1;
                 rl.insert( cover );
             }
         }
-        if( rightListLines > rightListSize ) {
-            rightListOffset = 0;
-        } else if( rightListOffset + rightListLines > rightListSize ) {
-            rightListOffset = rightListSize - rightListLines;
-        }
-        int pos = 1;
-        int curr = 0;
-        int encumbrance_char_allowance = 4; //Enough for " 99+", will increase if necessary
-        int item_name_offset = 2;
+        std::string right;
         for( const bodypart_id &cover : rl ) {
             if( cover == bodypart_str_id::NULL_ID() ) {
                 continue;
             }
-            if( curr >= rightListOffset && pos <= rightListLines ) {
-                mvwprintz( w_sort_right, point( 1, pos ), ( cover == bp ? c_yellow : c_white ),
-                           "%s:", body_part_name_as_heading( cover, combine_bp( cover ) ? 2 : 1 ) );
-                pos++;
-            }
-            curr++;
+            right += "<div class=\"line\">" + rml_ui::colored_rml( string_format( "%s:",
+                     body_part_name_as_heading( cover, combine_bp( cover ) ? 2 : 1 ) ),
+                     cover == bp ? c_yellow : c_white ) + "</div>";
             for( layering_item_info &elem : items_cover_bp( guy, cover ) ) {
-                if( curr >= rightListOffset && pos <= rightListLines ) {
-                    nc_color color = elem.penalties.color_for_stacking_badness();
-                    char plus = elem.penalties.badness() > 0 ? '+' : ' ';
-                    std::string encumbrance_string = string_format( "%d%c", elem.encumber, plus );
-                    if( utf8_width( encumbrance_string ) + 1 > encumbrance_char_allowance ) {
-                        encumbrance_char_allowance = utf8_width( encumbrance_string ) + 1;
-                    }
-                    trim_and_print( w_sort_right, point( item_name_offset, pos ),
-                                    right_w - item_name_offset - encumbrance_char_allowance, color,
-                                    elem.name );
-                    right_print( w_sort_right, pos, 0, c_light_gray, encumbrance_string );
-                    pos++;
-                }
-                curr++;
+                const char plus = elem.penalties.badness() > 0 ? '+' : ' ';
+                right += "<div class=\"line sa-row\"><span class=\"sa-mark\"></span><span class=\"sa-item\">" +
+                         rml_ui::colored_rml( elem.name, elem.penalties.color_for_stacking_badness() ) +
+                         "</span><span class=\"sa-value\">" + rml_ui::colored_rml( string_format( "%d%c",
+                                 elem.encumber, plus ), c_light_gray ) + "</span></div>";
             }
         }
-        scrollbar() //Right list scrollbar (on left side of right list)
-        .offset_x( 2 + left_w + middle_w )
-        .offset_y( 4 ) //Header allowance
-        .content_size( rightListSize )
-        .viewport_pos( rightListOffset )
-        .viewport_size( cont_h - 2 )
-        .apply( w_sort_armor );
 
-        // Right footer
-        mvwprintz( w_sort_right, point( 0, cont_h - 1 ), c_light_gray, _( "(Outermost)" ) );
+        win.set_body( "<div class=\"panes\"><div class=\"pane sa-pane\">" +
+                      pane_head( string_format( _( "Storage (%s)" ), volume_units_abbr() ) ) +
+                      "<div id=\"sa-list\" class=\"sa-scroll\">" + left + "</div>" + pane_foot +
+                      "</div><div class=\"pane sa-pane\"><div id=\"sa-info\" class=\"sa-scroll\">" + middle +
+                      "</div><div class=\"sa-encumbrance\">" + encumbrance +
+                      "</div></div><div class=\"pane sa-pane\">" + pane_head( _( "Encumbrance" ) ) +
+                      "<div id=\"sa-cover\" class=\"sa-scroll\">" + right + "</div>" + pane_foot + "</div></div>" );
 
-        // F5
-        wnoutrefresh( w_sort_armor ); // Required to show scrollbars
-        wnoutrefresh( w_sort_cat );
-        wnoutrefresh( w_sort_left );
-        wnoutrefresh( w_sort_middle );
-        wnoutrefresh( w_sort_right );
-        wnoutrefresh( w_encumb );
+        if( shown_cursor != std::make_pair( tabindex, leftListIndex ) ) {
+            shown_cursor = std::make_pair( tabindex, leftListIndex );
+            win.reveal( "sa-row-" + std::to_string( leftListIndex ) );
+            win.scroll_pane( "sa-info", rml_ui::scroll::top );
+        }
     } );
 
     bool exit = false;
@@ -945,7 +813,17 @@ void outfit::sort_armor( Character &guy )
         }
 
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        std::string action = ctxt.handle_input();
+        if( action == "SELECT" ) {
+            const std::string clicked = window->resolve_click( action );
+            const int row = window->hovered_index( "data-row" );
+            if( clicked != action ) {
+                // the body part arrows, and the close button
+                action = clicked;
+            } else if( row >= 0 && row < leftListSize && selected < 0 ) {
+                leftListIndex = row;
+            }
+        }
         if( guy.is_npc() && action == "ASSIGN_INVLETS" ) {
             // It doesn't make sense to assign invlets to NPC items
             continue;
@@ -965,58 +843,39 @@ void outfit::sort_armor( Character &guy )
         };
 
         if( action == "UP" && leftListSize > 0 ) {
-            mid_pane.offset = 0;
             if( leftListIndex > 0 ) {
                 item &item_to_check = *tmp_worn[leftListIndex - 1];
                 if( selected < 0 || !item_to_check.has_flag( flag_INTEGRATED ) ) {
                     leftListIndex--;
-                    if( leftListIndex < leftListOffset ) {
-                        leftListOffset = leftListIndex;
-                    }
                     shift_selected_item();
                 } else {
                     popup( _( "Can't sort this under your integrated armor!" ) );
                 }
             } else {
                 leftListIndex = leftListSize - 1;
-                if( leftListLines >= leftListSize ) {
-                    leftListOffset = 0;
-                } else {
-                    leftListOffset = leftListSize - leftListLines;
-                }
                 shift_selected_item();
             }
         } else if( action == "DOWN" && leftListSize > 0 ) {
-            mid_pane.offset = 0;
             if( leftListIndex + 1 < leftListSize ) {
                 leftListIndex++;
-                if( leftListIndex >= leftListOffset + leftListLines ) {
-                    leftListOffset = leftListIndex + 1 - leftListLines;
-                }
                 shift_selected_item();
             } else {
                 item &item_to_check = *tmp_worn[0];
                 if( selected < 0 || !item_to_check.has_flag( flag_INTEGRATED ) ) {
                     leftListIndex = 0;
-                    leftListOffset = 0;
                     shift_selected_item();
                 } else {
                     popup( _( "Can't sort this under your integrated armor!" ) );
                 }
             }
         } else if( action == "LEFT" || action == "PREV_TAB" || action == "RIGHT" || action == "NEXT_TAB" ) {
-            mid_pane.offset = 0;
             tabindex = inc_clamp_wrap( tabindex, action == "RIGHT" || action == "NEXT_TAB", tabcount );
-            leftListIndex = leftListOffset = 0;
+            leftListIndex = 0;
             selected = -1;
         } else if( action == "PAGE_DOWN" ) {
-            if( rightListOffset + rightListLines < rightListSize ) {
-                rightListOffset++;
-            }
+            window->scroll_pane( "sa-cover", rml_ui::scroll::line_down );
         } else if( action == "PAGE_UP" ) {
-            if( rightListOffset > 0 ) {
-                rightListOffset--;
-            }
+            window->scroll_pane( "sa-cover", rml_ui::scroll::line_up );
         } else if( action == "MOVE_ARMOR" && leftListIndex < leftListSize ) {
             if( selected >= 0 ) {
                 selected = -1;
@@ -1029,7 +888,6 @@ void outfit::sort_armor( Character &guy )
                 }
             }
         } else if( action == "CHANGE_SIDE" ) {
-            mid_pane.offset = 0;
             if( leftListIndex < leftListSize && tmp_worn[leftListIndex]->is_sided() ) {
                 if( player_character.query_yn( _( "Swap side for %s?" ),
                                                colorize( tmp_worn[leftListIndex]->tname(),
@@ -1046,7 +904,6 @@ void outfit::sort_armor( Character &guy )
                 }
             }
         } else if( action == "SORT_ARMOR" ) {
-            mid_pane.offset = 0;
             worn.sort(
             []( const item & l, const item & r ) {
                 if( l.has_flag( flag_INTEGRATED ) == r.has_flag( flag_INTEGRATED ) ) {
@@ -1058,7 +915,6 @@ void outfit::sort_armor( Character &guy )
             );
             guy.calc_encumbrance();
         } else if( action == "EQUIP_ARMOR" ) {
-            mid_pane.offset = 0;
             // filter inventory for all items that are armor/clothing
             item_location loc = game_menus::inv::wear( guy );
             // only equip if something valid selected!
@@ -1092,7 +948,6 @@ void outfit::sort_armor( Character &guy )
                 }
             }
         } else if( action == "EQUIP_ARMOR_HERE" ) {
-            mid_pane.offset = 0;
             // filter inventory for all items that are armor/clothing
             item_location loc = game_menus::inv::wear( guy, armor_cat[tabindex] );
             // only equip if something valid selected!
@@ -1124,7 +979,6 @@ void outfit::sort_armor( Character &guy )
                 }
             }
         } else if( action == "REMOVE_ARMOR" ) {
-            mid_pane.offset = 0;
             // query (for now)
             if( leftListIndex < leftListSize ) {
                 if( player_character.query_yn( _( "Remove selected armor?" ) ) ) {
@@ -1165,14 +1019,9 @@ void outfit::sort_armor( Character &guy )
                 }
             }
         } else if( action == "SCROLL_ITEM_INFO_UP" ) {
-            if( mid_pane.offset > 0 ) {
-                --mid_pane.offset;
-            }
+            window->scroll_pane( "sa-info", rml_ui::scroll::line_up );
         } else if( action == "SCROLL_ITEM_INFO_DOWN" ) {
-            const int mid_pane_height = cont_h - num_of_parts - 2 - mid_pane.header_lines;
-            if( mid_pane.offset + mid_pane_height <= static_cast<int>( mid_pane.size ) ) {
-                ++mid_pane.offset;
-            }
+            window->scroll_pane( "sa-info", rml_ui::scroll::line_down );
         } else if( action == "USAGE_HELP" ) {
             const std::vector<std::string> help_strings = {
                 string_format( _( "[<color_yellow>%s</color>]/[<color_yellow>%s</color>] to scroll the left pane (list of items).\n" ),

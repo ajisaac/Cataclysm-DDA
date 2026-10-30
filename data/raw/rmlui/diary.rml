@@ -1,0 +1,69 @@
+<rml>
+<head>
+    <title>Diary</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* The diary; see diary::show_diary_ui() in src/diary_ui.cpp. Its pages, the selected page's changes, and the selected change's text, side by side. */
+        #header
+        {
+            padding-bottom: 6dp;
+            border-bottom: 1dp #39465c;
+        }
+        .diary-pane
+        {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1dp #2a3242;
+            border-radius: 4dp;
+        }
+        .diary-pane.active
+        {
+            border-color: #5a7aa8;
+        }
+        .diary-pane:first-child
+        {
+            flex: 3 1 0;
+        }
+        .diary-pane + .diary-pane
+        {
+            flex: 5 1 0;
+        }
+        .diary-head
+        {
+            flex: 0 0 auto;
+            margin-bottom: 4dp;
+        }
+        .diary-scroll
+        {
+            flex: 1 1 0;
+            min-height: 0;
+            overflow-y: auto;
+        }
+        .diary-info
+        {
+            max-height: 120dp;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by diary::show_diary_ui() in src/diary_ui.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

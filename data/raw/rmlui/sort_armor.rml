@@ -1,0 +1,111 @@
+<rml>
+<head>
+    <title>Sort Armor</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* Sort armor; see outfit::sort_armor() in src/armor_layers.cpp. The worn items on the left, the selected one's details and the encumbrance in the middle, and the items over each body part on the right. */
+        #header
+        {
+            padding-bottom: 6dp;
+            border-bottom: 1dp #39465c;
+        }
+        #header .button
+        {
+            margin: 0 8dp;
+        }
+        .sa-pane
+        {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sa-head, .sa-foot
+        {
+            flex: 0 0 auto;
+        }
+        .sa-head
+        {
+            margin-bottom: 4dp;
+        }
+        .sa-foot
+        {
+            margin-top: 4dp;
+        }
+        .sa-scroll
+        {
+            flex: 1 1 0;
+            min-height: 0;
+            overflow-y: auto;
+        }
+        .sa-row
+        {
+            display: flex;
+            align-items: center;
+        }
+        .sa-row.sa-moving
+        {
+            background-color: #4a3a1c;
+        }
+        .sa-mark
+        {
+            flex: 0 0 auto;
+            width: 1em;
+        }
+        .sa-item
+        {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .sa-value
+        {
+            flex: 0 0 auto;
+            margin-left: 8dp;
+        }
+        /* The item's properties are lined up with spaces, so they need a
+           fixed-width font. */
+        #sa-info
+        {
+            font-family: cata-mono;
+            white-space: pre-wrap;
+        }
+        .sa-name
+        {
+            font-family: cata-sans;
+            margin-bottom: 4dp;
+        }
+        .sa-encumbrance
+        {
+            flex: 0 0 auto;
+            margin-top: 6dp;
+            padding-top: 4dp;
+            border-top: 1dp #39465c;
+        }
+        .sa-numbers
+        {
+            margin-left: 8dp;
+            font-family: cata-mono;
+            white-space: pre;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by outfit::sort_armor() in src/armor_layers.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

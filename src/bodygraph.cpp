@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <initializer_list>
 #include <memory>
 #include <set>
@@ -23,6 +24,8 @@
 #include "memory_fast.h"
 #include "output.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "string_formatter.h"
 #include "subbodypart.h"
 #include "translation.h"
@@ -245,16 +248,36 @@ using part_tuple =
 
 namespace
 {
+/** The body status window, from data/raw/rmlui/bodygraph.rml. */
+class bodygraph_window : public rml_ui::window
+{
+    public:
+        explicit bodygraph_window( const std::function<void( bodygraph_window & )> &update ) :
+            rml_ui::window( _( "Body status" ), "bodygraph.rml" ), update( update ) {
+            set_body_scrolls( false );
+        }
+
+        void reveal( const std::string &id ) {
+            scroll_into_view( id );
+        }
+        void scroll_pane( const std::string &id, rml_ui::scroll how ) {
+            scroll( id, how );
+        }
+
+    protected:
+        void on_redraw() override {
+            update( *this );
+        }
+
+    private:
+        std::function<void( bodygraph_window & )> update;
+};
+
 struct bodygraph_display {
     const Character *u;
     bodygraph_id id;
     input_context ctxt;
-    weak_ptr_fast<ui_adaptor> ui;
-    border_helper bh_borders;
-    catacurses::window w_border;
-    catacurses::window w_partlist;
-    catacurses::window w_graph;
-    catacurses::window w_info;
+    std::unique_ptr<bodygraph_window> window;
     // For each tuple:
     //   0 = bodypart or parent of subpart
     //   1 = subpart (if viewing a sub part)
@@ -263,28 +286,24 @@ struct bodygraph_display {
     std::vector<part_tuple> partlist;
     bodygraph_info info;
     std::vector<std::string> info_txt;
-    int all_height = 0;
-    int all_width = 0;
-    int partlist_width = 0;
-    int info_width = 0;
+    // The width the info is lined up for, in terminal columns
+    int info_width = 18;
     int sel_part = 0;
-    int top_part = 0;
-    int top_info = 0;
+    // The part as last shown, to keep it in view and its info at the top
+    int shown_part = -1;
 
     bodygraph_display() = delete;
     bodygraph_display( const bodygraph_display & ) = delete;
     bodygraph_display( const bodygraph_display && ) = delete;
     explicit bodygraph_display( const Character *u, const bodygraph_id &id );
 
-    shared_ptr_fast<ui_adaptor> create_or_get_ui_adaptor();
     void prepare_partlist();
     void prepare_infolist();
-    void prepare_infotext( bool reset_pos );
-    void init_ui_windows();
-    void draw_borders();
-    void draw_partlist();
-    void draw_graph();
-    void draw_info();
+    void prepare_infotext();
+    void redraw( bodygraph_window &win );
+    std::string partlist_rml() const;
+    std::string graph_rml() const;
+    std::string info_rml() const;
     void display();
 };
 } // namespace
@@ -304,103 +323,48 @@ bodygraph_display::bodygraph_display( const Character *u, const bodygraph_id &id
     ctxt.register_action( "PAGE_DOWN" );
     ctxt.register_action( "CONFIRM" );
     ctxt.register_action( "QUIT" );
+    // Clicks on the parts and the close button
+    ctxt.register_action( "SELECT" );
 }
 
-void bodygraph_display::init_ui_windows()
+void bodygraph_display::redraw( bodygraph_window &win )
 {
-    partlist_width = 18;
-    info_width = 18;
-    all_height = clamp( BPGRAPH_MAXROWS + 24, 0, TERMY );
-
-    int base_width = BPGRAPH_MAXCOLS + partlist_width + info_width + 4;
-    all_width = clamp( base_width + 40, 0, TERMX );
-    // distribute extra horizontal space to the parts/info columns
-    for( int i = base_width; i < all_width; i++ ) {
-        if( i % 4 == 0 ) {
-            partlist_width++;
-        } else {
-            info_width++;
-        }
-    }
-
-    point top_left( TERMX / 2 - all_width / 2, TERMY / 2 - all_height / 2 );
-
-    w_border = catacurses::newwin( all_height, all_width, top_left );
-    //NOLINTNEXTLINE(cata-use-named-point-constants)
-    w_partlist = catacurses::newwin( all_height - 2, partlist_width, top_left + point( 1, 1 ) );
-    int graph_vpad = clamp<int>( ( ( all_height - 3 ) - BPGRAPH_MAXROWS ) / 2, 0, all_height );
-    w_graph = catacurses::newwin( BPGRAPH_MAXROWS, BPGRAPH_MAXCOLS,
-                                  top_left + point( 2 + partlist_width, graph_vpad + 2 ) );
-    w_info = catacurses::newwin( all_height - 2, info_width,
-                                 top_left + point( 3 + partlist_width + BPGRAPH_MAXCOLS, 1 ) );
-
-    bh_borders = border_helper();
-    bh_borders.add_border().set( top_left, { all_width, all_height } );
-    bh_borders.add_border().set( top_left + point( partlist_width + 1, 0 ), { BPGRAPH_MAXCOLS + 2, all_height } );
-}
-
-void bodygraph_display::draw_borders()
-{
-    bh_borders.draw_border( w_border, c_white );
-
-    const int first_win_width = partlist_width;
-    auto center_txt_start = [&first_win_width]( std::string_view txt ) {
-        return 2 + first_win_width + ( BPGRAPH_MAXCOLS / 2 - utf8_width( txt, true ) / 2 );
-    };
-
-    // window title
-    const std::string title_txt = string_format( "< %s >", colorize( _( "Body status" ), c_yellow ) );
-    trim_and_print( w_border, point( center_txt_start( title_txt ), 0 ),
-                    BPGRAPH_MAXCOLS, c_white, title_txt );
-
+    win.set_size( rml_ui::term_width( clamp( BPGRAPH_MAXCOLS + 40 + 40, 0, TERMX ) ),
+                  rml_ui::term_height( clamp( BPGRAPH_MAXROWS + 24, 0, TERMY ) ) );
     // body part subtitle
     if( id->parent_bp.has_value() ) {
-        const std::string bpname = string_format( "\\_ %s _/",
-                                   colorize( to_upper_case( id->parent_bp.value()->name.translated() ), c_yellow ) );
-        trim_and_print( w_border, point( center_txt_start( bpname ), 1 ),
-                        BPGRAPH_MAXCOLS, c_white, bpname );
+        win.set_header( "<div class=\"center\">" + rml_ui::markup_to_rml( string_format( "\\_ %s _/",
+                        colorize( to_upper_case( id->parent_bp.value()->name.translated() ), c_yellow ) ),
+                        c_white ) + "</div>" );
     }
-
-    scrollbar()
-    .border_color( c_white )
-    .offset_x( 0 )
-    .offset_y( 1 )
-    .content_size( partlist.size() )
-    .viewport_pos( top_part )
-    .viewport_size( all_height - 2 )
-    .apply( w_border );
-
-    scrollbar()
-    .border_color( c_white )
-    .offset_x( all_width - 1 )
-    .offset_y( 1 )
-    .content_size( info_txt.size() )
-    .viewport_pos( top_info )
-    .viewport_size( all_height - 2 )
-    .apply( w_border );
-
-    wnoutrefresh( w_border );
+    win.set_body( "<div class=\"panes\"><div id=\"bg-parts\" class=\"pane\">" + partlist_rml() +
+                  "</div><div id=\"bg-graph\" class=\"pane narrow\">" + graph_rml() +
+                  "</div><div id=\"bg-info\" class=\"pane\">" + info_rml() + "</div></div>" );
+    if( sel_part != shown_part ) {
+        shown_part = sel_part;
+        win.reveal( "bg-part-" + std::to_string( sel_part ) );
+        win.scroll_pane( "bg-info", rml_ui::scroll::top );
+    }
 }
 
-void bodygraph_display::draw_partlist()
+std::string bodygraph_display::partlist_rml() const
 {
-    werase( w_partlist );
-    int y = 0;
-    for( int i = top_part; y < all_height - 2 && i < static_cast<int>( partlist.size() ); i++ ) {
+    std::string rml;
+    for( int i = 0; i < static_cast<int>( partlist.size() ); i++ ) {
         const auto &bgt = partlist[i];
         std::string txt = !std::get<1>( bgt ) ?
                           std::get<0>( bgt )->name.translated() :
                           std::get<1>( bgt )->name.translated();
-        txt = trim_by_length( uppercase_first_letter( txt ), partlist_width - 2 );
-        txt = left_justify( txt, partlist_width - 2, true );
-        txt.insert( 0, colorize( i == sel_part ? ">" : " ", c_yellow ) );
-        txt.append( !std::get<2>( bgt )->nested_graph.is_null() ?
-                    colorize( ">", i == sel_part ? hilite( c_light_green ) : c_light_green ) : " " );
-        nc_color clr = std::get<3>( bgt ) ? c_white : c_dark_gray;
-        trim_and_print( w_partlist, point( 0, y++ ), partlist_width,
-                        i == sel_part ? hilite( clr ) : clr, txt );
+        const nc_color clr = std::get<3>( bgt ) ? c_white : c_dark_gray;
+        // an arrow for parts with a graph of their own
+        const std::string nested = !std::get<2>( bgt )->nested_graph.is_null() ?
+                                   rml_ui::colored_rml( ">", c_light_green ) : std::string();
+        rml += string_format( "<div id=\"bg-part-%d\" class=\"item line bg-part%s\" data-row=\"%d\">", i,
+                              i == sel_part ? " selected" : "", i ) + "<span class=\"bg-name\">" +
+               rml_ui::colored_rml( uppercase_first_letter( txt ), clr ) + "</span><span>" + nested +
+               "</span></div>";
     }
-    wnoutrefresh( w_partlist );
+    return rml;
 }
 
 static const bodygraph_id &get_bg_rows( const bodygraph_id &bgid )
@@ -413,37 +377,30 @@ static const bodygraph_id &get_bg_rows( const bodygraph_id &bgid )
     return bgid;
 }
 
-void bodygraph_display::draw_graph()
+std::string bodygraph_display::graph_rml() const
 {
-    werase( w_graph );
-
     const bodygraph_part *selected_graph = std::get<2>( partlist[sel_part] );
     auto process_sym = [&]( const bodygraph_part * bgp, const std::string & sym ) {
         return colorize( sym, bgp != nullptr && selected_graph == bgp ?
                          selected_graph->sel_color : id->fill_color );
     };
-    std::vector<std::string> rows = get_bodygraph_lines( *u, process_sym, id );
-    for( int y = 0; static_cast<size_t>( y ) < rows.size(); y++ ) {
-        trim_and_print( w_graph, point( 0, y ), BPGRAPH_MAXCOLS, c_white, rows[y] );
+    std::string rml;
+    for( const std::string &row : get_bodygraph_lines( *u, process_sym, id ) ) {
+        rml += "<div class=\"bg-row\">" + rml_ui::markup_to_rml( row, c_white ) + "</div>";
     }
-
-    wnoutrefresh( w_graph );
+    return rml;
 }
 
-void bodygraph_display::draw_info()
+std::string bodygraph_display::info_rml() const
 {
-    werase( w_info );
+    std::string rml;
     if( std::get<3>( partlist[sel_part] ) ) {
-        int y = 0;
-        for( unsigned i = top_info; i < info_txt.size() && y < all_height - 2; i++, y++ ) {
-            if( info_txt[i] == "--" ) {
-                mvwhline( w_info, point( 1, y ), c_dark_gray, LINE_OXOX, info_width - 3 );
-            } else {
-                trim_and_print( w_info, point( 1, y ), info_width - 2, c_white, info_txt[i] );
-            }
+        for( const std::string &line : info_txt ) {
+            rml += line == "--" ? "<div class=\"sep\"></div>" :
+                   "<div class=\"bg-info-line\">" + rml_ui::markup_to_rml( line, c_white ) + "</div>";
         }
     }
-    wnoutrefresh( w_info );
+    return rml;
 }
 
 void bodygraph_display::prepare_partlist()
@@ -505,12 +462,11 @@ void bodygraph_display::prepare_infolist()
     u->worn.prepare_bodymap_info( info, bp, sub_parts, *u );
 
     // update info text cache
-    prepare_infotext( true );
+    prepare_infotext();
 }
 
-void bodygraph_display::prepare_infotext( bool reset_pos )
+void bodygraph_display::prepare_infotext()
 {
-    top_info = reset_pos ? 0 : top_info;
     if( info.specific_sublimb ) {
         // parent part
         info_txt.emplace_back( string_format( "%s: %s", colorize( _( "Sub part of" ), c_magenta ),
@@ -584,40 +540,34 @@ void bodygraph_display::prepare_infotext( bool reset_pos )
     }
 }
 
-shared_ptr_fast<ui_adaptor> bodygraph_display::create_or_get_ui_adaptor()
-{
-    shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
-    if( !current_ui ) {
-        ui = current_ui = make_shared_fast<ui_adaptor>();
-        current_ui->on_screen_resize( [this]( ui_adaptor & cui ) {
-            init_ui_windows();
-            info_txt.clear();
-            if( !partlist.empty() && std::get<3>( partlist[sel_part] ) ) {
-                prepare_infotext( false );
-            }
-            cui.position_from_window( w_border );
-        } );
-        current_ui->mark_resize();
-        current_ui->on_redraw( [this]( const ui_adaptor & ) {
-            draw_borders();
-            draw_partlist();
-            draw_graph();
-            draw_info();
-        } );
-    }
-    return current_ui;
-}
-
 void bodygraph_display::display()
 {
-    shared_ptr_fast<ui_adaptor> current_ui = create_or_get_ui_adaptor();
     prepare_partlist();
     prepare_infolist();
+    window = std::make_unique<bodygraph_window>( [this]( bodygraph_window & win ) {
+        redraw( win );
+    } );
 
     bool done = false;
     while( !done ) {
         ui_manager::redraw();
         std::string action = ctxt.handle_input();
+        if( action == "SELECT" ) {
+            const std::string clicked = window->resolve_click( action );
+            const int row = window->hovered_index( "data-row" );
+            if( clicked != action ) {
+                // the close button
+                action = clicked;
+            } else if( row >= 0 && row < static_cast<int>( partlist.size() ) ) {
+                // A click picks a part, and a click on the picked one opens its graph
+                if( row == sel_part ) {
+                    action = "CONFIRM";
+                } else {
+                    sel_part = row;
+                    prepare_infolist();
+                }
+            }
+        }
         if( action == "QUIT" || ( action == "LEFT" && id != bodygraph_full_body ) ) {
             done = true;
         } else if( action == "CONFIRM" || action == "RIGHT" ) {
@@ -629,21 +579,11 @@ void bodygraph_display::display()
                 }
             }
         } else if( action == "SCROLL_INFOBOX_UP" || action == "PAGE_UP" ) {
-            top_info--;
+            window->scroll_pane( "bg-info", rml_ui::scroll::line_up );
         } else if( action == "SCROLL_INFOBOX_DOWN" || action == "PAGE_DOWN" ) {
-            top_info++;
+            window->scroll_pane( "bg-info", rml_ui::scroll::line_down );
         } else if( navigate_ui_list( action, sel_part, 3, partlist.size(), true ) ) {
             prepare_infolist();
-        }
-        if( static_cast<int>( info_txt.size() ) >= all_height - 2 ) {
-            top_info = clamp( top_info, 0, static_cast<int>( info_txt.size() ) - ( all_height - 2 ) );
-        } else {
-            top_info = 0;
-        }
-        if( sel_part < top_part ) {
-            top_part = sel_part;
-        } else if( sel_part >= top_part + ( all_height - 2 ) ) {
-            top_part = sel_part - ( all_height - 3 );
         }
     }
 }

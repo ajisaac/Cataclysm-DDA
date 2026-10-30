@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <numeric>
@@ -59,6 +60,8 @@
 #include "player_activity.h"
 #include "point.h"
 #include "requirements.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "rng.h"
 #include "skill.h"
 #include "sounds.h"
@@ -388,26 +391,36 @@ static void load_available_constructions( std::vector<construction_group_str_id>
     }
 }
 
-static void draw_grid( const catacurses::window &w, const int list_width )
+namespace
 {
-    draw_border( w );
-    mvwprintz( w, point( 2, 0 ), c_light_red, _( " Construction " ) );
+/**
+ * The construction menu, from data/raw/rmlui/construction.rml, along the
+ * bottom of the screen; construction_menu() fills it on every redraw.
+ */
+class construction_window : public rml_ui::window
+{
+    public:
+        explicit construction_window( const std::function<void( construction_window & )> &update ) :
+            rml_ui::window( _( "Construction" ), "construction.rml" ), update( update ) {
+            set_body_scrolls( false );
+        }
 
-    wattron( w, c_light_gray );
+        void scroll_pane( const std::string &id, rml_ui::scroll how ) {
+            scroll( id, how );
+        }
+        void reveal( const std::string &id ) {
+            scroll_into_view( id );
+        }
 
-    // draw internal lines
-    mvwvline( w, point( list_width, 1 ), LINE_XOXO, getmaxy( w ) - 2 );
-    mvwhline( w, point( 1, 2 ), LINE_OXOX, list_width );
-    // draw intersections
-    mvwaddch( w, point( list_width, 0 ), LINE_OXXX );
-    mvwaddch( w, point( list_width, getmaxy( w ) - 1 ), LINE_XXOX );
-    mvwaddch( w, point( 0, 2 ), LINE_XXXO );
-    mvwaddch( w, point( list_width, 2 ), LINE_XOXX );
+    protected:
+        void on_redraw() override {
+            update( *this );
+        }
 
-    wattroff( w, c_light_gray );
-
-    wnoutrefresh( w );
-}
+    private:
+        std::function<void( construction_window & )> update;
+};
+} // namespace
 
 static nc_color construction_color( const construction_group_str_id &group, bool highlight )
 {
@@ -531,19 +544,15 @@ construction_id construction_menu( const bool blueprint )
         return construction_id( -1 );
     }
 
+    // Where the menu goes and how big it is, in terminal cells
     int w_height = 0;
     int w_width = 0;
-    catacurses::window w_con;
-
-    int w_list_width = 0;
-    int w_list_height = 0;
-    const int w_list_x0 = 1;
-    catacurses::window w_list;
+    point w_origin;
+    point laid_out_term;
 
     std::vector<std::string> notes;
-    int pos_x = 0;
+    // The width text is folded to, in terminal columns
     int available_window_width = 0;
-    int available_buffer_height = 0;
 
     construction_id ret( -1 );
 
@@ -552,16 +561,11 @@ construction_id construction_menu( const bool blueprint )
     bool isnew = true;
     int tabindex = 0;
     int select = 0;
-    int offset = 0;
     bool exit = false;
     construction_category_id category_id;
     std::vector<construction_group_str_id> constructs;
-    //storage for the color text so it can be scrolled
+    // The lines of each stage of the selected construction
     std::vector< std::vector < std::string > > construct_buffers;
-    std::vector<std::string> full_construct_buffer;
-    std::vector<int> construct_buffer_breakpoints;
-    int total_project_breakpoints = 0;
-    int current_construct_breakpoint = 0;
     avatar &player_character = get_avatar();
     const inventory &total_inv = player_character.crafting_inventory();
 
@@ -578,6 +582,8 @@ construction_id construction_menu( const bool blueprint )
     ctxt.register_action( "HELP_KEYBINDINGS" );
     ctxt.register_action( "FILTER" );
     ctxt.register_action( "RESET_FILTER" );
+    // Clicks on the list, the category arrows and the close button
+    ctxt.register_action( "SELECT" );
     ctxt.set_timeout( get_option<int>( "BLINK_SPEED" ) );
 
     const std::vector<construction_category> &construct_cat = construction_categories::get_all();
@@ -586,7 +592,6 @@ construction_id construction_menu( const bool blueprint )
     std::string filter;
 
     const nc_color color_stage = c_white;
-    ui_adaptor ui;
 
     std::unique_ptr<on_out_of_scope> restore_ui = std::make_unique<on_out_of_scope>( []() {
         tilecontext->set_disable_occlusion( false );
@@ -599,9 +604,6 @@ construction_id construction_menu( const bool blueprint )
                 std::make_unique<restore_on_out_of_scope<tripoint_rel_ms>>( player_character.view_offset );
 
     const auto recalc_buffer = [&]() {
-        //leave room for top and bottom UI text
-        available_buffer_height = w_height - 3 - 3 - static_cast<int>( notes.size() );
-
         if( !constructs.empty() ) {
             if( select >= static_cast<int>( constructs.size() ) ) {
                 select = 0;
@@ -614,9 +616,6 @@ construction_id construction_menu( const bool blueprint )
             std::vector<const construction *> options = constructions_by_group( current_group );
 
             construct_buffers.clear();
-            current_construct_breakpoint = 0;
-            construct_buffer_breakpoints.clear();
-            full_construct_buffer.clear();
             int stage_counter = 0;
             for( std::vector<const construction *>::iterator it = options.begin();
                  it != options.end(); ++it ) {
@@ -769,29 +768,10 @@ construction_id construction_menu( const bool blueprint )
                 construct_buffers.push_back( current_buffer );
             }
 
-            //determine where the printing starts for each project, so it can be scrolled to those points
-            size_t current_buffer_location = 0;
-            for( size_t i = 0; i < construct_buffers.size(); i++ ) {
-                construct_buffer_breakpoints.push_back( static_cast<int>( current_buffer_location ) );
-                full_construct_buffer.insert( full_construct_buffer.end(), construct_buffers[i].begin(),
-                                              construct_buffers[i].end() );
-
-                //handle text too large for one screen
-                if( construct_buffers[i].size() > static_cast<size_t>( available_buffer_height ) ) {
-                    construct_buffer_breakpoints.push_back( static_cast<int>( current_buffer_location +
-                                                            static_cast<size_t>( available_buffer_height ) ) );
-                }
-                current_buffer_location += construct_buffers[i].size();
-                if( i < construct_buffers.size() - 1 ) {
-                    full_construct_buffer.emplace_back( );
-                    current_buffer_location++;
-                }
-            }
-            total_project_breakpoints = static_cast<int>( construct_buffer_breakpoints.size() );
         }
     };
 
-    ui.on_screen_resize( [&]( ui_adaptor & ui ) {
+    const auto update_layout = [&]() {
         const int left_panel_width = panel_manager::get_manager().get_width_left();
         const int right_panel_width = panel_manager::get_manager().get_width_right();
 
@@ -841,7 +821,7 @@ construction_id construction_menu( const bool blueprint )
             w_x0 = 0;
         }
 
-        w_con = catacurses::newwin( w_height, w_width, point( w_x0, w_y0 ) );
+        w_origin = point( w_x0, w_y0 );
 
         // center player tile in the visible part of main UI
         const point visible_center(
@@ -856,95 +836,70 @@ construction_id construction_menu( const bool blueprint )
         player_character.view_offset = tripoint_rel_ms( player_character.pos_bub().xy() - target, 0 );
         g->invalidate_main_ui_adaptor();
 
-        w_list_width = static_cast<int>( .375 * w_width );
-        w_list_height = w_height - 4;
-        w_list = catacurses::newwin( w_list_height, w_list_width,
-                                     point( w_x0 + w_list_x0, w_y0 + 3 ) );
-
-        pos_x = w_list_width + w_list_x0 + 2;
-        available_window_width = w_width - pos_x - 1;
+        // the list takes three eighths, and the details the rest
+        available_window_width = w_width - static_cast<int>( .375 * w_width ) - 4;
 
         recalc_buffer();
+    };
 
-        ui.position_from_window( w_con );
-    } );
-    ui.mark_resize();
+    // What was last shown, to scroll to the selection and to the top of new details
+    int shown_select = -1;
+    construction_group_str_id shown_group = construction_group_str_id::NULL_ID();
 
-    ui.on_redraw( [&]( ui_adaptor & ui ) {
-        draw_grid( w_con, w_list_width + w_list_x0 );
+    std::unique_ptr<construction_window> window = std::make_unique<construction_window>(
+    [&]( construction_window & win ) {
+        win.set_position( rml_ui::term_width( w_origin.x ), rml_ui::term_height( w_origin.y ) );
+        win.set_size( rml_ui::term_width( w_width ), rml_ui::term_height( w_height ) );
 
-        // Erase existing tab selection & list of constructions
-        mvwhline( w_con, point::south_east, BORDER_COLOR, ' ', w_list_width );
-        werase( w_list );
-        // Print new tab listing
-        // NOLINTNEXTLINE(cata-use-named-point-constants)
-        mvwprintz( w_con, point( 1, 1 ), c_yellow, "<< %s >>", construct_cat[tabindex].name() );
-        // Determine where in the master list to start printing
-        calcStartPos( offset, select, w_list_height, constructs.size() );
-        // Print the constructions between offset and max (or how many will fit)
-        for( size_t i = 0; static_cast<int>( i ) < w_list_height &&
-             ( i + offset ) < constructs.size(); i++ ) {
-            int current = i + offset;
-            const construction_group_str_id &group = constructs[current];
-            bool highlight = current == select;
-            const point print_from( 0, i );
-            if( highlight ) {
-                ui.set_cursor( w_list, print_from );
-            }
-            trim_and_print( w_list, print_from, w_list_width,
-                            construction_color( group, highlight ), group->name() );
+        // The category, with buttons either side, over the list of constructions
+        std::string list;
+        for( size_t i = 0; i < constructs.size(); i++ ) {
+            const construction_group_str_id &group = constructs[i];
+            list += string_format( "<div id=\"con-row-%d\" class=\"item line%s\" data-row=\"%d\">",
+                                   static_cast<int>( i ), static_cast<int>( i ) == select ? " selected" : "",
+                                   static_cast<int>( i ) ) +
+                    rml_ui::colored_rml( group->name(), construction_color( group, false ) ) + "</div>";
         }
 
-        // Clear out lines for tools & materials
-        mvwrectf( w_con, point( pos_x, 1 ), BORDER_COLOR, ' ', available_window_width, w_height - 2 );
-
-        // print the hotkeys regardless of if there are constructions
-        for( size_t i = 0; i < notes.size(); ++i ) {
-            trim_and_print( w_con, point( pos_x,
-                                          w_height - 1 - static_cast<int>( notes.size() ) + static_cast<int>( i ) ),
-                            available_window_width, c_white, notes[i] );
-        }
-
-        if( !constructs.empty() ) {
-            if( select >= static_cast<int>( constructs.size() ) ) {
-                select = 0;
-            }
-            const construction_group_str_id &current_group = constructs[select];
-            // Print construction name
-            trim_and_print( w_con, point( pos_x, 1 ), available_window_width, c_white, current_group->name() );
-
-            if( current_construct_breakpoint > 0 ) {
-                // Print previous stage indicator if breakpoint is past the beginning
-                trim_and_print( w_con, point( pos_x, 2 ), available_window_width, c_white,
-                                _( "Press [<color_yellow>%s</color>] to show previous stage(s)." ),
-                                ctxt.get_desc( "SCROLL_STAGE_UP" ) );
-            }
-            if( static_cast<size_t>( construct_buffer_breakpoints[current_construct_breakpoint] ) +
-                available_buffer_height < full_construct_buffer.size() ) {
-                // Print next stage indicator if more breakpoints are remaining after screen height
-                trim_and_print( w_con, point( pos_x, w_height - 2 - static_cast<int>( notes.size() ) ),
-                                available_window_width, c_white,
-                                _( "Press [<color_yellow>%s</color>] to show next stage(s)." ),
-                                ctxt.get_desc( "SCROLL_STAGE_DOWN" ) );
-            }
-            // Leave room for above/below indicators
-            int ypos = 3;
-            nc_color stored_color = color_stage;
-            for( size_t i = static_cast<size_t>( construct_buffer_breakpoints[current_construct_breakpoint] );
-                 i < full_construct_buffer.size(); i++ ) {
-                //the value of 3 is from leaving room at the top of window
-                if( ypos > available_buffer_height + 3 ) {
-                    break;
+        // The selected construction's stages, then the notes
+        std::string details;
+        if( !constructs.empty() && select < static_cast<int>( constructs.size() ) ) {
+            details += "<div class=\"con-name\">" + rml_ui::colored_rml( constructs[select]->name(),
+                       c_white ) + "</div><div id=\"con-stages\">";
+            for( const std::vector<std::string> &stage : construct_buffers ) {
+                details += "<div class=\"con-stage\">";
+                for( const std::string &line : stage ) {
+                    details += "<div>" + rml_ui::markup_to_rml( line, color_stage ) + "</div>";
                 }
-                print_colored_text( w_con, point( w_list_width + w_list_x0 + 2, ypos++ ), stored_color, color_stage,
-                                    full_construct_buffer[i] );
+                details += "</div>";
             }
+            details += "</div>";
+        } else {
+            details += "<div id=\"con-stages\"></div>";
         }
+        details += "<div class=\"con-notes\">";
+        for( const std::string &note : notes ) {
+            details += "<div>" + rml_ui::markup_to_rml( note, c_white ) + "</div>";
+        }
+        details += "</div>";
 
-        draw_scrollbar( w_con, select, w_list_height, constructs.size(), point( 0, 3 ) );
-        wnoutrefresh( w_con );
+        win.show( "body", "<div class=\"panes\"><div class=\"pane con-left\"><div class=\"con-category\">" +
+                  rml_ui::button_rml( "PREV_TAB", "&lt;&lt;" ) +
+                  rml_ui::colored_rml( construct_cat[tabindex].name(), c_yellow ) +
+                  rml_ui::button_rml( "NEXT_TAB", "&gt;&gt;" ) + "</div><div id=\"con-list\">" + list +
+                  "</div></div><div class=\"pane con-right\">" + details + "</div></div>" );
 
-        wnoutrefresh( w_list );
+        if( select != shown_select ) {
+            shown_select = select;
+            win.reveal( "con-row-" + std::to_string( select ) );
+        }
+        const construction_group_str_id group = !constructs.empty() &&
+                                                select < static_cast<int>( constructs.size() ) ? constructs[select] :
+                                                construction_group_str_id::NULL_ID();
+        if( group != shown_group ) {
+            shown_group = group;
+            win.scroll_pane( "con-stages", rml_ui::scroll::top );
+        }
     } );
 
     construction_group_str_id con_preview_group = construction_group_str_id::NULL_ID();
@@ -956,6 +911,12 @@ construction_id construction_menu( const bool blueprint )
     g->add_draw_callback( draw_preview );
 
     do {
+        // The menu's place depends on the screen's size, and moves the view
+        if( laid_out_term != point( TERMX, TERMY ) ) {
+            laid_out_term = point( TERMX, TERMY );
+            update_layout();
+        }
+
         if( update_cat ) {
             update_cat = false;
             construction_group_str_id last_construction = construction_group_str_id::NULL_ID();
@@ -1047,9 +1008,24 @@ construction_id construction_menu( const bool blueprint )
         g->invalidate_main_ui_adaptor();
         ui_manager::redraw();
 
-        const std::string action = ctxt.handle_input();
+        std::string action = ctxt.handle_input();
         const int recmax = static_cast<int>( constructs.size() );
         const int scroll_rate = recmax > 20 ? 10 : 3;
+        if( action == "SELECT" && window ) {
+            const std::string clicked = window->resolve_click( action );
+            const int row = window->hovered_index( "data-row" );
+            if( clicked != action ) {
+                action = clicked;
+            } else if( row >= 0 && row < recmax ) {
+                // A click picks a construction, and a click on the picked one builds it
+                if( row == select ) {
+                    action = "CONFIRM";
+                } else {
+                    select = row;
+                    update_info = true;
+                }
+            }
+        }
         if( action == "TIMEOUT" ) {
             blink = !blink;
         } else {
@@ -1083,8 +1059,8 @@ construction_id construction_menu( const bool blueprint )
             update_cat = true;
             tabindex = inc_clamp_wrap( tabindex, action == "RIGHT" || action == "NEXT_TAB", tabcount );
         } else if( action == "SCROLL_STAGE_UP" || action == "SCROLL_STAGE_DOWN" ) {
-            current_construct_breakpoint = inc_clamp( current_construct_breakpoint,
-                                           action == "SCROLL_STAGE_DOWN", total_project_breakpoints - 1 );
+            window->scroll_pane( "con-stages", action == "SCROLL_STAGE_DOWN" ?
+                                 rml_ui::scroll::page_down : rml_ui::scroll::page_up );
         } else if( action == "QUIT" ) {
             exit = true;
         } else if( action == "TOGGLE_UNAVAILABLE_CONSTRUCTIONS" ) {
@@ -1092,7 +1068,6 @@ construction_id construction_menu( const bool blueprint )
             update_cat = true;
             // cycle through filter modes: 0 -> 1 -> 2 -> 0
             filter_mode = ( filter_mode + 1 ) % 3;
-            offset = 0;
             load_available_constructions( available, cat_available, filter_mode );
             // force main UI to refresh so the notes update immediately
             g->invalidate_main_ui_adaptor();
@@ -1112,7 +1087,7 @@ construction_id construction_menu( const bool blueprint )
                         draw_preview.reset();
                         restore_view.reset();
                         restore_ui.reset();
-                        ui.reset();
+                        window.reset();
                         place_construction( { constructs[select] } );
                         uistate.last_construction = constructs[select];
                     }

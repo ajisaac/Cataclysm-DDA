@@ -1,0 +1,156 @@
+<rml>
+<head>
+    <title>World</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* World selection, world creation and the mod manager; see
+           worldfactory in src/worldfactory.cpp. */
+        .wg-row, .wg-mod
+        {
+            display: flex;
+            align-items: center;
+        }
+        .wg-num
+        {
+            flex: 0 0 auto;
+            width: 2.5em;
+            color: #8d96a6;
+        }
+        .wg-empty
+        {
+            padding: 20dp 0;
+            text-align: center;
+        }
+        .wg-category
+        {
+            margin-top: 4dp;
+        }
+        .wg-mod-name
+        {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .wg-mod.wg-cursor
+        {
+            background-color: #1f2736;
+        }
+        .wg-shift
+        {
+            flex: 0 0 auto;
+            width: 2.5em;
+            font-family: cata-mono;
+        }
+
+        /* The mod manager: the categories to pick mods from, the mods beside
+           the load order, then the selected mod's description. */
+        .wg-tabs
+        {
+            display: flex;
+            flex-wrap: wrap;
+        }
+        .wg-tab
+        {
+            padding: 2dp 8dp;
+            margin: 0 4dp 4dp 0;
+            border-radius: 3dp;
+            background-color: #1b2130;
+            color: #8fd18f;
+        }
+        .wg-tab:hover
+        {
+            background-color: #232b3a;
+        }
+        .wg-tab.active
+        {
+            background-color: #2b3a52;
+            color: #ffffff;
+        }
+        .wg-pane
+        {
+            border: 1dp #2a3242;
+            border-radius: 4dp;
+        }
+        .wg-pane.active
+        {
+            border-color: #5a7aa8;
+        }
+        .wg-pane-head
+        {
+            text-align: center;
+            margin-bottom: 4dp;
+        }
+        #wg-desc
+        {
+            flex: 0 0 auto;
+            height: 110dp;
+            margin-top: 6dp;
+            padding-top: 4dp;
+            overflow-y: auto;
+            border-top: 1dp #39465c;
+        }
+        #filter-row
+        {
+            display: block;
+        }
+        #filter-row.hidden
+        {
+            display: none;
+        }
+
+        /* World creation: the name, the sliders and the buttons. */
+        .wg-slider
+        {
+            margin-bottom: 6dp;
+        }
+        .wg-slider .button
+        {
+            margin: 0 6dp;
+            padding: 0 6dp;
+        }
+        .wg-slider-bar
+        {
+            font-family: cata-mono;
+            white-space: pre;
+        }
+        .wg-buttons
+        {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 10dp;
+        }
+        .wg-button
+        {
+            padding: 2dp 6dp;
+            border-radius: 3dp;
+        }
+        .wg-button:hover
+        {
+            background-color: #232b3a;
+        }
+        .wg-hint
+        {
+            margin-bottom: 6dp;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by worldfactory in src/worldfactory.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" class="text" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

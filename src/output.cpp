@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwctype>
+#include <functional>
 #include <map>
 #include <sstream>
 #include <stack>
@@ -33,6 +34,7 @@
 #include "point.h"
 #include "popup.h"
 #include "rml_markup.h"
+#include "rml_window.h"
 #include "rng.h"
 #include "sdltiles.h" // IWYU pragma: keep
 #include "string_formatter.h"
@@ -431,12 +433,32 @@ int fold_and_print_from( const catacurses::window &w, const point &begin, int wi
     return textformatted.size();
 }
 
+namespace
+{
+/** A window of text that scrolls, for scrollable_text(). */
+class scrollable_text_window : public rml_ui::window
+{
+    public:
+        scrollable_text_window( const std::string &title,
+                                const std::function<catacurses::window()> &init_window ) :
+            rml_ui::window( title ), init_window( init_window ) {}
+
+    protected:
+        void on_redraw() override {
+            // The window the caller would have drawn in gives the place and size
+            const catacurses::window w = init_window();
+            set_position( rml_ui::term_width( getbegx( w ) ), rml_ui::term_height( getbegy( w ) ) );
+            set_size( rml_ui::term_width( getmaxx( w ) ), rml_ui::term_height( getmaxy( w ) ) );
+        }
+
+    private:
+        std::function<catacurses::window()> init_window;
+};
+} // namespace
+
 void scrollable_text( const std::function<catacurses::window()> &init_window,
                       const std::string &title, const std::string &text )
 {
-    // NOLINTNEXTLINE(cata-use-named-point-constants)
-    constexpr point text2( 1, 1 );
-
     input_context ctxt( "SCROLLABLE_TEXT" );
     ctxt.register_action( "UP" );
     ctxt.register_action( "DOWN" );
@@ -445,62 +467,26 @@ void scrollable_text( const std::function<catacurses::window()> &init_window,
     ctxt.register_action( "CONFIRM" );
     ctxt.register_action( "QUIT" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
-    // mouse
-    ctxt.register_action( "SCROLL_UP" );
-    ctxt.register_action( "SCROLL_DOWN" );
+    // the close button
+    ctxt.register_action( "SELECT" );
 
-    catacurses::window w;
-    int width = 0;
-    int height = 0;
-    int text_w = 0;
-    int text_h = 0;
-    std::vector<std::string> lines;
-    int beg_line = 0;
-    int max_beg_line = 0;
-
-    ui_adaptor ui;
-    const auto screen_resize_cb = [&]( ui_adaptor & ui ) {
-        w = init_window();
-
-        width = getmaxx( w );
-        height = getmaxy( w );
-        text_w = std::max( 0, width - 2 );
-        text_h = std::max( 0, height - 2 );
-
-        lines = foldstring( text, text_w );
-        max_beg_line = std::max( 0, static_cast<int>( lines.size() ) - text_h );
-
-        ui.position_from_window( w );
-    };
-    screen_resize_cb( ui );
-    ui.on_screen_resize( screen_resize_cb );
-    ui.on_redraw( [&]( const ui_adaptor & ) {
-        werase( w );
-        draw_border( w, BORDER_COLOR, title );
-        for( int line = beg_line, pos_y = text2.y; line < std::min<int>( beg_line + text_h, lines.size() );
-             ++line, ++pos_y ) {
-            nc_color dummy = c_white;
-            print_colored_text( w, point( text2.x, pos_y ), dummy, dummy, lines[line] );
-        }
-        scrollbar().offset_x( width - 1 ).offset_y( text2.y ).content_size( lines.size() )
-        .viewport_pos( std::min( beg_line, max_beg_line ) ).viewport_size( text_h ).apply( w );
-        wnoutrefresh( w );
-    } );
+    scrollable_text_window window( title, init_window );
+    window.set_body( "<div class=\"pre\">" + rml_ui::markup_to_rml( text, c_white ) + "</div>" );
 
     std::string action;
     do {
         ui_manager::redraw();
 
-        action = ctxt.handle_input();
-        if( action == "UP" || action == "SCROLL_UP" || action == "DOWN" || action == "SCROLL_DOWN" ) {
-            beg_line = inc_clamp( beg_line, action == "DOWN" || action == "SCROLL_DOWN", max_beg_line );
+        action = window.resolve_click( ctxt.handle_input() );
+        // The mouse wheel scrolls it by itself
+        if( action == "UP" ) {
+            window.scroll_body( rml_ui::scroll::line_up );
+        } else if( action == "DOWN" ) {
+            window.scroll_body( rml_ui::scroll::line_down );
         } else if( action == "PAGE_UP" ) {
-            beg_line = std::max( beg_line - text_h, 0 );
+            window.scroll_body( rml_ui::scroll::page_up );
         } else if( action == "PAGE_DOWN" ) {
-            // always scroll an entire page's length
-            if( beg_line < max_beg_line ) {
-                beg_line += text_h;
-            }
+            window.scroll_body( rml_ui::scroll::page_down );
         }
     } while( action != "CONFIRM" && action != "QUIT" );
 }

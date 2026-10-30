@@ -1,0 +1,56 @@
+<rml>
+<head>
+    <title>Body status</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* The body status window; see bodygraph_display in src/bodygraph.cpp. The body parts, the graph of the body, and the selected part's status. */
+        .bg-part
+        {
+            display: flex;
+            align-items: center;
+        }
+        .bg-name
+        {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+        }
+        /* The graph is drawn in characters, so it needs a fixed-width font. */
+        #bg-graph
+        {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            font-family: cata-mono;
+        }
+        .bg-row
+        {
+            white-space: pre;
+            line-height: 1.1em;
+        }
+        .bg-info-line
+        {
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by bodygraph_display in src/bodygraph.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

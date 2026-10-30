@@ -34,6 +34,8 @@
 #include "output.h"
 #include "pimpl.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "string_formatter.h"
 #include "translation.h"
 #include "translations.h"
@@ -224,14 +226,13 @@ char get_free_invlet( Character &p )
     return ' ';
 }
 
-static void draw_bionics_titlebar( const catacurses::window &window, avatar *p,
-                                   bionic_menu_mode mode )
+/** The header: what keys do in this mode, the fuel at hand, and the power. */
+static std::string bionics_titlebar_rml( avatar *p, bionic_menu_mode mode )
 {
     map &here = get_map();
 
     input_context ctxt( "BIONICS", keyboard_mode::keychar );
 
-    werase( window );
     std::string fuel_string;
     bool found_fuel = false;
     fuel_string = _( "Available Fuel: " );
@@ -285,18 +286,9 @@ static void draw_bionics_titlebar( const catacurses::window &window, avatar *p,
         power_string = std::to_string( milli ) + pgettext( "energy unit: millijoule", "mJ" );
     }
 
-    const int pwr_str_pos = right_print( window, 1, 1, c_white,
-                                         string_format( _( "Bionic Power: <color_light_blue>%s</color>/<color_light_blue>%ikJ</color>" ),
-                                                 power_string, units::to_kilojoule( p->get_max_power_level() ) ) );
-
-    wattron( window, BORDER_COLOR );
-    mvwaddch( window, point( pwr_str_pos - 1, 1 ), LINE_XOXO ); // |
-    mvwaddch( window, point( pwr_str_pos - 1, 2 ), LINE_XXOO ); // |_
-    mvwhline( window, point( pwr_str_pos, 2 ), LINE_OXOX, getmaxx( window ) - pwr_str_pos ); // -
-    mvwhline( window, point::zero, LINE_OXOX, getmaxx( window ) ); // -
-    mvwaddch( window, point( pwr_str_pos - 1, 0 ), LINE_OXXX ); // ^|^
-    wattroff( window, BORDER_COLOR );
-    center_print( window, 0, c_light_red, _( "Bionics" ) );
+    const std::string power_rml = rml_ui::markup_to_rml( string_format(
+                                      _( "Bionic Power: <color_light_blue>%s</color>/<color_light_blue>%ikJ</color>" ),
+                                      power_string, units::to_kilojoule( p->get_max_power_level() ) ), c_white );
 
     std::string desc_append = string_format(
                                   _( "[<color_yellow>%s</color>] Reassign, [<color_yellow>%s</color>] Switch tabs, "
@@ -320,10 +312,9 @@ static void draw_bionics_titlebar( const catacurses::window &window, avatar *p,
                               ctxt.get_desc( "TOGGLE_EXAMINE" ), desc_append );
     }
 
-    // NOLINTNEXTLINE(cata-use-named-point-constants)
-    int lines_count = fold_and_print( window, point( 1, 1 ), pwr_str_pos - 2, c_white, desc );
-    fold_and_print( window, point( 1, ++lines_count ), pwr_str_pos - 2, c_white, fuel_string );
-    wnoutrefresh( window );
+    return "<div class=\"hbox\"><div class=\"grow\"><div>" + rml_ui::markup_to_rml( desc, c_white ) +
+           "</div><div>" + rml_ui::markup_to_rml( fuel_string, c_white ) +
+           "</div></div><div class=\"fixed bio-power\">" + power_rml + "</div></div>";
 }
 
 //builds the power usage string of a given bionic
@@ -392,159 +383,64 @@ static std::string build_bionic_powerdesc_string( const bionic &bio, avatar *p )
     return power_desc;
 }
 
-static void draw_bionics_tabs( const catacurses::window &win, const size_t active_num,
-                               const size_t passive_num, const bionic_tab_mode current_mode )
+static std::vector<std::string> bionics_tab_names( const size_t active_num,
+        const size_t passive_num )
 {
-    werase( win );
-
-    const std::vector<std::pair<bionic_tab_mode, std::string>> tabs = {
-        { bionic_tab_mode::TAB_ACTIVE, string_format( _( "ACTIVE (%i)" ), active_num ) },
-        { bionic_tab_mode::TAB_PASSIVE, string_format( _( "PASSIVE (%i)" ), passive_num ) },
+    return {
+        string_format( _( "ACTIVE (%i)" ), active_num ),
+        string_format( _( "PASSIVE (%i)" ), passive_num )
     };
-    draw_tabs( win, tabs, current_mode );
-
-    // Draw symbols to connect additional lines to border
-    int width = getmaxx( win );
-    int height = getmaxy( win );
-    wattron( win, BORDER_COLOR );
-    mvwvline( win, point::zero, LINE_XOXO, height - 1 ); // |
-    mvwvline( win, point( width - 1, 0 ), LINE_XOXO, height - 1 ); // |
-    mvwaddch( win, point( 0, height - 1 ), LINE_XXXO ); // |-
-    mvwaddch( win, point( width - 1, height - 1 ), LINE_XOXX ); // -|
-    wattroff( win, BORDER_COLOR );
-
-    wnoutrefresh( win );
 }
 
-static void draw_description( const catacurses::window &win, const bionic &bio,
-                              const int num_of_bp, avatar *p )
+static std::string bionic_description_rml( const bionic &bio, avatar *p )
 {
-    werase( win );
-    const int width = getmaxx( win );
     const std::string poweronly_string = build_bionic_poweronly_string( bio, p );
-    int ypos = fold_and_print( win, point::zero, width, c_white, "%s", bio.id->name );
+    std::string rml = "<div>" + rml_ui::colored_rml( bio.id->name.translated(), c_white ) + "</div>";
     if( !poweronly_string.empty() ) {
-        ypos += fold_and_print( win, point( 0, ypos ), width, c_light_gray,
-                                _( "Power usage: %s" ), poweronly_string );
+        rml += "<div>" + rml_ui::markup_to_rml( string_format( _( "Power usage: %s" ), poweronly_string ),
+                                                c_light_gray ) + "</div>";
     }
-    ypos += 1 + fold_and_print( win, point( 0, ypos ), width, c_light_blue, "%s", bio.id->description );
+    rml += "<div class=\"bio-desc\">" + rml_ui::markup_to_rml( bio.id->description.translated(),
+            c_light_blue ) + "</div>";
 
     // TODO: Unhide when enforcing limits
     if( get_option < bool >( "CBM_SLOTS_ENABLED" ) ) {
-        const bool each_bp_on_new_line = ypos + num_of_bp + 1 < getmaxy( win );
-        ypos += fold_and_print( win, point( 0, ypos ), width, c_light_gray, list_occupied_bps( bio.id,
-                                _( "This bionic occupies the following body parts:" ), each_bp_on_new_line ) );
+        rml += "<div>" + rml_ui::markup_to_rml( list_occupied_bps( bio.id,
+                                                _( "This bionic occupies the following body parts:" ), true ), c_light_gray ) + "</div>";
     }
 
     if( bio.has_weapon() ) {
-        fold_and_print( win, point( 0, ypos ), width, c_light_gray,
-                        _( "Installed weapon: %s" ), bio.get_weapon().tname() );
+        rml += "<div>" + rml_ui::markup_to_rml( string_format( _( "Installed weapon: %s" ),
+                                                bio.get_weapon().tname() ), c_light_gray ) + "</div>";
     }
-    wnoutrefresh( win );
+    return rml;
 }
 
-static void draw_connectors( const catacurses::window &win, const point &start,
-                             int last_x, const bionic_id &bio_id, const std::map<bodypart_str_id, size_t> &bp_to_pos )
+namespace
 {
-    const int LIST_START_Y = 7;
-    // first: pos_y, second: occupied slots
-    std::vector<std::pair<int, size_t>> pos_and_num;
-    for( const std::pair<const string_id<body_part_type>, size_t> &elem : bio_id->occupied_bodyparts ) {
-        auto pos = bp_to_pos.find( elem.first );
-        if( pos != bp_to_pos.end() ) {
-            pos_and_num.emplace_back( static_cast<int>( pos->second ) + LIST_START_Y, elem.second );
+/** The bionics menu, from data/raw/rmlui/bionics.rml; power_bionics() fills it. */
+class bionics_window : public rml_ui::window
+{
+    public:
+        explicit bionics_window( const std::function<void( bionics_window & )> &update ) :
+            rml_ui::window( _( "Bionics" ), "bionics.rml" ), update( update ) {}
+
+        void reveal( const std::string &id ) {
+            scroll_into_view( id );
         }
-    }
-    if( pos_and_num.empty() || !get_option < bool >( "CBM_SLOTS_ENABLED" ) ) {
-        return;
-    }
-
-    wattron( win, BORDER_COLOR );
-
-    // draw horizontal line from selected bionic
-    const int turn_x = start.x + ( last_x - start.x ) * 2 / 3;
-    mvwaddch( win, start, '>' );
-    // NOLINTNEXTLINE(cata-use-named-point-constants)
-    mvwhline( win, start + point( 1, 0 ), LINE_OXOX, turn_x - start.x - 1 );
-
-    int min_y = start.y;
-    int max_y = start.y;
-    for( const auto &elem : pos_and_num ) {
-        min_y = std::min( min_y, elem.first );
-        max_y = std::max( max_y, elem.first );
-    }
-    if( max_y - min_y > 1 ) {
-        mvwvline( win, point( turn_x, min_y + 1 ), LINE_XOXO, max_y - min_y - 1 );
-    }
-
-    bool move_up   = false;
-    bool move_same = false;
-    bool move_down = false;
-    for( const auto &elem : pos_and_num ) {
-        const int y = elem.first;
-        if( !move_up && y < start.y ) {
-            move_up = true;
-        }
-        if( !move_same && y == start.y ) {
-            move_same = true;
-        }
-        if( !move_down && y > start.y ) {
-            move_down = true;
+        void set_hidden( bool hidden ) {
+            set_class( "window", "hidden", hidden );
         }
 
-        // symbol is defined incorrectly for case ( y == start_y ) but
-        // that's okay because it's overlapped by bionic_chr anyway
-        int bp_chr = ( y > start.y ) ? LINE_XXOO : LINE_OXXO;
-        if( ( max_y > y && y > start.y ) || ( min_y < y && y < start.y ) ) {
-            bp_chr = LINE_XXXO;
+    protected:
+        void on_redraw() override {
+            update( *this );
         }
 
-        mvwaddch( win, point( turn_x, y ), bp_chr );
-
-        // draw horizontal line to bodypart title
-        mvwhline( win, point( turn_x + 1, y ), LINE_OXOX, last_x - turn_x - 1 );
-        mvwaddch( win, point( last_x, y ), '<' );
-
-        // draw amount of consumed slots by this CBM
-        wattroff( win, BORDER_COLOR );
-        const std::string fmt_num = string_format( "(%d)", elem.second );
-        mvwprintz( win, point( turn_x + std::max( 1, ( last_x - turn_x - utf8_width( fmt_num ) ) / 2 ), y ),
-                   c_yellow, fmt_num );
-        wattron( win, BORDER_COLOR );
-    }
-
-    // define and draw a proper intersection character
-    // 001
-    // '-'
-    int bionic_chr = LINE_OXOX;
-    if( move_up && !move_down && !move_same ) {
-        // 100
-        // '_|'
-        bionic_chr = LINE_XOOX;
-    } else if( move_up && move_down && !move_same ) {
-        // 110
-        // '-|'
-        bionic_chr = LINE_XOXX;
-    } else if( move_up && move_down && move_same ) {
-        // 111
-        // '-|-'
-        bionic_chr = LINE_XXXX;
-    } else if( move_up && !move_down && move_same ) {
-        // 101
-        // '_|_'
-        bionic_chr = LINE_XXOX;
-    } else if( !move_up && move_down && !move_same ) {
-        // 010
-        // '^|'
-        bionic_chr = LINE_OOXX;
-    } else if( !move_up && move_down && move_same ) {
-        // 011
-        // '^|^'
-        bionic_chr = LINE_OXXX;
-    }
-    mvwaddch( win, point( turn_x, start.y ), bionic_chr );
-    wattroff( win, BORDER_COLOR );
-}
+    private:
+        std::function<void( bionics_window & )> update;
+};
+} // namespace
 
 //get a text color depending on the power/powering state of the bionic
 static nc_color get_bionic_text_color( const bionic &bio, const bool isHighlightedBionic )
@@ -601,79 +497,11 @@ void avatar::power_bionics()
     bionic *bio_last = nullptr;
     bionic_tab_mode tab_mode = TAB_ACTIVE;
 
-    //added title_tab_height for the tabbed bionic display
-    const int TITLE_HEIGHT = 4;
-    const int TITLE_TAB_HEIGHT = 3;
-    int HEIGHT = 0;
-    int WIDTH = 0;
-    int LIST_HEIGHT = 0;
-    int list_start_y = 0;
-    int half_list_view_location = 0;
-    catacurses::window wBio;
-    catacurses::window w_description;
-    catacurses::window w_title;
-    catacurses::window w_tabs;
-
     bool hide = false;
-    ui_adaptor ui;
-    ui.on_screen_resize( [&]( ui_adaptor & ui ) {
-        if( hide ) {
-            ui.position( point::zero, point::zero );
-            return;
-        }
-        // Main window
-        /** Total required height is:
-         * top frame line:                                         + 1
-         * height of title window:                                 + TITLE_HEIGHT
-         * height of tabs:                                         + TITLE_TAB_HEIGHT
-         * height of the biggest list of active/passive bionics:   + bionic_count
-         * bottom frame line:                                      + 1
-         * TOTAL: TITLE_HEIGHT + TITLE_TAB_HEIGHT + bionic_count + 2
-         */
-        HEIGHT = std::min( TERMY,
-                           std::max( FULL_SCREEN_HEIGHT,
-                                     TITLE_HEIGHT + TITLE_TAB_HEIGHT +
-                                     static_cast<int>( my_bionics->size() ) + 2 ) );
-        WIDTH = FULL_SCREEN_WIDTH + ( TERMX - FULL_SCREEN_WIDTH ) / 2;
-        const point START( ( TERMX - WIDTH ) / 2, ( TERMY - HEIGHT ) / 2 );
-        //wBio is the entire bionic window
-        wBio = catacurses::newwin( HEIGHT, WIDTH, START );
-
-        LIST_HEIGHT = HEIGHT - TITLE_HEIGHT - TITLE_TAB_HEIGHT - 2;
-
-        const int DESCRIPTION_WIDTH = WIDTH - 2 - 40;
-        const int DESCRIPTION_START_Y = START.y + TITLE_HEIGHT + TITLE_TAB_HEIGHT + 1;
-        const int DESCRIPTION_START_X = START.x + 1 + 40;
-        //w_description is the description panel that is controlled with ! key
-        w_description = catacurses::newwin( LIST_HEIGHT, DESCRIPTION_WIDTH,
-                                            point( DESCRIPTION_START_X, DESCRIPTION_START_Y ) );
-
-        // Title window
-        const int TITLE_START_Y = START.y + 1;
-        const int HEADER_LINE_Y = TITLE_HEIGHT + TITLE_TAB_HEIGHT;
-        w_title = catacurses::newwin( TITLE_HEIGHT, WIDTH - 2, START + point::east );
-
-        const int TAB_START_Y = TITLE_START_Y + 3;
-        //w_tabs is the tab bar for passive and active bionic groups
-        w_tabs = catacurses::newwin( TITLE_TAB_HEIGHT, WIDTH,
-                                     point( START.x, TAB_START_Y ) );
-
-        // offset for display: bionic with index i is drawn at y=list_start_y+i
-        // drawing the bionics starts with bionic[scroll_position]
-        // scroll_position;
-        list_start_y = HEADER_LINE_Y;
-        half_list_view_location = LIST_HEIGHT / 2;
-
-        ui.position_from_window( wBio );
-    } );
-    ui.mark_resize();
-
-    int scroll_position = 0;
     int cursor = 0;
 
     //generate the tab title string and a count of the bionics owned
     bionic_menu_mode menu_mode = ACTIVATING;
-    int max_scroll_position = 0;
 
     input_context ctxt( "BIONICS", keyboard_mode::keychar );
     ctxt.register_updown();
@@ -689,39 +517,27 @@ void avatar::power_bionics()
     ctxt.register_action( "TOGGLE_SHUTDOWN" );
     ctxt.register_action( "TOGGLE_SPRITE" );
     ctxt.register_action( "SORT" );
+    // Clicks on the tabs, the bionics and the close button
+    ctxt.register_action( "SELECT" );
 
-    ui.on_redraw( [&]( const ui_adaptor & ) {
+    // The cursor as last shown, to keep it in view
+    std::pair<bionic_tab_mode, int> shown_cursor( tab_mode, -1 );
+
+    std::unique_ptr<bionics_window> window = std::make_unique<bionics_window>(
+    [&]( bionics_window & win ) {
+        win.set_hidden( hide );
         if( hide ) {
             return;
         }
+        win.set_size( rml_ui::term_width( FULL_SCREEN_WIDTH + ( TERMX - FULL_SCREEN_WIDTH ) / 2 ), "90%" );
+        win.set_body_scrolls( false );
+        win.set_tabs( bionics_tab_names( active.size(), passive.size() ), tab_mode == TAB_ACTIVE ? 0 : 1 );
+        win.set_header( bionics_titlebar_rml( this, menu_mode ) );
 
         sorted_bionics *current_bionic_list = tab_mode == TAB_ACTIVE ? &active : &passive;
 
-        werase( wBio );
-        draw_border( wBio, BORDER_COLOR, _( " BIONICS " ) );
-        mvwputch( wBio, point( getmaxx( wBio ) - 1, 2 ), BORDER_COLOR, LINE_XOXX ); // -|
-
-        int max_width = 0;
-        std::vector<std::string> bps;
-        std::map<bodypart_str_id, size_t> bp_to_pos;
-        for( const bodypart_id &bp : get_all_body_parts() ) {
-            const int total = get_total_bionics_slots( bp );
-            const std::string s = string_format( "%s: %d/%d",
-                                                 body_part_name_as_heading( bp, 1 ),
-                                                 total - get_free_bionics_slots( bp ), total );
-            bps.push_back( s );
-            bp_to_pos.emplace( bp.id(), bps.size() - 1 );
-            max_width = std::max( max_width, utf8_width( s ) );
-        }
-        const int pos_x = WIDTH - 2 - max_width;
-        if( get_option < bool >( "CBM_SLOTS_ENABLED" ) ) {
-            wattron( wBio, c_light_gray );
-            for( size_t i = 0; i < bps.size(); ++i ) {
-                mvwprintw( wBio, point( pos_x, i + list_start_y ), bps[i] );
-            }
-            wattroff( wBio, c_light_gray );
-        }
-
+        // The bionics in this tab
+        std::string list;
         if( current_bionic_list->empty() ) {
             std::string msg;
             switch( tab_mode ) {
@@ -732,44 +548,49 @@ void avatar::power_bionics()
                     msg = _( "No passive bionics installed." );
                     break;
             }
-            fold_and_print( wBio, point( 2, list_start_y ), pos_x - 1, c_light_gray, msg );
+            list = rml_ui::colored_rml( msg, c_light_gray );
         } else {
-            for( size_t i = scroll_position; i < current_bionic_list->size(); i++ ) {
-                if( list_start_y + static_cast<int>( i ) - scroll_position == HEIGHT - 1 ) {
-                    break;
-                }
-                const bool is_highlighted = cursor == static_cast<int>( i );
-                const nc_color col = get_bionic_text_color( *( *current_bionic_list )[i],
-                                     is_highlighted );
-                const std::string desc = string_format( "%c %s", ( *current_bionic_list )[i]->invlet,
-                                                        build_bionic_powerdesc_string(
-                                                                *( *current_bionic_list )[i], this ).c_str() );
-                trim_and_print( wBio, point( 2, list_start_y + i - scroll_position ), WIDTH - 3, col,
-                                desc );
-                if( is_highlighted && menu_mode != EXAMINING && get_option < bool >( "CBM_SLOTS_ENABLED" ) ) {
-                    const bionic_id bio_id = ( *current_bionic_list )[i]->id;
-                    draw_connectors( wBio, point( utf8_width( desc ) + 3, list_start_y + i - scroll_position ),
-                                     pos_x - 2, bio_id, bp_to_pos );
-
-                    // redraw highlighted (occupied) body parts
-                    for( const std::pair<const string_id<body_part_type>, size_t> &elem : bio_id->occupied_bodyparts ) {
-                        const int i = bp_to_pos[elem.first];
-                        mvwprintz( wBio, point( pos_x, i + list_start_y ), c_yellow, bps[i] );
-                    }
-                }
-
+            for( size_t i = 0; i < current_bionic_list->size(); i++ ) {
+                const bionic &bio = *( *current_bionic_list )[i];
+                const std::string desc = string_format( "%c %s", bio.invlet,
+                                                        build_bionic_powerdesc_string( bio, this ) );
+                list += string_format( "<div id=\"bio-row-%d\" class=\"item line%s\" data-row=\"%d\">",
+                                       static_cast<int>( i ), cursor == static_cast<int>( i ) ? " selected" : "",
+                                       static_cast<int>( i ) ) +
+                        rml_ui::colored_rml( desc, get_bionic_text_color( bio, false ) ) + "</div>";
             }
         }
 
-        draw_scrollbar( wBio, cursor, LIST_HEIGHT, current_bionic_list->size(), point( 0, list_start_y ) );
+        // Beside it, the selected bionic's description, or the body parts'
+        // slots with those it takes marked
+        std::string side;
+        const bionic *selected = current_bionic_list->empty() ? nullptr :
+                                 ( *current_bionic_list )[std::min<size_t>( cursor, current_bionic_list->size() - 1 )];
+        if( menu_mode == EXAMINING && selected != nullptr ) {
+            side = bionic_description_rml( *selected, this );
+        } else if( get_option < bool >( "CBM_SLOTS_ENABLED" ) ) {
+            for( const bodypart_id &bp : get_all_body_parts() ) {
+                const int total = get_total_bionics_slots( bp );
+                std::string slots = string_format( "%s: %d/%d", body_part_name_as_heading( bp, 1 ),
+                                                   total - get_free_bionics_slots( bp ), total );
+                nc_color color = c_light_gray;
+                if( selected != nullptr ) {
+                    const auto occupied = selected->id->occupied_bodyparts.find( bp.id() );
+                    if( occupied != selected->id->occupied_bodyparts.end() ) {
+                        slots += string_format( " (%d)", occupied->second );
+                        color = c_yellow;
+                    }
+                }
+                side += "<div class=\"line\">" + rml_ui::colored_rml( slots, color ) + "</div>";
+            }
+        }
 
-        wnoutrefresh( wBio );
-        draw_bionics_tabs( w_tabs, active.size(), passive.size(), tab_mode );
+        win.set_body( "<div class=\"panes\"><div class=\"pane\">" + list +
+                      "</div><div class=\"pane bio-side\">" + side + "</div></div>" );
 
-        draw_bionics_titlebar( w_title, this, menu_mode );
-        if( menu_mode == EXAMINING && !current_bionic_list->empty() ) {
-            draw_description( w_description, *( *current_bionic_list )[cursor], get_all_body_parts().size(),
-                              this );
+        if( shown_cursor != std::make_pair( tab_mode, cursor ) ) {
+            shown_cursor = std::make_pair( tab_mode, cursor );
+            win.reveal( "bio-row-" + std::to_string( cursor ) );
         }
     } );
 
@@ -778,8 +599,6 @@ void avatar::power_bionics()
 
         //track which list we are looking at
         ::sorted_bionics *current_bionic_list = tab_mode == TAB_ACTIVE ? &active : &passive;
-        max_scroll_position = std::max( 0, static_cast<int>( current_bionic_list->size() ) - LIST_HEIGHT );
-        scroll_position = clamp( scroll_position, 0, max_scroll_position );
         cursor = clamp<int>( cursor, 0, current_bionic_list->size() );
 
 #if defined(__ANDROID__)
@@ -790,9 +609,31 @@ void avatar::power_bionics()
         }
 #endif
 
-        const std::string action = ctxt.handle_input();
+        std::string action = ctxt.handle_input();
         const int ch = ctxt.get_raw_input().get_first_input();
         bionic *tmp = nullptr;
+
+        if( action == "SELECT" ) {
+            const std::string clicked = window->resolve_click( action );
+            const int tab = window->hovered_tab();
+            const int row = window->hovered_index( "data-row" );
+            if( clicked != action ) {
+                // the close button
+                action = clicked;
+            } else if( tab >= 0 ) {
+                if( ( tab == 0 ) != ( tab_mode == TAB_ACTIVE ) ) {
+                    action = "NEXT_TAB";
+                }
+            } else if( row >= 0 && row < static_cast<int>( current_bionic_list->size() ) ) {
+                // A click picks a bionic, and a click on the picked one uses it
+                if( row == cursor ) {
+                    action = "CONFIRM";
+                } else {
+                    cursor = row;
+                    continue;
+                }
+            }
+        }
 
         if( action == "DOWN" ) {
             if( static_cast<size_t>( cursor ) < current_bionic_list->size() - 1 ) {
@@ -800,27 +641,11 @@ void avatar::power_bionics()
             } else {
                 cursor = 0;
             }
-            if( scroll_position < max_scroll_position &&
-                cursor - scroll_position > LIST_HEIGHT - half_list_view_location ) {
-                scroll_position++;
-            }
-            if( scroll_position > 0 && cursor - scroll_position < half_list_view_location ) {
-                scroll_position = std::max( cursor - half_list_view_location, 0 );
-            }
         } else if( action == "UP" ) {
             if( cursor > 0 ) {
                 cursor--;
             } else {
                 cursor = current_bionic_list->size() - 1;
-            }
-            if( scroll_position > 0 && cursor - scroll_position < half_list_view_location ) {
-                scroll_position--;
-            }
-            if( scroll_position < max_scroll_position &&
-                cursor - scroll_position > LIST_HEIGHT - half_list_view_location ) {
-                scroll_position =
-                    std::max( std::min<int>( current_bionic_list->size() - LIST_HEIGHT,
-                                             cursor - half_list_view_location ), 0 );
             }
         } else if( menu_mode == REASSIGNING ) {
             menu_mode = ACTIVATING;
@@ -858,7 +683,6 @@ void avatar::power_bionics()
             }
             // TODO: show a message like when reassigning a key to an item?
         } else if( action == "NEXT_TAB" ) {
-            scroll_position = 0;
             cursor = 0;
             if( tab_mode == TAB_ACTIVE ) {
                 tab_mode = TAB_PASSIVE;
@@ -866,7 +690,6 @@ void avatar::power_bionics()
                 tab_mode = TAB_ACTIVE;
             }
         } else if( action == "PREV_TAB" ) {
-            scroll_position = 0;
             cursor = 0;
             if( tab_mode == TAB_PASSIVE ) {
                 tab_mode = TAB_ACTIVE;
@@ -931,11 +754,6 @@ void avatar::power_bionics()
                     }
                     //relocate cursor to the bionic that was found
                     cursor = temp_cursor;
-                    scroll_position = 0;
-                    while( scroll_position < max_scroll_position &&
-                           cursor - scroll_position > LIST_HEIGHT - half_list_view_location ) {
-                        scroll_position++;
-                    }
                 }
             }
             if( !tmp ) {
@@ -950,11 +768,10 @@ void avatar::power_bionics()
                     int b = tmp - my_bionics->data();
                     bionic &bio = ( *my_bionics )[b];
                     hide = true;
-                    ui.mark_resize();
                     if( tmp->powered ) {
                         deactivate_bionic( bio );
                         if( bio_data.deactivated_close_ui ) {
-                            ui.reset();
+                            window.reset();
                             break;
                         }
                     } else {
@@ -1018,7 +835,7 @@ void avatar::power_bionics()
                         if( activate ) {
                             bool close_ui = false;
                             if( bio_data.activated_close_ui ) {
-                                ui.reset();
+                                window.reset();
                                 activate_bionic( bio, false, &close_ui );
                                 break;
                             } else {
@@ -1031,7 +848,6 @@ void avatar::power_bionics()
                         }
                     }
                     hide = false;
-                    ui.mark_resize();
                     g->invalidate_main_ui_adaptor();
                     if( moves < 0 ) {
                         return;
@@ -1049,12 +865,6 @@ void avatar::power_bionics()
                         if( active[i] == tmp ) {
                             tab_mode = TAB_ACTIVE;
                             cursor = static_cast<int>( i );
-                            int max_scroll_check = std::max( 0, static_cast<int>( active.size() ) - LIST_HEIGHT );
-                            if( static_cast<int>( i ) > max_scroll_check ) {
-                                scroll_position = max_scroll_check;
-                            } else {
-                                scroll_position = i;
-                            }
                             break;
                         }
                     }
@@ -1062,12 +872,6 @@ void avatar::power_bionics()
                         if( passive[i] == tmp ) {
                             tab_mode = TAB_PASSIVE;
                             cursor = static_cast<int>( i );
-                            int max_scroll_check = std::max( 0, static_cast<int>( passive.size() ) - LIST_HEIGHT );
-                            if( static_cast<int>( i ) > max_scroll_check ) {
-                                scroll_position = max_scroll_check;
-                            } else {
-                                scroll_position = i;
-                            }
                             break;
                         }
                     }

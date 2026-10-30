@@ -23,6 +23,8 @@
 #include "morale_types.h"
 #include "output.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "string_formatter.h"
 #include "translations.h"
 #include "ui_manager.h"
@@ -535,7 +537,6 @@ void player_morale::display( int focus_eq, int pain_penalty, int sleepiness_pena
 
     constexpr int left_padding = 2; // including border
     constexpr int right_padding = 2; // including border
-    constexpr int middle_padding_min = 2;
     constexpr int middle_padding_max = 12;
 
     class morale_line
@@ -615,22 +616,19 @@ void player_morale::display( int focus_eq, int pain_penalty, int sleepiness_pena
                 }
             }
 
-            void draw( catacurses::window &w, const int posy ) const {
-                int width = getmaxx( w );
+            bool is_blank() const {
+                return !sep_line && left.empty() && right.empty();
+            }
+            bool is_separator() const {
+                return sep_line;
+            }
+
+            std::string rml() const {
                 if( sep_line ) {
-                    wattron( w, BORDER_COLOR );
-                    mvwhline( w, point( 0, posy ), LINE_XXXO, 1 );
-                    mvwhline( w, point( 1, posy ), 0, width - 2 );
-                    mvwhline( w, point( width - 1, posy ), LINE_XOXX, 1 );
-                    wattroff( w, BORDER_COLOR );
-                } else {
-                    int text_width = width - left_padding - right_padding;
-                    if( !right.empty() ) {
-                        right_print( w, posy, right_padding, color, right );
-                        text_width -= middle_padding_min + utf8_width( right );
-                    }
-                    trim_and_print( w, point( left_padding, posy ), text_width, color, left );
+                    return "<div class=\"sep\"></div>";
                 }
+                return "<div class=\"hbox line\"><div class=\"grow\">" + rml_ui::colored_rml( left, color ) +
+                       "</div><div class=\"fixed\">" + rml_ui::colored_rml( right, color ) + "</div></div>";
             }
     };
 
@@ -745,78 +743,23 @@ void player_morale::display( int focus_eq, int pain_penalty, int sleepiness_pena
         std::accumulate( bottom_lines.begin(), bottom_lines.end(), 0, calc_max_width )
     } );
 
-    const int static_lines_height = top_lines.size() + bottom_lines.size();
-
-    int win_w = 0;
-    int win_h = 0;
-
-    const int rows_total = middle_lines.size();
-    int rows_visible = 0;
-    int offset = 0;
-
-    catacurses::window w;
-
-    ui_adaptor ui;
-    ui.on_screen_resize( [&]( ui_adaptor & ui ) {
-        win_w = std::min( max_window_width, FULL_SCREEN_WIDTH );
-        win_h = FULL_SCREEN_HEIGHT;
-        const point win( ( TERMX - win_w ) / 2, ( TERMY - win_h ) / 2 );
-
-        rows_visible = std::max( win_h - static_lines_height, 0 );
-        if( rows_total < rows_visible ) {
-            offset = 0;
-        } else if( offset + rows_visible > rows_total ) {
-            offset = rows_total - rows_visible;
+    // The source and value headings above, the morale in between, the totals below
+    rml_ui::window window( _( "Morale" ) );
+    window.set_size( rml_ui::term_width( std::min( max_window_width, FULL_SCREEN_WIDTH ) ),
+                     rml_ui::term_height( FULL_SCREEN_HEIGHT ) );
+    window.set_header( top_lines.back().rml() );
+    std::string body;
+    for( const middle_morale_line &ml : middle_lines ) {
+        body += ml.ml.is_blank() ? "<div class=\"line\"></div>" : ml.ml.rml();
+    }
+    window.set_body( body );
+    std::string footer;
+    for( const morale_line &ml : bottom_lines ) {
+        if( !ml.is_blank() && !ml.is_separator() ) {
+            footer += ml.rml();
         }
-
-        w = catacurses::newwin( win_h, win_w, win );
-
-        ui.position_from_window( w );
-    } );
-    ui.mark_resize();
-
-    ui.on_redraw( [&]( const ui_adaptor & ) {
-        werase( w );
-
-        draw_border( w );
-
-        int line = 0;
-        for( const morale_line &ml : top_lines ) {
-            ml.draw( w, line );
-            ++line;
-        }
-
-        line = win_h - static_cast<int>( bottom_lines.size() );
-        for( const morale_line &ml : bottom_lines ) {
-            ml.draw( w, line );
-            ++line;
-        }
-
-        bool caption_drawn = false;
-        for( int mid_line = 0; offset + mid_line >= 0; --mid_line ) {
-            if( offset + mid_line < rows_total ) {
-                const middle_morale_line &ml = middle_lines[offset + mid_line];
-                if( ml.is_caption ) {
-                    ml.ml.draw( w, top_lines.size() );
-                    caption_drawn = true;
-                    break;
-                }
-            }
-        }
-        for( int mid_line = caption_drawn ? 1 : 0;
-             mid_line < rows_visible && offset + mid_line < rows_total;
-             ++mid_line ) {
-            if( offset + mid_line >= 0 ) {
-                const middle_morale_line &ml = middle_lines[offset + mid_line];
-                ml.ml.draw( w, static_cast<int>( top_lines.size() ) + mid_line );
-            }
-        }
-
-        draw_scrollbar( w, offset, rows_visible, rows_total,
-                        point( 0, top_lines.size() ), c_white, true );
-
-        wnoutrefresh( w );
-    } );
+    }
+    window.set_footer( footer );
 
     input_context ctxt( "MORALE" );
     ctxt.register_action( "UP" );
@@ -824,15 +767,17 @@ void player_morale::display( int focus_eq, int pain_penalty, int sleepiness_pena
     ctxt.register_action( "CONFIRM" );
     ctxt.register_action( "QUIT" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
+    // the close button
+    ctxt.register_action( "SELECT" );
 
     std::string action;
     do {
         ui_manager::redraw();
-        action = ctxt.handle_input();
-        if( action == "DOWN" && offset < std::max( 0, rows_total - rows_visible ) ) {
-            offset++;
-        } else if( action == "UP" && offset > 0 ) {
-            offset--;
+        action = window.resolve_click( ctxt.handle_input() );
+        if( action == "DOWN" ) {
+            window.scroll_body( rml_ui::scroll::line_down );
+        } else if( action == "UP" ) {
+            window.scroll_body( rml_ui::scroll::line_up );
         }
     } while( action != "CONFIRM" && action != "QUIT" );
 }

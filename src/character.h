@@ -987,9 +987,14 @@ class Character : public Creature, public visitable
 
         units::mass bodyweight_with_bionic() const;
 
-        // formats and prints encumbrance info to specified window
-        void print_encumbrance( ui_adaptor &ui, const catacurses::window &win, int line = -1,
-                                const item *selected_clothing = nullptr ) const;
+        /**
+         * The encumbrance and warmth of each body part, as markup: the part's
+         * name, green where `selected_clothing` covers it, then its encumbrance
+         * from clothing plus that from layering, and its warmth. Paired parts
+         * that are alike share a line.
+         */
+        std::vector<std::pair<std::string, std::string>> encumbrance_lines(
+                    const item *selected_clothing = nullptr ) const;
         /** Returns true if the character is wearing power armor */
         bool is_wearing_power_armor( bool *hasHelmet = nullptr ) const;
         /** Returns true if the character is wearing active power */

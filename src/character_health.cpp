@@ -68,6 +68,8 @@
 #include "player_activity.h"
 #include "point.h"
 #include "ret_val.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "rng.h"
 #include "skill.h"
 #include "sleep.h"
@@ -418,39 +420,30 @@ void Character::conduct_blood_analysis()
         colors.emplace_back( elem.first->get_rating() == m_good ? c_green : c_red );
     }
 
-    const int win_w = 46;
-    size_t win_h = 0;
-    catacurses::window w;
-    ui_adaptor ui;
-    ui.on_screen_resize( [&]( ui_adaptor & ui ) {
-        win_h = std::min( static_cast<size_t>( TERMY ),
-                          std::max<size_t>( 1, effect_descriptions.size() ) + 2 );
-        w = catacurses::newwin( win_h, win_w,
-                                point( ( TERMX - win_w ) / 2, ( TERMY - win_h ) / 2 ) );
-        ui.position_from_window( w );
-    } );
-    ui.mark_resize();
-    ui.on_redraw( [&]( const ui_adaptor & ) {
-        draw_border( w, c_red, string_format( " %s ", _( "Blood Test Results" ) ) );
-        if( effect_descriptions.empty() ) {
-            trim_and_print( w, point( 2, 1 ), win_w - 3, c_white, _( "No effects." ) );
-        } else {
-            for( size_t line = 1; line < ( win_h - 1 ) && line <= effect_descriptions.size(); ++line ) {
-                trim_and_print( w, point( 2, line ), win_w - 3, colors[line - 1], effect_descriptions[line - 1] );
-            }
+    rml_ui::window window( colorize( _( "Blood Test Results" ), c_red ) );
+    window.set_size( rml_ui::term_width( 46 ), std::string() );
+    std::string body;
+    if( effect_descriptions.empty() ) {
+        body = rml_ui::colored_rml( _( "No effects." ), c_white );
+    } else {
+        for( size_t line = 0; line < effect_descriptions.size(); ++line ) {
+            body += "<div>" + rml_ui::markup_to_rml( effect_descriptions[line], colors[line] ) + "</div>";
         }
-        wnoutrefresh( w );
-    } );
+    }
+    window.set_body( body );
+
     input_context ctxt( "BLOOD_TEST_RESULTS" );
     ctxt.register_action( "CONFIRM" );
     ctxt.register_action( "QUIT" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
+    // the close button
+    ctxt.register_action( "SELECT" );
     bool stop = false;
     // Display new messages
     g->invalidate_main_ui_adaptor();
     while( !stop ) {
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        const std::string action = window.resolve_click( ctxt.handle_input() );
         if( action == "CONFIRM" || action == "QUIT" ) {
             stop = true;
         }

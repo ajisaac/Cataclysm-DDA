@@ -1,6 +1,7 @@
 #include "game.h" // IWYU pragma: associated
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <string>
 #include <utility>
@@ -13,6 +14,8 @@
 #include "input_context.h"
 #include "output.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "scores_ui.h"
 #include "string_editor_window.h"
 #include "string_formatter.h"
@@ -22,145 +25,43 @@
 
 namespace
 {
-/**print list scrollable, printed std::vector<std::string> as list with scrollbar*/
-void print_list_scrollable( catacurses::window *win, const std::vector<std::string> &list,
-                            int *selection, int entries_per_page, int xoffset, int width,
-                            bool active, bool border, const report_color_error color_error )
+/** The diary, from data/raw/rmlui/diary.rml; show_diary_ui() fills it. */
+class diary_window : public rml_ui::window
 {
-    if( *selection < 0 && !list.empty() ) {
-        *selection = static_cast<int>( list.size() ) - 1;
-    } else if( *selection >= static_cast<int>( list.size() ) ) {
-        *selection = 0;
-    }
-    const int borderspace = border ? 1 : 0;
-    entries_per_page = entries_per_page - borderspace * 2;
-
-    const int top_of_page = entries_per_page * ( *selection / entries_per_page );
-
-    const int bottom_of_page = std::min<int>( top_of_page + entries_per_page, list.size() );
-
-    const int line_width = width - 1 - borderspace;
-
-    for( int i = top_of_page; i < bottom_of_page; i++ ) {
-
-        const nc_color col = c_white;
-        const int y = i - top_of_page;
-        const bool highlight = *selection == i && active;
-        const nc_color line_color = highlight ? hilite( col ) : col;
-        std::string line_str = list[i];
-        if( highlight ) {
-            line_str = left_justify( remove_color_tags( line_str ), line_width );
+    public:
+        diary_window( const std::string &title,
+                      const std::function<void( diary_window & )> &update ) :
+            rml_ui::window( title, "diary.rml" ), update( update ) {
+            set_body_scrolls( false );
         }
-        trim_and_print( *win, point( xoffset + 1, y + borderspace ), line_width,
-                        line_color, line_str, color_error );
-    }
-    if( border ) {
-        draw_border( *win );
-    }
-    if( active && entries_per_page < static_cast<int>( list.size() ) ) {
-        draw_scrollbar( *win, *selection, entries_per_page, list.size(), point( xoffset,
-                        0 + borderspace ) );
-    }
 
-}
+        void scroll_pane( const std::string &id, rml_ui::scroll how ) {
+            scroll( id, how );
+        }
+        void reveal( const std::string &id ) {
+            scroll_into_view( id );
+        }
 
-void print_list_scrollable( catacurses::window *win, const std::vector<std::string> &list,
-                            int *selection, bool active, bool border,
-                            const report_color_error color_error )
+    protected:
+        void on_redraw() override {
+            update( *this );
+        }
+
+    private:
+        std::function<void( diary_window & )> update;
+};
+
+/** A list of lines, each a row with an id of `prefix` and its index. */
+std::string diary_list_rml( const std::vector<std::string> &list, int selection,
+                            const std::string &prefix, int pane, const report_color_error color_error )
 {
-    print_list_scrollable( win, list, selection, getmaxy( *win ), 0, getmaxx( *win ),
-                           active, border,
-                           color_error );
-}
-
-std::vector<std::string>
-text_to_list_scrollable( catacurses::window &win, const std::string &text, const bool border )
-{
-    const int width = getmaxx( win );
-    const int borderspace = border ? 1 : 0;
-    // -1 on the left for scroll bar and another -1 on the right reserved for cursor
-    return foldstring( text, width - 2 - borderspace * 2 );
-}
-
-void print_list_scrollable( catacurses::window *win, const std::string &text, int *selection,
-                            bool active,
-                            bool border, const report_color_error color_error )
-{
-    std::vector<std::string> list = text_to_list_scrollable( *win, text, border );
-    print_list_scrollable( win, list, selection, active, border, color_error );
-}
-
-// Print multiple strings, stacked vertically downwards from the specified point
-template<typename ...Ts>
-void mvwprintwa( const catacurses::window &win, point p, Ts... args )
-{
-    for( auto string : {
-             args...
-         } ) {
-        mvwprintw( win, p, string );
-        p += point::south;
+    std::string rml;
+    for( int i = 0; i < static_cast<int>( list.size() ); i++ ) {
+        rml += string_format( "<div id=\"%s%d\" class=\"item line%s\" data-pane=\"%d\" data-row=\"%d\">",
+                              prefix, i, selection == i ? " selected" : "", pane, i ) +
+               rml_ui::markup_to_rml( list[i], c_white, color_error ) + "</div>";
     }
-}
-
-void draw_diary_border( catacurses::window &win )
-{
-    const point max( getmaxx( win ) - 1, getmaxy( win ) - 1 );
-    const point mid = max / 2;
-
-    wattron( win, BORDER_COLOR );
-
-    // left, right vertical lines
-    for( int i = 0; i < 4; i++ ) {
-        mvwvline( win, point( 0     + i, 4 ), '|', max.y - 4 - 4 + 1 );
-        mvwvline( win, point( max.x - i, 4 ), '|', max.y - 4 - 4 + 1 );
-    }
-    // middle vertical line
-    mvwvline( win,     point( mid.x,     4 ), '|', max.y - 4 - 4 + 1 );
-    // top horizontal line
-    mvwhline( win,     point( 4,         0 ), '_', max.x - 4 - 4 + 1 );
-    // bottom horizontal lines
-    mvwhline( win,     point( 4, max.y - 2 ), '_', max.x - 4 - 4 + 1 );
-    mvwhline( win,     point( 4, max.y - 1 ), '=', max.x - 4 - 4 + 1 );
-    mvwhline( win,     point( 4, max.y - 0 ), '-', max.x - 4 - 4 + 1 );
-
-    //top left corner
-    mvwprintwa( win, point::zero,
-                "    ",
-                ".-/|",
-                "||||",
-                "||||" );
-    // bottom left corner
-    mvwprintwa( win, point( 0, max.y - 3 ),
-                "||||",
-                "||||",
-                "||/=",
-                "`'--" );
-    // top right corner
-    mvwprintwa( win, point( max.x - 3, 0 ),
-                "    ",
-                "|\\-.",
-                "||||",
-                "||||" );
-    // bottom right corner
-    mvwprintwa( win, max + point( -3, -3 ),
-                "||||",
-                "||||",
-                "=\\||",
-                "--''" );
-    // top middle
-    mvwprintwa( win, point( mid.x - 1, 0 ),
-                "   ",
-                "\\ /",
-                " | ",
-                " | " );
-    // bottom middle
-    mvwprintwa( win, point( mid.x - 1, max.y - 3 ),
-                " | ",
-                " | ",
-                "\\|/",
-                "___" );
-
-    wattroff( win, BORDER_COLOR );
+    return rml;
 }
 } // namespace
 
@@ -174,19 +75,11 @@ static std::pair<point, point> diary_window_position()
 
 void diary::show_diary_ui( diary *c_diary )
 {
-    catacurses::window w_diary;
-    catacurses::window w_pages;
-    catacurses::window w_text;
-    catacurses::window w_changes;
-    catacurses::window w_border;
-    catacurses::window w_desc;
-    catacurses::window w_head;
-    catacurses::window w_info;
     enum class window_mode : int {PAGE_WIN = 0, CHANGE_WIN, TEXT_WIN, NUM_WIN, FIRST_WIN = 0, LAST_WIN = NUM_WIN - 1};
     window_mode currwin = window_mode::PAGE_WIN;
 
     const int diary_last_page = c_diary->pages.empty() ? 0 : ( c_diary->pages.size() - 1 );
-    std::map<window_mode, int> selected = { {window_mode::PAGE_WIN, diary_last_page}, {window_mode::CHANGE_WIN, 0}, {window_mode::TEXT_WIN, 0} };
+    std::map<window_mode, int> selected = { {window_mode::PAGE_WIN, diary_last_page}, {window_mode::CHANGE_WIN, 0} };
 
     input_context ctxt( "DIARY" );
     ctxt.register_navigate_ui_list();
@@ -200,125 +93,64 @@ void diary::show_diary_ui( diary *c_diary )
     ctxt.register_action( "EXPORT_DIARY" );
     ctxt.register_action( "VIEW_SCORES" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
+    // Clicks on the pages, the changes and the close button
+    ctxt.register_action( "SELECT" );
 
-    ui_adaptor ui_diary;
-    ui_diary.on_screen_resize( [&]( ui_adaptor & ui ) {
-        const std::pair<point, point> beg_and_max = diary_window_position();
-        const point &beg = beg_and_max.first;
-        const point &max = beg_and_max.second;
-        const int midx = max.x / 2;
+    // What was last shown, to keep the selections in view and new text at its top
+    std::pair<int, int> shown_selection( -1, -1 );
 
-        w_changes = catacurses::newwin( max.y - 3, midx - 1, beg + point( 0, 3 ) );
-        w_text = catacurses::newwin( max.y - 3, max.x - midx - 1, beg + point( 2 + midx, 3 ) );
-        w_border = catacurses::newwin( max.y + 5, max.x + 9, beg + point( -4, -2 ) );
-        w_head = catacurses::newwin( 1, max.x, beg + point::south );
+    diary_window window( string_format( _( "%s's Diary" ), c_diary->owner ),
+    [&]( diary_window & win ) {
+        const point &max = diary_window_position().second;
+        win.set_size( rml_ui::term_width( max.x * 3 / 10 + max.x + 10 ), "90%" );
 
-        ui.position_from_window( w_border );
-    } );
-    ui_diary.mark_resize();
-    ui_diary.on_redraw( [&]( const ui_adaptor & ) {
-        werase( w_changes );
-        werase( w_text );
-        werase( w_border );
-        werase( w_head );
-
-        draw_diary_border( w_border );
-
-        print_list_scrollable( &w_changes, c_diary->get_change_list(), &selected[window_mode::CHANGE_WIN],
-                               currwin == window_mode::CHANGE_WIN, false, report_color_error::yes );
-        print_list_scrollable( &w_text, c_diary->get_desc_or_page_text( selected[window_mode::CHANGE_WIN] ),
-                               &selected[window_mode::TEXT_WIN],
-                               currwin == window_mode::TEXT_WIN, false, report_color_error::no );
-
-        trim_and_print( w_head, point::south_east, getmaxx( w_head ) - 2, c_white,
-                        c_diary->get_head_text( c_diary->get_page_ptr()->is_summary() ) );
-
-        wnoutrefresh( w_border );
-        wnoutrefresh( w_head );
-        wnoutrefresh( w_changes );
-        wnoutrefresh( w_text );
-    } );
-
-    ui_adaptor ui_pages;
-    ui_pages.on_screen_resize( [&]( ui_adaptor & ui ) {
-        const std::pair<point, point> beg_and_max = diary_window_position();
-        const point &beg = beg_and_max.first;
-        const point &max = beg_and_max.second;
-
-        w_pages = catacurses::newwin( max.y + 5, max.x * 3 / 10 + 1, point( beg.x - 5 - max.x * 3 / 10,
-                                      beg.y - 2 ) );
-
-        ui.position_from_window( w_pages );
-    } );
-    ui_pages.mark_resize();
-    ui_pages.on_redraw( [&]( const ui_adaptor & ) {
-        werase( w_pages );
-
-        print_list_scrollable( &w_pages, c_diary->get_pages_list(), &selected[window_mode::PAGE_WIN],
-                               currwin == window_mode::PAGE_WIN, true, report_color_error::yes );
-        center_print( w_pages, 0, c_light_gray, string_format( _( "pages: %d" ),
-                      c_diary->get_pages_list().size() ) );
-
-        wnoutrefresh( w_pages );
-    } );
-
-    ui_adaptor ui_desc;
-    ui_desc.on_screen_resize( [&]( ui_adaptor & ui ) {
-        const std::pair<point, point> beg_and_max = diary_window_position();
-        const point &beg = beg_and_max.first;
-        const point &max = beg_and_max.second;
-
-        w_desc = catacurses::newwin( 4, max.x * 3 / 10 + max.x + 10, point( beg.x - 5 - max.x * 3 / 10,
-                                     beg.y - 6 ) );
-
-        ui.position_from_window( w_desc );
-    } );
-    ui_desc.mark_resize();
-    ui_desc.on_redraw( [&]( const ui_adaptor & ) {
-        werase( w_desc );
-
-        draw_border( w_desc );
-        center_print( w_desc, 0, c_light_gray, string_format( _( "%s's Diary" ), c_diary->owner ) );
         std::string desc = string_format( _( "%s, %s, %s, %s" ),
                                           ctxt.get_desc( "NEW_PAGE", _( "New page" ), input_context::allow_all_keys ),
                                           ctxt.get_desc( "CONFIRM", _( "Edit text" ), input_context::allow_all_keys ),
                                           ctxt.get_desc( "DELETE PAGE", _( "Delete page" ), input_context::allow_all_keys ),
                                           ctxt.get_desc( "EXPORT_DIARY", _( "Export diary" ), input_context::allow_all_keys )
                                         );
-        center_print( w_desc, 1,  c_white, desc );
-        center_print( w_desc, 2,  c_white, ctxt.get_desc( "VIEW_SCORES",
-                      _( "View achievements, scores, and kills" ), input_context::allow_all_keys ) );
+        win.set_header( "<div class=\"center\">" + rml_ui::markup_to_rml( desc, c_white ) +
+                        "</div><div class=\"center\">" + rml_ui::markup_to_rml( ctxt.get_desc( "VIEW_SCORES",
+                                _( "View achievements, scores, and kills" ), input_context::allow_all_keys ), c_white ) +
+                        "</div>" );
 
-        wnoutrefresh( w_desc );
-    } );
+        const auto pane_class = [&]( window_mode mode ) {
+            return currwin == mode ? "pane diary-pane active" : "pane diary-pane";
+        };
+        win.set_body( std::string( "<div class=\"panes\"><div class=\"" ) +
+                      pane_class( window_mode::PAGE_WIN ) + "\"><div class=\"diary-head\">" +
+                      rml_ui::colored_rml( string_format( _( "pages: %d" ), c_diary->get_pages_list().size() ),
+                                           c_light_gray ) + "</div><div id=\"diary-pages\" class=\"diary-scroll\">" +
+                      diary_list_rml( c_diary->get_pages_list(), selected[window_mode::PAGE_WIN], "diary-page-", 0,
+                                      report_color_error::yes ) + "</div></div><div class=\"" + pane_class( window_mode::CHANGE_WIN ) +
+                      "\"><div class=\"diary-head\">" + rml_ui::markup_to_rml( c_diary->get_head_text(
+                                  c_diary->get_page_ptr()->is_summary() ), c_white ) +
+                      "</div><div id=\"diary-changes\" class=\"diary-scroll\">" +
+                      diary_list_rml( c_diary->get_change_list(), selected[window_mode::CHANGE_WIN], "diary-change-", 1,
+                                      report_color_error::yes ) + "</div></div><div class=\"" + pane_class( window_mode::TEXT_WIN ) +
+                      "\"><div id=\"diary-text\" class=\"diary-scroll pre\">" +
+                      rml_ui::markup_to_rml( c_diary->get_desc_or_page_text( selected[window_mode::CHANGE_WIN] ),
+                                             c_white, report_color_error::no ) + "</div></div></div>" );
 
-    ui_adaptor ui_info;
-    ui_info.on_screen_resize( [&]( ui_adaptor & ui ) {
-        const std::pair<point, point> beg_and_max = diary_window_position();
-        const point &beg = beg_and_max.first;
-        const point &max = beg_and_max.second;
-
-        int lines = std::clamp( max.y / 2 - 4, 3, 7 );
-
-        w_info = catacurses::newwin( lines, max.x + 9, beg + point( -4,
-                                     3 + max.y + ( max.y > 12 ) ) );
-
-        ui.position_from_window( w_info );
-    } );
-    ui_info.mark_resize();
-    ui_info.on_redraw( [&]( const ui_adaptor & ) {
-        werase( w_info );
-
-        draw_border( w_info );
-        center_print( w_info, 0, c_light_gray, string_format( _( "Info" ) ) );
+        std::string info;
         if( currwin == window_mode::CHANGE_WIN || currwin == window_mode::TEXT_WIN ) {
             if( !c_diary->get_page_ptr()->is_summary() ) {
-                fold_and_print( w_info, point::south_east, getmaxx( w_info ) - 2, c_white,
-                                c_diary->get_desc_map()[ selected[window_mode::CHANGE_WIN] ] );
+                info = rml_ui::markup_to_rml( c_diary->get_desc_map()[ selected[window_mode::CHANGE_WIN] ],
+                                              c_white );
             }
         }
+        win.set_footer( "<div class=\"diary-info\"><div class=\"muted\">" +
+                        rml_ui::escape_rml( _( "Info" ) ) + "</div>" + info + "</div>" );
 
-        wnoutrefresh( w_info );
+        const std::pair<int, int> selection( selected[window_mode::PAGE_WIN],
+                                             selected[window_mode::CHANGE_WIN] );
+        if( selection != shown_selection ) {
+            shown_selection = selection;
+            win.reveal( "diary-page-" + std::to_string( selection.first ) );
+            win.reveal( "diary-change-" + std::to_string( selection.second ) );
+            win.scroll_pane( "diary-text", rml_ui::scroll::top );
+        }
     } );
 
     while( true ) {
@@ -329,34 +161,55 @@ void diary::show_diary_ui( diary *c_diary )
             selected[window_mode::PAGE_WIN] = 0;
         }
         selected[window_mode::PAGE_WIN] = c_diary->set_opened_page( selected[window_mode::PAGE_WIN] );
-        ui_diary.invalidate_ui();
-        ui_pages.invalidate_ui();
-        ui_desc.invalidate_ui();
-        ui_info.invalidate_ui();
+        const int changes = static_cast<int>( c_diary->change_list.size() );
+        if( selected[window_mode::CHANGE_WIN] >= changes ) {
+            selected[window_mode::CHANGE_WIN] = std::max( 0, changes - 1 );
+        }
         ui_manager::redraw_invalidated();
-        const std::string action = ctxt.handle_input();
+        std::string action = ctxt.handle_input();
+        if( action == "SELECT" ) {
+            const std::string clicked = window.resolve_click( action );
+            const int pane = window.hovered_index( "data-pane" );
+            const int row = window.hovered_index( "data-row" );
+            if( clicked != action ) {
+                // the close button
+                action = clicked;
+            } else if( pane == 0 && row >= 0 ) {
+                currwin = window_mode::PAGE_WIN;
+                selected[window_mode::PAGE_WIN] = row;
+                selected[window_mode::CHANGE_WIN] = 0;
+            } else if( pane == 1 && row >= 0 ) {
+                currwin = window_mode::CHANGE_WIN;
+                selected[window_mode::CHANGE_WIN] = row;
+            }
+        }
         if( action == "LEFT" || action == "PREV_TAB" || action == "RIGHT" || action == "NEXT_TAB" ) {
             // necessary to use inc_clamp_wrap()
             static_assert( static_cast<int>( window_mode::FIRST_WIN ) == 0 );
             currwin = inc_clamp_wrap( currwin, action == "RIGHT" || action == "NEXT_TAB",
                                       window_mode::NUM_WIN );
-            selected[window_mode::TEXT_WIN] = 0;
-        } else if( navigate_ui_list( action, selected[currwin], 10,
-                                     currwin == window_mode::PAGE_WIN ? c_diary->pages.size()
-                                     : currwin == window_mode::CHANGE_WIN ? c_diary->change_list.size()
-                                     : text_to_list_scrollable( w_text,
-                                             c_diary->get_desc_or_page_text( selected[window_mode::CHANGE_WIN] ),
-                                             false ).size(),
-                                     true ) ) {
-            // size in navigate_ui_list above is redundant with print_list_scrollable's wrapping effect during redraw
+        } else if( currwin == window_mode::TEXT_WIN &&
+                   ( action == "UP" || action == "DOWN" || action == "PAGE_UP" || action == "PAGE_DOWN" ) ) {
+            // The text scrolls
+            window.scroll_pane( "diary-text", action == "UP" ? rml_ui::scroll::line_up :
+                                action == "DOWN" ? rml_ui::scroll::line_down :
+                                action == "PAGE_UP" ? rml_ui::scroll::page_up : rml_ui::scroll::page_down );
+        } else if( currwin != window_mode::TEXT_WIN &&
+                   navigate_ui_list( action, selected[currwin], 10,
+                                     currwin == window_mode::PAGE_WIN ? c_diary->pages.size() :
+                                     c_diary->change_list.size(), true ) ) {
             if( currwin == window_mode::PAGE_WIN ) {
                 selected[window_mode::CHANGE_WIN] = 0;
-                selected[window_mode::TEXT_WIN] = 0;
             }
         } else if( action == "CONFIRM" ) {
             if( !c_diary->pages.empty() ) {
-                c_diary->edit_page_ui( [&]() {
-                    return w_text;
+                // The editor takes the place of the text
+                c_diary->edit_page_ui( []() {
+                    const std::pair<point, point> beg_and_max = diary_window_position();
+                    const point &beg = beg_and_max.first;
+                    const point &max = beg_and_max.second;
+                    const int midx = max.x / 2;
+                    return catacurses::newwin( max.y - 3, max.x - midx - 1, beg + point( 2 + midx, 3 ) );
                 } );
             }
         } else if( action == "NEW_PAGE" ) {

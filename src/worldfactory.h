@@ -146,8 +146,8 @@ class worldfactory
          */
         void delete_world( const std::string &worldname, bool delete_folder );
 
-        static std::map<size_t, inclusive_rectangle<point>> draw_worldgen_tabs( const catacurses::window &w,
-                size_t current );
+        /** The names of the world creation tabs, for a window's tabs. */
+        static std::vector<std::string> worldgen_tab_names();
         void show_active_world_mods( const std::vector<mod_id> &world_mods );
 
         const std::map<std::string, std::unique_ptr<WORLD>> &get_all_worlds() const;
@@ -158,24 +158,28 @@ class worldfactory
         void load_last_world_info();
 
         std::string pick_random_name();
-        int show_worldgen_tab_options( const catacurses::window &win, WORLD *world, bool with_tabs );
-        int show_worldgen_tab_modselection( const catacurses::window &win, WORLD *world, bool with_tabs );
+        int show_worldgen_tab_options( WORLD *world, bool with_tabs );
+        int show_worldgen_tab_modselection( WORLD *world, bool with_tabs );
         int show_worldgen_basic( WORLD *world );
         int show_worldgen_advanced( WORLD *world );
 
-        void draw_modselection_borders( const catacurses::window &win, const input_context &ctxtp );
-        std::map<int, inclusive_rectangle<point>> draw_mod_list( const catacurses::window &w, int &start,
-                                               size_t cursor, const std::vector<mod_id> &mods,
-                                               bool is_active_list, const std::string &text_if_empty,
-                                               const catacurses::window &w_shift, bool recalc_start,
-                                               const std::vector<mod_id> &potential_conflicts = std::vector<mod_id>() );
+        /**
+         * A list of mods as RML, under their categories, each row carrying
+         * `data-mod` with its index in `mods` and an id from `id_prefix`.
+         * @param focused Whether the list has the cursor, which shows on it.
+         * @param show_shift Whether to show which way each mod can move in the load order.
+         */
+        std::string mod_list_rml( size_t cursor, const std::vector<mod_id> &mods, bool focused,
+                                  const std::string &text_if_empty, const std::string &id_prefix,
+                                  bool show_shift = false,
+                                  const std::vector<mod_id> &potential_conflicts = std::vector<mod_id>() ) const;
 
         WORLD *add_world( std::unique_ptr<WORLD> retworld );
 
         pimpl<mod_manager> mman;
         pimpl<mod_ui> mman_ui;
 
-        using worldgen_display = std::function<int ( const catacurses::window &, WORLD *, bool )>;
+        using worldgen_display = std::function<int ( WORLD *, bool )>;
 
         std::vector<worldgen_display> tabs;
 };

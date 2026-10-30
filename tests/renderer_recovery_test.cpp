@@ -6,7 +6,6 @@
 #include <string>
 
 #include "cata_catch.h"
-#include "cata_imgui.h"
 #include "cata_tiles.h"
 #include "options_helpers.h"
 #include "output.h"
@@ -756,19 +755,6 @@ TEST_CASE( "renderer_coordinator_background_then_foreground_rebuilds",
     renderer_coordinator.drain_pending();
     CHECK( renderer_coordinator.is_render_allowed() );
     CHECK( renderer_coordinator.textures_generation() == tex0 + 1 );
-}
-
-TEST_CASE( "imgui_frame_display_size_prefers_explicit_display_buffer_dims",
-           "[tiles][renderer_recovery]" )
-{
-    // Idle-null contract: when the caller passes positive display-buffer dims,
-    // ImGui sizes to them and never falls back to the renderer output (which
-    // under the idle-null target reads the window). Zero dims fall back.
-    CHECK( cataimgui::imgui_frame_display_size( 320, 240, 1920, 1080 ) == point{ 320, 240 } );
-    CHECK( cataimgui::imgui_frame_display_size( 0, 0, 1920, 1080 ) == point{ 1920, 1080 } );
-    // A one-axis-zero size is treated as unset and falls back, matching the
-    // new_frame predicate.
-    CHECK( cataimgui::imgui_frame_display_size( 320, 0, 1920, 1080 ) == point{ 1920, 1080 } );
 }
 
 TEST_CASE( "renderer_coordinator_pause_during_draw_scope_restores_target",

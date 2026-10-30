@@ -1,0 +1,195 @@
+<rml>
+<head>
+    <title>Vehicle</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* Vehicle interaction; see veh_interact in src/veh_interact.cpp. The
+           vehicle and the parts at the cursor on the left, the list of parts
+           in the middle, messages on the right, and the vehicle's stats
+           along the bottom. */
+        #window
+        {
+            width: 98%;
+            height: 98%;
+        }
+        /* While another screen takes over, as siphoning does */
+        #window.hidden
+        {
+            display: none;
+        }
+        #header
+        {
+            margin-bottom: 6dp;
+        }
+        .vi-mode .button
+        {
+            margin-bottom: 2dp;
+        }
+        #vi-main
+        {
+            flex: 1 1 0;
+            display: flex;
+            flex-direction: row;
+            min-height: 0;
+        }
+        #vi-left, #vi-list, #vi-msg
+        {
+            flex: 1 1 0;
+            min-width: 0;
+            min-height: 0;
+            padding: 0 8dp;
+        }
+        #vi-left
+        {
+            display: flex;
+            flex-direction: column;
+            padding-left: 0;
+        }
+        #vi-list, #vi-msg
+        {
+            overflow-y: auto;
+            border-left: 1dp #39465c;
+        }
+        #vi-msg
+        {
+            white-space: pre-wrap;
+        }
+
+        /* The vehicle, one row of the grid to a div. Rows are as tall as
+           view_line_dp in the code. */
+        #vi-veh
+        {
+            flex: 0 0 auto;
+            overflow: hidden;
+            font-family: cata-mono;
+            font-size: 16dp;
+            text-align: center;
+        }
+        .vi-row
+        {
+            height: 18dp;
+            line-height: 18dp;
+            white-space: pre;
+        }
+        #vi-parts
+        {
+            flex: 1 1 0;
+            min-height: 0;
+            margin-top: 4dp;
+            padding-top: 4dp;
+            overflow-y: auto;
+            border-top: 1dp #39465c;
+        }
+
+        /* The overview of the vehicle's parts, and the parts to install. */
+        .vi-ov, .vi-ov-head, .vi-ov-extra, .vi-li
+        {
+            display: flex;
+            align-items: center;
+        }
+        .vi-ov-head
+        {
+            margin-top: 6dp;
+            border-bottom: 1dp #39465c;
+        }
+        .vi-ov-name
+        {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .vi-ov-extra .vi-ov-name
+        {
+            padding-left: 3em;
+        }
+        .vi-ov-detail
+        {
+            flex: 0 0 auto;
+            margin-left: 8dp;
+            white-space: pre;
+        }
+        .vi-tabs
+        {
+            display: flex;
+            flex-wrap: wrap;
+            margin-bottom: 4dp;
+        }
+        .vi-tab
+        {
+            padding: 1dp 5dp;
+            margin: 0 3dp 3dp 0;
+            border-radius: 3dp;
+            background-color: #1b2130;
+            color: #b7b2a4;
+        }
+        .vi-tab.active
+        {
+            background-color: #2b3a52;
+            color: #ffffff;
+        }
+        .vi-sym
+        {
+            flex: 0 0 auto;
+            width: 1.5em;
+            font-family: cata-mono;
+        }
+
+        /* The stats, in columns, and the details of a part to install. */
+        #vi-bottom
+        {
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: row;
+            margin-top: 6dp;
+            padding-top: 6dp;
+            border-top: 1dp #39465c;
+        }
+        #vi-stats
+        {
+            flex: 2 1 0;
+            display: flex;
+            flex-direction: row;
+            min-width: 0;
+        }
+        #vi-stats .vi-stats-col
+        {
+            flex: 1 1 0;
+            min-width: 0;
+            padding-right: 8dp;
+        }
+        .vi-fuel
+        {
+            font-family: cata-mono;
+            white-space: pre;
+            max-height: 176dp;
+            overflow-y: auto;
+        }
+        #vi-details
+        {
+            flex: 2 1 0;
+            min-width: 0;
+            padding-left: 8dp;
+            border-left: 1dp #39465c;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by veh_interact in src/veh_interact.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

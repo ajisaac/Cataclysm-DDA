@@ -1056,7 +1056,7 @@ construction_id construction_menu( const bool blueprint )
             blink = true;
         }
         if( action == "FILTER" ) {
-            string_input_popup_imgui popup( 50 );
+            text_input_popup popup( 50 );
             popup.set_label( _( "Search" ) );
             popup.set_description( _( "Filter" ) );
             popup.set_text( tabindex == tabcount - 1 ? filter : std::string() );
@@ -1815,7 +1815,7 @@ static vpart_id vpart_from_item( const itype_id &item_id )
 
 void construct::done_vehicle( const tripoint_bub_ms &p, Character & )
 {
-    string_input_popup_imgui popup( 60 );
+    text_input_popup popup( 60 );
     popup.set_label( _( "Enter new vehicle name:" ) );
     std::string name = popup.query();
     if( name.empty() ) {

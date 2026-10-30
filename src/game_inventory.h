@@ -10,12 +10,12 @@
 #include <vector>
 
 #include "bodypart.h"
-#include "cata_imgui.h"
 #include "coordinates.h"
 #include "input_context.h"
 #include "inventory_ui.h"
 #include "item.h"
 #include "item_location.h"
+#include "rml_window.h"
 #include "type_id.h"
 #include "units_fwd.h"
 
@@ -85,15 +85,14 @@ void swap_letters();
 * pressed, false for "quit" input.
 * @return False if confirm_message is empty or QUIT input was pressed.
 */
-class compare_item_menu : public cataimgui::window
+class compare_item_menu : public rml_ui::window
 {
     public:
         compare_item_menu( const item &first, const item &second, const std::string &confirm_message = "" );
         bool show();
 
     protected:
-        void draw_controls() override;
-        cataimgui::bounds get_bounds() override;
+        void on_redraw() override;
 
     private:
         item first;
@@ -102,7 +101,6 @@ class compare_item_menu : public cataimgui::window
         input_context ctxt;
         std::vector<iteminfo> first_info;
         std::vector<iteminfo> second_info;
-        cataimgui::scroll s = cataimgui::scroll::none;
 };
 bool compare_items( const item &first, const item &second,
                     const std::string &confirm_message = "" );

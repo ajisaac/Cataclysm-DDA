@@ -41,8 +41,10 @@ The default options (available in data/fontdata.json) might look like the follow
 }
 ```
 
-There are four different font categories: `typeface`, `gui_typeface`, `map_typeface`, and `overmap_typeface`,
-which are used for the old-style game interface, ImGui menus, the game display and the overmap, respectively.
+There are four different font categories: `typeface`, `gui_typeface`, `map_typeface`, and `overmap_typeface`.
+`typeface`, `map_typeface` and `overmap_typeface` are used for the old-style game interface, the game display and
+the overmap, respectively. `gui_typeface` is still read but unused: menus and windows are drawn with RmlUi, in the
+fonts it loads from `data/font/`.
 If more than one font is specified for a typeface the list is treated as a fallback order. Unifont will always
 be used as a 'last resort' fallback even if not listed here.
 
@@ -55,7 +57,8 @@ Each entry may be a string or an object. If a string is provided it is interpret
 If an object is provided, then it must have a path attribute, which provides the path to the font. It may also have
 a 'hinting' attribute, which determines the font hinting mode. If it's not specified then 'Default' is used.
 Hinting may be one of: Auto, NoAuto, Default, Light, or Bitmap. Antialiasing may also be provided and is default set
-to true, but can be disabled by setting to off.
+to true, but can be disabled by setting to off. Neither is applied at present: they configured the menu fonts of
+the user interface the game used before RmlUi.
 
 A full object may look like the following:
 ```jsonc

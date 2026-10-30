@@ -136,6 +136,55 @@ vpart_display vehicle::get_display_of_tile( const point_rel_ms &dp, bool rotate,
     return ret;
 }
 
+/** A part's name as the part list shows it, with what it holds. */
+static std::string part_list_name( const vehicle &veh, const vehicle_part &vp, bool detail )
+{
+    std::string partname = vp.name();
+
+    if( vp.is_fuel_store() && !vp.ammo_current().is_null() ) {
+        if( detail ) {
+            if( vp.ammo_current() == itype_battery ) {
+                partname += string_format( _( " (%d/%d charge)" ), vp.ammo_remaining( ),
+                                           vp.ammo_capacity( ammo_battery ) );
+            } else if( vp.ammo_current()->stack_size > 0 ) {
+                const itype *pt_ammo_cur = item::find_type( vp.ammo_current() );
+                auto stack = 250_ml / pt_ammo_cur->stack_size;
+                partname += string_format( _( " (%.1fL %s)" ),
+                                           round_up( units::to_liter( vp.ammo_remaining( ) * stack ), 1 ),
+                                           item::nname( vp.ammo_current() ) );
+            }
+        } else {
+            partname += string_format( " (%s)", item::nname( vp.ammo_current() ) );
+        }
+    }
+
+    if( vp.info().has_flag( VPFLAG_CARGO ) ) {
+        const vehicle_stack vs = veh.get_items( vp );
+        //~ used/total volume of a cargo vehicle part
+        partname += string_format( _( " (vol: %s/%s %s)" ),
+                                   format_volume( vs.stored_volume() ),
+                                   format_volume( vs.max_volume() ),
+                                   volume_units_abbr() );
+    }
+    return partname;
+}
+
+/** The brackets around a part in the part list, by where it sits. */
+static void part_list_symbols( const vpart_info &vpi, std::string &left_sym,
+                               std::string &right_sym )
+{
+    if( vpi.has_flag( VPFLAG_ARMOR ) ) {
+        left_sym = "(";
+        right_sym = ")";
+    } else if( vpi.location == vpart_location_structure ) {
+        left_sym = "[";
+        right_sym = "]";
+    } else {
+        left_sym = "-";
+        right_sym = "-";
+    }
+}
+
 /**
  * Prints a list of all parts to the screen inside of a boxed window, possibly
  * highlighting a selected one.
@@ -168,47 +217,10 @@ int vehicle::print_part_list( const catacurses::window &win, int y1,
             break;
         }
 
-        std::string partname = vp.name();
-
-        if( vp.is_fuel_store() && !vp.ammo_current().is_null() ) {
-            if( detail ) {
-                if( vp.ammo_current() == itype_battery ) {
-                    partname += string_format( _( " (%d/%d charge)" ), vp.ammo_remaining( ),
-                                               vp.ammo_capacity( ammo_battery ) );
-                } else if( vp.ammo_current()->stack_size > 0 ) {
-                    const itype *pt_ammo_cur = item::find_type( vp.ammo_current() );
-                    auto stack = 250_ml / pt_ammo_cur->stack_size;
-                    partname += string_format( _( " (%.1fL %s)" ),
-                                               round_up( units::to_liter( vp.ammo_remaining( ) * stack ), 1 ),
-                                               item::nname( vp.ammo_current() ) );
-                }
-            } else {
-                partname += string_format( " (%s)", item::nname( vp.ammo_current() ) );
-            }
-        }
-
-        if( vpi.has_flag( VPFLAG_CARGO ) ) {
-            const vehicle_stack vs = get_items( vp );
-            //~ used/total volume of a cargo vehicle part
-            partname += string_format( _( " (vol: %s/%s %s)" ),
-                                       format_volume( vs.stored_volume() ),
-                                       format_volume( vs.max_volume() ),
-                                       volume_units_abbr() );
-        }
-
-        const bool armor = vpi.has_flag( VPFLAG_ARMOR );
+        const std::string partname = part_list_name( *this, vp, detail );
         std::string left_sym;
         std::string right_sym;
-        if( armor ) {
-            left_sym = "(";
-            right_sym = ")";
-        } else if( vpi.location == vpart_location_structure ) {
-            left_sym = "[";
-            right_sym = "]";
-        } else {
-            left_sym = "-";
-            right_sym = "-";
-        }
+        part_list_symbols( vpi, left_sym, right_sym );
         nc_color sym_color = static_cast<int>( i ) == hl ? hilite( c_light_gray ) : c_light_gray;
         mvwprintz( win, point( 1, y ), sym_color, left_sym );
         trim_and_print( win, point( 2, y ), getmaxx( win ) - 4,
@@ -235,6 +247,45 @@ int vehicle::print_part_list( const catacurses::window &win, int y1,
     }
 
     return y;
+}
+
+std::vector<std::pair<std::string, std::string>> vehicle::part_list_markup( int p, int hl,
+        bool detail, bool include_fakes ) const
+{
+    std::vector<std::pair<std::string, std::string>> lines;
+    if( p < 0 || p >= static_cast<int>( parts.size() ) ) {
+        return lines;
+    }
+    std::vector<int> pl = this->parts_at_relative( parts[p].mount, true, include_fakes );
+    for( size_t i = 0; i < pl.size(); i++ ) {
+        const vehicle_part &vp = parts[pl[i]];
+        if( !vp.is_real_or_active_fake() ) {
+            continue;
+        }
+        std::string left_sym;
+        std::string right_sym;
+        part_list_symbols( vp.info(), left_sym, right_sym );
+        const nc_color color = static_cast<int>( i ) == hl ? hilite( c_light_gray ) : c_light_gray;
+        std::string where;
+        if( i == 0 ) {
+            where = vpart_position( const_cast<vehicle &>( *this ), pl[i] ).is_inside() ?
+                    //~ indicates that a vehicle part is inside
+                    _( "Interior" ) :
+                    //~ indicates that a vehicle part is outside
+                    _( "Exterior" );
+        }
+        lines.emplace_back( colorize( left_sym + part_list_name( *this, vp, detail ) + right_sym, color ),
+                            colorize( where, c_light_gray ) );
+    }
+
+    // the label for this location
+    const std::optional<std::string> label = vpart_position( const_cast<vehicle &>( *this ),
+            p ).get_label();
+    if( label ) {
+        lines.emplace_back( colorize( string_format( _( "Label: %s" ), *label ), c_light_red ),
+                            std::string() );
+    }
+    return lines;
 }
 
 /**
@@ -318,6 +369,33 @@ void vehicle::print_vparts_descs( const catacurses::window &win, int max_y, int 
     // NOLINTNEXTLINE(cata-use-named-point-constants)
     fold_and_print( win, point( 1, 0 ), width - 2, c_light_gray, msg );
     wnoutrefresh( win );
+}
+
+std::string vehicle::vparts_descs_markup( int p, int width ) const
+{
+    if( p < 0 || p >= static_cast<int>( parts.size() ) ) {
+        return std::string();
+    }
+    std::string msg;
+    for( const int part_index : this->parts_at_relative( parts[p].mount, true ) ) {
+        const vehicle_part &vp = parts[part_index];
+        const nc_color name_color = vp.is_broken() ? c_dark_gray : c_light_green;
+        msg += colorize( vp.name(), name_color ) + "\n";
+        const nc_color desc_color = vp.is_broken() ? c_dark_gray : c_light_gray;
+        vp.info().format_description( msg, desc_color, width );
+        if( vp.has_flag( vp_flag::carrying_flag ) ) {
+            msg += _( "  Carrying a vehicle on a rack.\n" );
+        }
+        if( vp.has_flag( vp_flag::carried_flag ) ) {
+            msg += string_format( _( "  Part of a %s carried on a rack.\n" ), vp.carried_name() );
+        }
+        if( vp.degradation() > 0 && vp.damage() == vp.degradation() ) {
+            msg += string_format( "   %s\n",
+                                  _( "<color_c_red>Degraded and cannot be repaired beyond the current level.</color>" ) );
+        }
+        msg += "\n";
+    }
+    return colorize( msg, c_light_gray );
 }
 
 /**

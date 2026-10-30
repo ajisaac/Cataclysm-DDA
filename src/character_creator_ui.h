@@ -1,14 +1,13 @@
 #include <memory>
 
 #include "avatar.h"
-#include "cata_imgui.h"
 #include "input_context.h"
+#include "rml_window.h"
 #include "uilist.h"
 #include "scenario.h"
 
 const int CHARACTER_CREATOR_TAB_COUNT = 7;
 const int CHARACTER_CREATOR_SUMMARY_LINES = 5;
-const ImGuiTableFlags_ CHARACTER_CREATOR_TABLE_FLAGS = ImGuiTableFlags_ScrollY;
 const translation CHARACTER_CREATOR_UILIST_ALL = to_translation( "ALL" );
 const translation CHARACTER_CREATOR_TRAITS_COSMETIC = to_translation( "COSMETIC" );
 const translation CHARACTER_CREATOR_TRAITS_POSITIVE = to_translation( "POSITIVE" );
@@ -27,6 +26,7 @@ enum character_creator_tab : int {
 };
 
 class character_creator_ui;
+class character_creator_ui_impl;
 
 template<>
 struct enum_traits<character_creator_tab> {
@@ -77,7 +77,7 @@ struct character_creator_uistate {
 
     // the currently selected tab
     character_creator_tab selected_tab = CHARCREATOR_SCENARIO;
-    // for circumventing ImGui inputs; set when you need to switch the tab by key
+    // set when you need to switch the tab, by key or by clicking it
     character_creator_tab switched_tab = character_creator_tab_LAST;
     character_creator_tab previous_tab = character_creator_tab_LAST;
 
@@ -119,13 +119,15 @@ struct character_creator_uistate {
 
 // implemented as two separate windows:
 // 1. a `uilist` that handles all list selections and inputs, displayed on left
-// 2. standard ImGui display details for the `uilist` selection, displayed on right
+// 2. details for the `uilist` selection, displayed on right
 class character_creator_ui
 {
         character_creator_callback cc_callback;
         shared_ptr_fast<uilist_impl> cc_uilist_current;
         std::array<std::shared_ptr<uilist>, CHARACTER_CREATOR_TAB_COUNT> cc_uilist;
         std::array<input_context, CHARACTER_CREATOR_TAB_COUNT> cc_inputs;
+        // the window showing the details, while display() runs
+        character_creator_ui_impl *ui_impl = nullptr;
 
     public:
         character_creator_ui();
@@ -138,7 +140,8 @@ class character_creator_ui
         // update uilist_entries for current tab, but do not modify uilist_entry count
         void update_uilist_entries();
         void upon_switching_tab();
-        void update_uilist_position( ImVec2 new_position );
+        // place the current tab's uilist at this height and size, in terminal cells
+        void update_uilist_position( float top, float height );
         // @param quick_value_change - if true, add inputs for changing a value (stat or skill)
         void setup_input_context( input_context &cc_ictxt, bool quick_value_change );
         // @return action was handled
@@ -151,30 +154,33 @@ class character_creator_ui
         void set_current_tab_input( const input_context &new_input );
 };
 
-class character_creator_ui_impl : public cataimgui::window
+class character_creator_ui_impl : public rml_ui::window
 {
     public:
         character_creator_ui *ui_parent;
         explicit character_creator_ui_impl( character_creator_ui *parent );
 
-        void draw_top_bar( const avatar &u ) const;
-        void draw_scenarios() const;
-        void draw_professions() const;
-        void draw_backgrounds();
+        /// Take a click on a tab, the top bar's heading or a button; returns
+        /// whether it was on one of them.
+        bool handle_click();
+
+        std::string top_bar_rml( const avatar &u ) const;
+        std::string scenarios_rml() const;
+        std::string professions_rml() const;
+        std::string backgrounds_rml();
         // STR, DEX, etc...
-        void draw_stats();
-        void draw_traits();
-        void draw_skills();
-        void draw_summary();
+        std::string stats_rml();
+        std::string traits_rml();
+        std::string skills_rml();
+        std::string summary_rml();
 
     protected:
-        void draw_controls() override;
-        cataimgui::bounds get_bounds() override;
+        void on_redraw() override;
 };
 
 namespace char_creation
 {
-// an ImGui button that, when clicked, sends an action to cc_uistate
+// a button that, when clicked, sends an action to cc_uistate
 void draw_action_button( const std::string &button_text, const std::string &button_action );
 void draw_name( const avatar &you, bool no_name_entered );
 void draw_gender( const avatar &you );

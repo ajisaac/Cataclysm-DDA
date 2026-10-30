@@ -9,13 +9,6 @@
 #include "cuboid_rectangle.h"
 #include "point.h"
 
-namespace cataimgui
-{
-class client;
-} // namespace cataimgui
-
-extern std::unique_ptr<cataimgui::client> imclient;
-
 namespace catacurses
 {
 class window;
@@ -76,9 +69,8 @@ class window;
 class ui_adaptor
 {
     public:
-        bool is_imgui;
-        // Owned by an rml_ui::document. Like `is_imgui`, redrawn on every pass,
-        // which is how the document learns it is still enabled in the stack.
+        // Owned by an rml_ui::document. Redrawn on every pass, which is how
+        // the document learns it is still enabled in the stack.
         bool is_rml;
         bool is_on_top;
         using redraw_callback_t = std::function<void( ui_adaptor & )>;
@@ -231,7 +223,6 @@ class ui_adaptor
 
         /* See the `ui_manager` namespace */
         static void invalidate( const rectangle<point> &rect, bool reenable_uis_below );
-        static bool has_imgui();
         static bool has_rml();
         /**
          * Whether a UI that draws, and is not RmlUi, is above this one. RmlUi

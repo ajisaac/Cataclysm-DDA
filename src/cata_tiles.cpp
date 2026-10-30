@@ -1555,7 +1555,7 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
 
     RenderSetClipRect( renderer, nullptr );
 #if SDL_MAJOR_VERSION >= 3
-    // Unbind any GPU render state held across sprite batches so ImGui or the
+    // Unbind any GPU render state held across sprite batches so RmlUi or the
     // next-frame draws see clean state. On flush failure the bind boundary
     // forbids a target switch: abort the unbind, latch recovery, and throw.
     if( cata_shader::variant_pass *vp = get_shared_variant_pass() ) {

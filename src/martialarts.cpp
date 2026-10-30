@@ -1,6 +1,5 @@
 #include "martialarts.h"
 
-#include <imgui/imgui.h>
 #include <algorithm>
 #include <cstdlib>
 #include <iterator>
@@ -11,7 +10,6 @@
 #include <utility>
 
 #include "bodypart.h"
-#include "cata_imgui.h"
 #include "cata_utility.h"
 #include "character.h"
 #include "character_attire.h"
@@ -37,11 +35,12 @@
 #include "messages.h"
 #include "output.h"
 #include "pimpl.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "skill.h"
 #include "string_formatter.h"
 #include "subbodypart.h"
 #include "talker.h"
-#include "text.h"
 #include "translations.h"
 #include "ui_manager.h"
 #include "value_ptr.h"
@@ -2231,30 +2230,22 @@ std::string ma_technique::get_description() const
 
 namespace
 {
-class ma_details_ui
-{
-        friend class ma_details_ui_impl;
-    public:
-        void draw_ma_details_ui( const matype_id &style_selected );
-};
-
-class ma_details_ui_impl : public cataimgui::window
+class ma_details_ui_impl : public rml_ui::window
 {
     public:
-        std::string last_action;
-        explicit ma_details_ui_impl( const matype_id &style_selected ) : cataimgui::window(
+        explicit ma_details_ui_impl( const matype_id &style_selected ) : rml_ui::window(
                 string_format( _( "Martial art style details - %s" ),
-                               style_selected.obj().name.translated().c_str() ),
-                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav ) {
+                               style_selected.obj().name.translated() ) ) {
             ma_style = style_selected;
         };
         void init_data();
+        void run();
+
+    protected:
+        void on_redraw() override;
 
     private:
-        void draw_ma_details_text();
-
-        size_t window_width = ImGui::GetMainViewport()->Size.x * 8 / 9;
-        size_t window_height = ImGui::GetMainViewport()->Size.y * 8 / 9;
+        std::string ma_details_rml() const;
 
         bool general_info_group_collapsed = false;
         bool buffs_group_collapsed = false;
@@ -2268,19 +2259,11 @@ class ma_details_ui_impl : public cataimgui::window
         std::map<std::string, std::string> weapons_text;
         int buffs_total = 0;
         int weapons_total = 0;
-
-        cataimgui::scroll s = cataimgui::scroll::none;
-
-    protected:
-        void draw_controls() override;
 };
 
-void ma_details_ui::draw_ma_details_ui( const matype_id &style_selected )
+void ma_details_ui_impl::run()
 {
     input_context ctxt( "MA_DETAILS_UI" );
-    ma_details_ui_impl p_impl( style_selected );
-
-    p_impl.init_data();
 
     ctxt.register_navigate_ui_list();
     ctxt.register_leftright();
@@ -2298,10 +2281,29 @@ void ma_details_ui::draw_ma_details_ui( const matype_id &style_selected )
     while( true ) {
         ui_manager::redraw_invalidated();
 
-        p_impl.last_action = ctxt.handle_input();
-
-        if( p_impl.last_action == "QUIT" || !p_impl.get_is_open() ) {
+        const std::string action = resolve_click( ctxt.handle_input() );
+        if( action == "QUIT" ) {
             break;
+        } else if( action == "TOGGLE_GENERAL_INFO_GROUP" ) {
+            general_info_group_collapsed = !general_info_group_collapsed;
+        } else if( action == "TOGGLE_BUFFS_GROUP" ) {
+            buffs_group_collapsed = !buffs_group_collapsed;
+        } else if( action == "TOGGLE_TECHNIQUES_GROUP" ) {
+            techniques_group_collapsed = !techniques_group_collapsed;
+        } else if( action == "TOGGLE_WEAPONS_GROUP" ) {
+            weapons_group_collapsed = !weapons_group_collapsed;
+        } else if( action == "UP" ) {
+            scroll_body( rml_ui::scroll::line_up );
+        } else if( action == "DOWN" ) {
+            scroll_body( rml_ui::scroll::line_down );
+        } else if( action == "PAGE_UP" ) {
+            scroll_body( rml_ui::scroll::page_up );
+        } else if( action == "PAGE_DOWN" ) {
+            scroll_body( rml_ui::scroll::page_down );
+        } else if( action == "HOME" ) {
+            scroll_body( rml_ui::scroll::top );
+        } else if( action == "END" ) {
+            scroll_body( rml_ui::scroll::bottom );
         }
     }
 }
@@ -2463,105 +2465,81 @@ void ma_details_ui_impl::init_data()
     }
 }
 
-void ma_details_ui_impl::draw_ma_details_text()
+std::string ma_details_ui_impl::ma_details_rml() const
 {
+    // Clicking a heading opens or closes its group
+    const auto heading = []( const std::string & action, const std::string & text, bool collapsed ) {
+        return "<div class=\"section-head\" data-action=\"" + action + "\">" +
+               std::string( collapsed ? "+ " : "- " ) + rml_ui::escape_rml( text ) + "</div>";
+    };
+    const auto line = []( const std::string & text, const nc_color & color ) {
+        return "<div class=\"pre\">" + rml_ui::markup_to_rml( text, color ) + "</div>";
+    };
 
-    if( !general_info_text.empty() &&
-        ImGui::CollapsingHeader( _( "General info" ),
-                                 general_info_group_collapsed ? ImGuiTreeNodeFlags_None : ImGuiTreeNodeFlags_DefaultOpen ) ) {
-        for( const auto &entry : general_info_text ) {
-            cataimgui::TextColoredParagraph( c_light_gray, entry );
-            ImGui::NewLine();
-        }
-    }
-
-    if( !buffs_text.empty() &&
-        ImGui::CollapsingHeader( string_format( _( "Buffs (%d in %d categories)" ),
-                                 buffs_total, buffs_text.size() ).c_str(),
-                                 buffs_group_collapsed ? ImGuiTreeNodeFlags_None : ImGuiTreeNodeFlags_DefaultOpen ) ) {
-        for( const auto &entry : buffs_text ) {
-            cataimgui::TextColoredParagraph( c_header, entry.first );
-            ImGui::NewLine();
-            for( const auto &buff_line : entry.second ) {
-                cataimgui::TextColoredParagraph( c_light_gray, buff_line );
-                ImGui::NewLine();
+    std::string rml;
+    if( !general_info_text.empty() ) {
+        rml += heading( "TOGGLE_GENERAL_INFO_GROUP", _( "General info" ), general_info_group_collapsed );
+        if( !general_info_group_collapsed ) {
+            for( const auto &entry : general_info_text ) {
+                rml += line( entry, c_light_gray );
             }
-            ImGui::Separator();
         }
     }
 
-    if( !techniques_text.empty() &&
-        ImGui::CollapsingHeader( string_format( _( "Techniques (%d)" ), techniques_text.size() ).c_str(),
-                                 techniques_group_collapsed ? ImGuiTreeNodeFlags_None : ImGuiTreeNodeFlags_DefaultOpen ) ) {
-        for( const auto &entry : techniques_text ) {
-            cataimgui::TextColoredParagraph( c_header, _( "Technique: " ) );
-            ImGui::SameLine();
-            cataimgui::TextColoredParagraph( c_bold, entry.first );
-            ImGui::NewLine();
-            for( const auto &technique_line : entry.second ) {
-                cataimgui::TextColoredParagraph( c_light_gray, technique_line );
-                ImGui::NewLine();
+    if( !buffs_text.empty() ) {
+        rml += heading( "TOGGLE_BUFFS_GROUP", string_format( _( "Buffs (%d in %d categories)" ),
+                        buffs_total, buffs_text.size() ), buffs_group_collapsed );
+        if( !buffs_group_collapsed ) {
+            for( const auto &entry : buffs_text ) {
+                rml += line( entry.first, c_header );
+                for( const auto &buff_line : entry.second ) {
+                    rml += line( buff_line, c_light_gray );
+                }
+                rml += "<div class=\"sep\"></div>";
             }
-            ImGui::Separator();
         }
     }
 
-    if( !weapons_text.empty() &&
-        ImGui::CollapsingHeader( string_format( _( "Weapons (%d in %d categories)" ),
-                                 weapons_total, weapons_text.size() ).c_str(),
-                                 weapons_group_collapsed ? ImGuiTreeNodeFlags_None : ImGuiTreeNodeFlags_DefaultOpen ) ) {
-        for( const auto &entry : weapons_text ) {
-            cataimgui::TextColoredParagraph( c_header, entry.first );
-            ImGui::NewLine();
-            cataimgui::TextColoredParagraph( c_white, entry.second );
-            ImGui::NewLine();
-            ImGui::Separator();
+    if( !techniques_text.empty() ) {
+        rml += heading( "TOGGLE_TECHNIQUES_GROUP", string_format( _( "Techniques (%d)" ),
+                        techniques_text.size() ), techniques_group_collapsed );
+        if( !techniques_group_collapsed ) {
+            for( const auto &entry : techniques_text ) {
+                rml += "<div>" + rml_ui::colored_rml( _( "Technique: " ), c_header ) +
+                       rml_ui::markup_to_rml( entry.first, c_bold ) + "</div>";
+                for( const auto &technique_line : entry.second ) {
+                    rml += line( technique_line, c_light_gray );
+                }
+                rml += "<div class=\"sep\"></div>";
+            }
         }
     }
 
-    cataimgui::set_scroll( s );
+    if( !weapons_text.empty() ) {
+        rml += heading( "TOGGLE_WEAPONS_GROUP", string_format( _( "Weapons (%d in %d categories)" ),
+                        weapons_total, weapons_text.size() ), weapons_group_collapsed );
+        if( !weapons_group_collapsed ) {
+            for( const auto &entry : weapons_text ) {
+                rml += line( entry.first, c_header ) + line( entry.second, c_white ) +
+                       "<div class=\"sep\"></div>";
+            }
+        }
+    }
+    return rml;
 }
 
-void ma_details_ui_impl::draw_controls()
+void ma_details_ui_impl::on_redraw()
 {
-    ImGui::SetWindowSize( ImVec2( window_width, window_height ), ImGuiCond_Once );
-
-    if( last_action == "QUIT" ) {
-        return;
-    } else if( last_action == "TOGGLE_GENERAL_INFO_GROUP" ) {
-        general_info_group_collapsed = !general_info_group_collapsed;
-    } else if( last_action == "TOGGLE_BUFFS_GROUP" ) {
-        buffs_group_collapsed = !buffs_group_collapsed;
-    } else if( last_action == "TOGGLE_TECHNIQUES_GROUP" ) {
-        techniques_group_collapsed = !techniques_group_collapsed;
-    } else if( last_action == "TOGGLE_WEAPONS_GROUP" ) {
-        weapons_group_collapsed = !weapons_group_collapsed;
-    } else if( last_action == "UP" ) {
-        s = cataimgui::scroll::line_up;
-    } else if( last_action == "DOWN" ) {
-        s = cataimgui::scroll::line_down;
-    } else if( last_action == "LEFT" ) {
-        ImGui::SetScrollX( ImGui::GetScrollX() - ImGui::CalcTextSize( "x" ).x );
-    } else if( last_action == "RIGHT" ) {
-        ImGui::SetScrollX( ImGui::GetScrollX() + ImGui::CalcTextSize( "x" ).x );
-    } else if( last_action == "PAGE_UP" ) {
-        s = cataimgui::scroll::page_up;
-    } else if( last_action == "PAGE_DOWN" ) {
-        s = cataimgui::scroll::page_down;
-    } else if( last_action == "HOME" ) {
-        s = cataimgui::scroll::begin;
-    } else if( last_action == "END" ) {
-        s = cataimgui::scroll::end;
-    }
-
-    draw_ma_details_text();
+    set_size( "89%", "89%" );
+    set_body( ma_details_rml() );
 }
 } // namespace
 
 static void show_ma_details_ui( const matype_id &style_selected )
 {
-    ma_details_ui new_instance;
-    new_instance.draw_ma_details_ui( style_selected );
+    ma_details_ui_impl ui( style_selected );
+    ui.init_data();
+    ui.run();
 }
 
 bool ma_style_callback::key( const input_context &ctxt, const input_event &event, int entnum,

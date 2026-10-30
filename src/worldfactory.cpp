@@ -211,7 +211,7 @@ WORLD *worldfactory::make_new_world( bool show_prompt, const std::string &world_
 static std::optional<std::string> prompt_world_name( const std::string &title,
         const std::string &cur_worldname )
 {
-    string_input_popup_imgui popup( 50, cur_worldname );
+    text_input_popup popup( 50, cur_worldname );
     popup.set_max_input_length( max_worldname_len );
     popup.set_label( title );
 

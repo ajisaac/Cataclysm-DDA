@@ -1,0 +1,147 @@
+<rml>
+<head>
+    <title>Character</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* The character sheet; see Character::disp_info() in
+           src/player_display.cpp. Stats, encumbrance and speed across the
+           top, the selected line's info below them, and the longer lists
+           underneath, each scrolling on its own. */
+        #header
+        {
+            margin-bottom: 4dp;
+        }
+        #header .button
+        {
+            margin-bottom: 0;
+        }
+        #cs-top
+        {
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: row;
+            height: 250dp;
+        }
+        #cs-info
+        {
+            flex: 0 0 auto;
+            height: 140dp;
+            margin: 6dp 0;
+            padding: 4dp 8dp;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            border: 1dp #39465c;
+            border-radius: 4dp;
+        }
+        #cs-bottom
+        {
+            flex: 1 1 0;
+            display: flex;
+            flex-direction: row;
+            min-height: 0;
+        }
+        .cs-column
+        {
+            flex: 1 1 0;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+        }
+        .cs-column + .cs-column, #cs-top .cs-section + .cs-section
+        {
+            margin-left: 8dp;
+        }
+        .cs-column .cs-section + .cs-section
+        {
+            margin-top: 8dp;
+        }
+
+        .cs-section
+        {
+            flex: 1 1 0;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            padding: 4dp 6dp;
+            border: 1dp #2a3242;
+            border-radius: 4dp;
+        }
+        .cs-section.focused
+        {
+            border-color: #5a7aa8;
+        }
+        .cs-title
+        {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            padding-bottom: 2dp;
+            border-bottom: 1dp #39465c;
+        }
+        .cs-name
+        {
+            flex: 1 1 auto;
+            text-align: center;
+        }
+        .cs-title .button
+        {
+            margin: 0;
+            padding: 0 6dp;
+        }
+        .cs-sub
+        {
+            flex: 0 0 auto;
+            text-align: center;
+        }
+        .cs-list
+        {
+            flex: 1 1 0;
+            min-height: 0;
+            overflow-y: auto;
+        }
+        .cs-row
+        {
+            display: flex;
+            align-items: center;
+        }
+        .cs-left
+        {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .cs-right
+        {
+            flex: 0 0 auto;
+            margin-left: 8dp;
+            font-family: cata-mono;
+            white-space: pre;
+        }
+        .cs-head
+        {
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by Character::disp_info() in src/player_display.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

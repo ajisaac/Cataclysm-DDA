@@ -7,13 +7,11 @@
 
 #include "avatar.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "color.h"
 #include "dialogue.h"
 #include "dialogue_helpers.h"
 #include "display.h"
 #include "game_constants.h"
-#include "imgui/imgui.h"
 #include "input_context.h"
 #include "line.h"
 #include "mission.h"
@@ -21,6 +19,8 @@
 #include "faction.h"
 #include "output.h"
 #include "point.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "string_formatter.h"
 #include "talker.h"
 #include "timed_event.h"
@@ -65,55 +65,49 @@ static mission_ui_tab_enum &operator--( mission_ui_tab_enum &c )
 
 namespace
 {
-class mission_ui
-{
-        friend class mission_ui_impl;
-    public:
-        void draw_mission_ui();
-};
+// Kept between visits to the screen, as it always was
+int selected_mission = 0;
 
-class mission_ui_impl : public cataimgui::window
+class mission_ui_impl : public rml_ui::window
 {
     public:
-        std::string last_action;
-        explicit mission_ui_impl() : cataimgui::window( _( "Your missions" ),
-                    ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav ) {
-        }
-
-    private:
-        void draw_mission_names( std::vector<mission *> missions, int &selected_mission,
-                                 bool &need_adjust ) const;
-        void draw_point_of_interest_names( std::vector<point_of_interest> points_of_interest,
-                                           int &selected_mission,
-                                           bool &need_adjust ) const;
-        void draw_selected_description( std::vector<mission *> missions, int &selected_mission );
-        void draw_selected_description( std::vector<point_of_interest> points_of_interest,
-                                        const int &selected_mission ) const;
-        void draw_label_with_value( const std::string &label, const std::string &value ) const;
-        void draw_location( const std::string &label, const tripoint_abs_omt &loc ) const;
-
-        mission_ui_tab_enum selected_tab = mission_ui_tab_enum::ACTIVE;
-        mission_ui_tab_enum switch_tab = mission_ui_tab_enum::num_tabs;
-
-        float window_width = std::clamp( float( str_width_to_pixels( EVEN_MINIMUM_TERM_WIDTH ) ),
-                                         ImGui::GetMainViewport()->Size.x / 2,
-                                         ImGui::GetMainViewport()->Size.x );
-        float window_height = std::clamp( float( str_height_to_pixels( EVEN_MINIMUM_TERM_HEIGHT ) ),
-                                          ImGui::GetMainViewport()->Size.y / 2,
-                                          ImGui::GetMainViewport()->Size.y );
-        float table_column_width = window_width / 2;
-
-        cataimgui::scroll s = cataimgui::scroll::none;
+        mission_ui_impl();
+        void run();
 
     protected:
-        void draw_controls() override;
+        void on_redraw() override;
+
+    private:
+        // Fill the entries of the selected tab from the avatar
+        void refresh_entries();
+        int entry_count() const;
+        void switch_tab( mission_ui_tab_enum tab );
+
+        std::string list_rml() const;
+        std::string mission_description_rml( mission *miss );
+        std::string point_of_interest_description_rml( const point_of_interest &poi ) const;
+        std::string label_with_value_rml( const std::string &label, const std::string &value ) const;
+        std::string location_rml( const std::string &label, const tripoint_abs_omt &loc ) const;
+
+        input_context ctxt;
+        mission_ui_tab_enum selected_tab = mission_ui_tab_enum::ACTIVE;
+        std::vector<mission *> umissions;
+        std::vector<point_of_interest> upoints_of_interest;
+        // Bring the selected entry into view, and the description to its top
+        bool reveal_selected = true;
+
+        // We do this to avoid replacing expanded snippets with other valid snippet text on redraw. The raw description includes un-parsed snippet tags.
+        // The parsed description is, obviously, after they've been parsed. So "<zombie_name>" becomes "undead thing" or "zed" or whatever.
+        // Whenever the user changes which mission they're looking at, this will update to parse the description *once* and keep displaying that parsed version
+        // until the mission changes again.
+        std::string raw_description;
+        std::string parsed_description;
 };
 
-void mission_ui::draw_mission_ui()
+mission_ui_impl::mission_ui_impl() :
+    rml_ui::window( _( "Your missions" ) ),
+    ctxt( "MISSION_UI" )
 {
-    input_context ctxt( "MISSION_UI" );
-    mission_ui_impl p_impl;
-
     ctxt.register_navigate_ui_list();
     ctxt.register_leftright();
     ctxt.register_action( "NEXT_TAB" );
@@ -123,283 +117,192 @@ void mission_ui::draw_mission_ui()
     ctxt.register_action( "CONFIRM",
                           to_translation( "Set selected mission/point of interest as current objective" ) );
     ctxt.register_action( "DELETE_POINT_OF_INTEREST", to_translation( "Delete Point of Interest" ) );
-    // We don't actually have a way to remap this right now
-    //ctxt.register_action( "DOUBLE_CLICK", to_translation( "Set selected mission as current objective" ) );
     ctxt.register_action( "HELP_KEYBINDINGS" );
     ctxt.register_action( "QUIT" );
     // Smooths out our handling, makes tabs load immediately after input instead of waiting for next.
     ctxt.set_timeout( 10 );
+}
 
+void mission_ui_impl::refresh_entries()
+{
+    umissions.clear();
+    upoints_of_interest.clear();
+    switch( selected_tab ) {
+        case mission_ui_tab_enum::ACTIVE:
+            umissions = get_avatar().get_active_missions();
+            break;
+        case mission_ui_tab_enum::COMPLETED:
+            umissions = get_avatar().get_completed_missions();
+            break;
+        case mission_ui_tab_enum::FAILED:
+            umissions = get_avatar().get_failed_missions();
+            break;
+        case mission_ui_tab_enum::POINTS_OF_INTEREST:
+            upoints_of_interest = get_avatar().get_points_of_interest();
+            break;
+        case mission_ui_tab_enum::num_tabs:
+            break;
+    }
+    const int last_entry = std::max( 0, entry_count() - 1 );
+    selected_mission = std::clamp( selected_mission, 0, last_entry );
+}
+
+int mission_ui_impl::entry_count() const
+{
+    return static_cast<int>( selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST ?
+                             upoints_of_interest.size() : umissions.size() );
+}
+
+void mission_ui_impl::switch_tab( mission_ui_tab_enum tab )
+{
+    selected_tab = tab;
+    selected_mission = 0;
+    reveal_selected = true;
+}
+
+void mission_ui_impl::run()
+{
     while( true ) {
         ui_manager::redraw_invalidated();
 
+        std::string action = ctxt.handle_input();
+        refresh_entries();
+        if( action == "SELECT" ) {
+            const int tab = hovered_tab();
+            const int row = hovered_index( "data-row" );
+            if( tab >= 0 ) {
+                switch_tab( static_cast<mission_ui_tab_enum>( tab ) );
+                continue;
+            } else if( row >= 0 && row < entry_count() ) {
+                selected_mission = row;
+                continue;
+            }
+            action = resolve_click( action );
+        }
 
-        p_impl.last_action = ctxt.handle_input();
-
-        if( p_impl.last_action == "QUIT" || !p_impl.get_is_open() ) {
+        const int last_entry = std::max( 0, entry_count() - 1 );
+        if( action == "QUIT" ) {
             break;
+        } else if( action == "NEXT_TAB" || action == "RIGHT" ) {
+            mission_ui_tab_enum tab = selected_tab;
+            switch_tab( ++tab );
+        } else if( action == "PREV_TAB" || action == "LEFT" ) {
+            mission_ui_tab_enum tab = selected_tab;
+            switch_tab( --tab );
+        } else if( action == "PAGE_UP" ) {
+            scroll( "description", rml_ui::scroll::page_up );
+        } else if( action == "PAGE_DOWN" ) {
+            scroll( "description", rml_ui::scroll::page_down );
+        } else if( action == "UP" ) {
+            selected_mission = selected_mission > 0 ? selected_mission - 1 : last_entry;
+            reveal_selected = true;
+        } else if( action == "DOWN" ) {
+            selected_mission = selected_mission < last_entry ? selected_mission + 1 : 0;
+            reveal_selected = true;
+        } else if( action == "HOME" ) {
+            selected_mission = 0;
+            reveal_selected = true;
+        } else if( action == "END" ) {
+            selected_mission = last_entry;
+            reveal_selected = true;
+        } else if( action == "CONFIRM" ) {
+            if( selected_tab == mission_ui_tab_enum::ACTIVE && !umissions.empty() ) {
+                get_avatar().set_active_mission( *umissions[selected_mission] );
+            } else if( selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST &&
+                       !upoints_of_interest.empty() ) {
+                get_avatar().set_active_point_of_interest( upoints_of_interest[selected_mission] );
+            }
+        } else if( action == "DELETE_POINT_OF_INTEREST" &&
+                   selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST && !upoints_of_interest.empty() ) {
+            get_avatar().delete_point_of_interest( upoints_of_interest[selected_mission].pos );
         }
     }
 }
 
-void mission_ui_impl::draw_controls()
+std::string mission_ui_impl::list_rml() const
 {
-    ImGui::SetWindowSize( ImVec2( window_width, window_height ), ImGuiCond_Once );
-    std::vector<mission *> umissions;
-    std::vector<point_of_interest> upoints_of_interest;
-
-    static int selected_mission = 0;
-    bool adjust_selected = false;
-
-    if( last_action == "QUIT" ) {
-        return;
-    } else if( last_action == "NEXT_TAB" || last_action == "RIGHT" ) {
-        adjust_selected = true;
-        selected_mission = 0;
-        s = cataimgui::scroll::begin;
-        switch_tab = selected_tab;
-        ++switch_tab;
-    } else if( last_action == "PREV_TAB" || last_action == "LEFT" ) {
-        adjust_selected = true;
-        selected_mission = 0;
-        s = cataimgui::scroll::begin;
-        switch_tab = selected_tab;
-        --switch_tab;
-    } else if( last_action == "PAGE_UP" ) {
-        ImGui::SetWindowFocus(); // Dumb hack! Clear our focused item so listbox selection isn't nav highlighted.
-        s = cataimgui::scroll::page_up;
-    } else if( last_action == "PAGE_DOWN" ) {
-        ImGui::SetWindowFocus(); // Dumb hack! Clear our focused item so listbox selection isn't nav highlighted.
-        s = cataimgui::scroll::page_down;
+    std::string rml;
+    for( int i = 0; i < entry_count(); i++ ) {
+        const std::string name = selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST ?
+                                 upoints_of_interest[i].text : umissions[i]->name();
+        rml += string_format( "<div id=\"entry-%d\" class=\"item%s\" data-row=\"%d\">", i,
+                              i == selected_mission ? " selected" : "", i ) + rml_ui::escape_rml( name ) + "</div>";
     }
+    return rml;
+}
 
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
+void mission_ui_impl::on_redraw()
+{
+    set_size( "70%", "80%" );
+    refresh_entries();
 
-    if( ImGui::BeginTabBar( "##TAB_BAR" ) ) {
-        flags = ImGuiTabItemFlags_None;
-        if( switch_tab == mission_ui_tab_enum::ACTIVE ) {
-            flags = ImGuiTabItemFlags_SetSelected;
-            switch_tab = mission_ui_tab_enum::num_tabs;
-        }
-        if( ImGui::BeginTabItem( _( "ACTIVE" ), nullptr, flags ) ) {
-            selected_tab = mission_ui_tab_enum::ACTIVE;
-            umissions = get_avatar().get_active_missions();
-            ImGui::EndTabItem();
-        }
-        flags = ImGuiTabItemFlags_None;
-        if( switch_tab == mission_ui_tab_enum::COMPLETED ) {
-            flags = ImGuiTabItemFlags_SetSelected;
-            switch_tab = mission_ui_tab_enum::num_tabs;
-        }
-        if( ImGui::BeginTabItem( _( "COMPLETED" ), nullptr, flags ) ) {
-            selected_tab = mission_ui_tab_enum::COMPLETED;
-            umissions = get_avatar().get_completed_missions();
-            ImGui::EndTabItem();
-        }
-        flags = ImGuiTabItemFlags_None;
-        if( switch_tab == mission_ui_tab_enum::FAILED ) {
-            flags = ImGuiTabItemFlags_SetSelected;
-            switch_tab = mission_ui_tab_enum::num_tabs;
-        }
-        if( ImGui::BeginTabItem( _( "FAILED" ), nullptr, flags ) ) {
-            selected_tab = mission_ui_tab_enum::FAILED;
-            umissions = get_avatar().get_failed_missions();
-            ImGui::EndTabItem();
-        }
-        flags = ImGuiTabItemFlags_None;
-        if( switch_tab == mission_ui_tab_enum::POINTS_OF_INTEREST ) {
-            flags = ImGuiTabItemFlags_SetSelected;
-            switch_tab = mission_ui_tab_enum::num_tabs;
-        }
-        if( ImGui::BeginTabItem( _( "POINTS OF INTEREST" ), nullptr, flags ) ) {
-            selected_tab = mission_ui_tab_enum::POINTS_OF_INTEREST;
-            upoints_of_interest = get_avatar().get_points_of_interest();
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-    }
+    set_tabs( { _( "ACTIVE" ), _( "COMPLETED" ), _( "FAILED" ), _( "POINTS OF INTEREST" ) },
+              static_cast<size_t>( selected_tab ) );
 
-    size_t num_entries = umissions.size();
-    if( selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST ) {
-        num_entries = upoints_of_interest.size();
-    }
-    const int last_entry = num_entries == 0 ? 0 : ( static_cast<int>( num_entries ) - 1 );
-    const int previous_selected_mission = selected_mission;
-    if( last_action == "UP" ) {
-        ImGui::SetKeyboardFocusHere( -1 );
-        selected_mission--;
-    } else if( last_action == "DOWN" ) {
-        ImGui::SetKeyboardFocusHere( 1 );
-        selected_mission++;
-    } else if( last_action == "HOME" ) {
-        selected_mission = 0;
-    } else if( last_action == "END" ) {
-        selected_mission = last_entry;
-    }
-    if( selected_mission < 0 ) {
-        selected_mission = last_entry;
-    } else if( selected_mission > last_entry ) {
-        selected_mission = 0;
-    }
-    adjust_selected |= selected_mission != previous_selected_mission;
-
-    // This action needs to be after umissions is populated
-    if( last_action == "CONFIRM" ) {
-        if( selected_tab == mission_ui_tab_enum::ACTIVE && !umissions.empty() ) {
-            get_avatar().set_active_mission( *umissions[selected_mission] );
-        } else if( selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST &&
-                   !upoints_of_interest.empty() ) {
-            get_avatar().add_point_of_interest( upoints_of_interest[selected_mission] );
-        }
-    }
-
-    if( last_action == "DELETE_POINT_OF_INTEREST" &&
-        selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST && !upoints_of_interest.empty() ) {
-        get_avatar().delete_point_of_interest( upoints_of_interest[selected_mission].pos );
-    }
-
-    if( ( selected_tab != mission_ui_tab_enum::POINTS_OF_INTEREST && umissions.empty() ) ||
-        ( selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST && upoints_of_interest.empty() ) ) {
+    if( entry_count() == 0 ) {
         static const std::map< mission_ui_tab_enum, translation > nope = {
             { mission_ui_tab_enum::ACTIVE, to_translation( "You have no active missions!" ) },
             { mission_ui_tab_enum::COMPLETED, to_translation( "You haven't completed any missions!" ) },
             { mission_ui_tab_enum::FAILED, to_translation( "You haven't failed any missions!" ) },
             { mission_ui_tab_enum::POINTS_OF_INTEREST, to_translation( "You don't have any points of interest.  Add those from the overmap." ) }
         };
-        ImGui::TextWrapped( "%s", nope.at( selected_tab ).translated().c_str() );
+        set_header( std::string() );
+        set_body_scrolls( true );
+        set_body( "<p>" + rml_ui::escape_rml( nope.at( selected_tab ).translated() ) + "</p>" );
         return;
     }
 
     if( get_avatar().get_active_mission() ) {
-        ImGui::TextWrapped( _( "Current objective: %s" ),
-                            get_avatar().get_active_mission()->name().c_str() );
+        set_header( "<p>" + rml_ui::escape_rml( string_format( _( "Current objective: %s" ),
+                    get_avatar().get_active_mission()->name() ) ) + "</p>" );
     } else if( get_avatar().get_active_point_of_interest().pos != tripoint_abs_omt::invalid ) {
-        ImGui::TextWrapped( _( "Current point of interest: %s" ),
-                            get_avatar().get_active_point_of_interest().text.c_str() );
+        set_header( "<p>" + rml_ui::escape_rml( string_format( _( "Current point of interest: %s" ),
+                    get_avatar().get_active_point_of_interest().text ) ) + "</p>" );
+    } else {
+        set_header( std::string() );
     }
 
-    if( ImGui::BeginTable( "##MISSION_TABLE", 2, ImGuiTableFlags_None,
-                           ImGui::GetContentRegionAvail() ) ) {
-        // Missions selection is purposefully thinner than the description, it has less to convey.
-        if( selected_tab != mission_ui_tab_enum::POINTS_OF_INTEREST ) {
-            ImGui::TableSetupColumn( _( "Missions" ), ImGuiTableColumnFlags_WidthStretch,
-                                     table_column_width * 0.8 );
-        } else {
-            ImGui::TableSetupColumn( _( "Points of Interest" ), ImGuiTableColumnFlags_WidthStretch,
-                                     table_column_width * 0.8 );
-        }
-        ImGui::TableSetupColumn( _( "Description" ), ImGuiTableColumnFlags_WidthStretch,
-                                 table_column_width * 1.2 );
-        ImGui::TableHeadersRow();
-        ImGui::TableNextColumn();
-        if( selected_tab != mission_ui_tab_enum::POINTS_OF_INTEREST ) {
-            draw_mission_names( umissions, selected_mission, adjust_selected );
-        } else {
-            draw_point_of_interest_names( upoints_of_interest, selected_mission, adjust_selected );
-        }
-        ImGui::TableNextColumn();
-        if( selected_tab != mission_ui_tab_enum::POINTS_OF_INTEREST ) {
-            draw_selected_description( umissions, selected_mission );
-        } else {
-            draw_selected_description( upoints_of_interest, selected_mission );
-        }
-        ImGui::EndTable();
-    }
-
-    cataimgui::set_scroll( s );
-}
-
-void mission_ui_impl::draw_mission_names( std::vector<mission *> missions, int &selected_mission,
-        bool &need_adjust ) const
-{
-    const int num_missions = missions.size();
-
-    if( ImGui::BeginListBox( "##LISTBOX", ImVec2( table_column_width * 0.75,
-                             ImGui::GetContentRegionAvail().y ) ) ) {
-        for( int i = 0; i < num_missions; i++ ) {
-            const bool is_selected = selected_mission == i;
-            ImGui::PushID( i );
-            if( ImGui::Selectable( missions[i]->name().c_str(), is_selected,
-                                   ImGuiSelectableFlags_AllowDoubleClick ) ) {
-                selected_mission = i;
-                if( ImGui::IsMouseDoubleClicked( ImGuiMouseButton_Left ) ) {
-                    get_avatar().set_active_mission( *missions[selected_mission] );
-                }
-            }
-
-            if( is_selected && need_adjust ) {
-                ImGui::SetScrollHereY();
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndListBox();
+    // Missions selection is purposefully thinner than the description, it has less to convey.
+    const std::string description = selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST ?
+                                    point_of_interest_description_rml( upoints_of_interest[selected_mission] ) :
+                                    mission_description_rml( umissions[selected_mission] );
+    set_body_scrolls( false );
+    set_body( "<div class=\"panes\"><div id=\"entries\" class=\"pane\" style=\"flex: 2 1 0;\"><h3>" +
+              rml_ui::escape_rml( selected_tab == mission_ui_tab_enum::POINTS_OF_INTEREST ?
+                                  _( "Points of Interest" ) : _( "Missions" ) ) + "</h3>" + list_rml() +
+              "</div><div id=\"description\" class=\"pane\" style=\"flex: 3 1 0;\"><h3>" +
+              rml_ui::escape_rml( _( "Description" ) ) + "</h3>" + description + "</div></div>" );
+    if( reveal_selected ) {
+        reveal_selected = false;
+        scroll_into_view( "entry-" + std::to_string( selected_mission ) );
+        scroll( "description", rml_ui::scroll::top );
     }
 }
 
-void mission_ui_impl::draw_point_of_interest_names( std::vector<point_of_interest>
-        points_of_interest, int &selected_mission,
-        bool &need_adjust ) const
-{
-    const int num_missions = points_of_interest.size();
-
-    if( ImGui::BeginListBox( "##LISTBOX", ImVec2( table_column_width * 0.75,
-                             ImGui::GetContentRegionAvail().y ) ) ) {
-        for( int i = 0; i < num_missions; i++ ) {
-            const bool is_selected = selected_mission == i;
-            ImGui::PushID( i );
-            if( ImGui::Selectable( points_of_interest[i].text.c_str(), is_selected,
-                                   ImGuiSelectableFlags_AllowDoubleClick ) ) {
-                selected_mission = i;
-                if( ImGui::IsMouseDoubleClicked( ImGuiMouseButton_Left ) ) {
-                    get_avatar().set_active_point_of_interest( points_of_interest[selected_mission] );
-                }
-            }
-
-            if( is_selected && need_adjust ) {
-                ImGui::SetScrollHereY();
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndListBox();
-    }
-}
-
-void mission_ui_impl::draw_label_with_value( const std::string &label,
+std::string mission_ui_impl::label_with_value_rml( const std::string &label,
         const std::string &value ) const
 {
-    ImGui::TextColored( c_white, "%s", label.c_str() );
-    const float label_width = table_column_width * 0.3f;
-    ImGui::SameLine( label_width );
-    ImGui::TextColored( c_light_gray, "%s", value.c_str() );
+    return "<div class=\"kv\"><div class=\"k\">" + rml_ui::escape_rml( label ) +
+           "</div><div class=\"v\">" + rml_ui::colored_rml( value, c_light_gray ) + "</div></div>";
 }
 
-void mission_ui_impl::draw_selected_description( std::vector<mission *> missions,
-        int &selected_mission )
+std::string mission_ui_impl::mission_description_rml( mission *miss )
 {
-    mission *miss = missions[selected_mission];
-    ImGui::TextWrapped( _( "Mission: %s" ), miss->name().c_str() );
+    std::string rml = "<p>" + rml_ui::escape_rml( string_format( _( "Mission: %s" ),
+                      miss->name() ) ) + "</p>";
     npc *mission_giver = nullptr;
     if( miss->get_npc_id().is_valid() ) {
         mission_giver = g->find_npc( miss->get_npc_id() );
         if( mission_giver ) {
-            draw_label_with_value( _( "Given by:" ), mission_giver->disp_name() );
+            rml += label_with_value_rml( _( "Given by:" ), mission_giver->disp_name() );
             if( mission_giver->get_faction() && mission_giver->get_fac_id() != faction_no_faction ) {
-                draw_label_with_value( _( "Faction:" ), mission_giver->get_faction()->get_name() );
+                rml += label_with_value_rml( _( "Faction:" ), mission_giver->get_faction()->get_name() );
             }
             const tripoint_abs_omt npc_location = mission_giver->pos_abs_omt();
-            draw_location( _( "Map location:" ), npc_location );
+            rml += location_rml( _( "Map location:" ), npc_location );
         }
     }
-    ImGui::Separator();
-    static std::string raw_description;
-    static std::string parsed_description;
-    // We do this to avoid replacing expanded snippets with other valid snippet text on redraw. The raw description includes un-parsed snippet tags.
-    // The parsed description is, obviously, after they've been parsed. So "<zombie_name>" becomes "undead thing" or "zed" or whatever.
-    // Whenever the user changes which mission they're looking at, this will update to parse the description *once* and keep displaying that parsed version
-    // until the mission changes again. The raw_description string is stored for as long as the program is running.
-    // This hinges on the 'static' keyword influencing storage duration. See https://en.cppreference.com/w/cpp/language/storage_duration.html etc
+    rml += "<div class=\"sep\"></div>";
     if( raw_description != miss->get_description() ) {
         raw_description = miss->get_description();
         parsed_description = raw_description;
@@ -416,11 +319,12 @@ void mission_ui_impl::draw_selected_description( std::vector<mission *> missions
         // parse_tags() modifies the argument string directly, no return value.
         parse_tags( parsed_description, get_player_character(), other_talker );
     }
-    cataimgui::draw_colored_text( parsed_description, c_unset, table_column_width * 1.15 );
+    rml += "<div class=\"pre\">" + rml_ui::markup_to_rml( parsed_description ) + "</div>";
     if( miss->has_deadline() ) {
         const time_point deadline = miss->get_deadline();
         if( selected_tab == mission_ui_tab_enum::ACTIVE ) {
-            ImGui::TextWrapped( _( "Deadline: %s" ), to_string( deadline ).c_str() );
+            rml += "<p>" + rml_ui::escape_rml( string_format( _( "Deadline: %s" ),
+                                               to_string( deadline ) ) ) + "</p>";
             const time_duration remaining = deadline - calendar::turn;
             std::string remaining_time;
             if( remaining <= 0_turns ) {
@@ -430,7 +334,8 @@ void mission_ui_impl::draw_selected_description( std::vector<mission *> missions
             } else {
                 remaining_time = to_string_approx( remaining );
             }
-            ImGui::TextWrapped( _( "Time remaining: %s" ), remaining_time.c_str() );
+            rml += "<p>" + rml_ui::escape_rml( string_format( _( "Time remaining: %s" ),
+                                               remaining_time ) ) + "</p>";
         } else {
             const time_duration time_in_past = calendar::turn - deadline;
             std::string time_in_past_string;
@@ -442,46 +347,53 @@ void mission_ui_impl::draw_selected_description( std::vector<mission *> missions
             if( deadline != calendar::turn_zero ) {
                 if( selected_tab == mission_ui_tab_enum::COMPLETED ) {
                     //~The replaced string is a calendar date, such as "Year 1, May 12, 08:04:32"
-                    cataimgui::draw_colored_text( string_format( _( "Completed: %s" ),
-                                                  to_string( deadline ) ), c_green );
+                    rml += "<p>" + rml_ui::colored_rml( string_format( _( "Completed: %s" ),
+                                                        to_string( deadline ) ), c_green ) + "</p>";
                 } else if( selected_tab == mission_ui_tab_enum::FAILED ) {
                     //~The replaced string is a calendar date, such as "Year 1, May 12, 08:04:32"
-                    cataimgui::draw_colored_text( string_format( _( "Failed at: %s" ),
-                                                  to_string( deadline ).c_str() ), c_red );
+                    rml += "<p>" + rml_ui::colored_rml( string_format( _( "Failed at: %s" ),
+                                                        to_string( deadline ) ), c_red ) + "</p>";
                 }
                 //~The replaced string is a time duration, such as "12 hours", or "5 minutes"
-                cataimgui::draw_colored_text( string_format( _( "%s ago" ), time_in_past_string ), c_unset );
+                rml += "<p>" + rml_ui::escape_rml( string_format( _( "%s ago" ),
+                                                   time_in_past_string ) ) + "</p>";
             }
         }
     }
     if( miss->has_target() ) {
         // TODO: target does not contain a z-component, targets are assumed to be on z=0
-        draw_location( _( "Target:" ), miss->get_target() );
+        rml += location_rml( _( "Target:" ), miss->get_target() );
     }
     dimension_id mission_dimension = miss->get_dimension();
     // If dimension isn't the default one
     if( mission_dimension != dimension_world_default ) {
-        draw_label_with_value( _( "Dimension:" ), mission_dimension.str() );
+        rml += label_with_value_rml( _( "Dimension:" ), mission_dimension.str() );
     }
+    if( selected_tab == mission_ui_tab_enum::ACTIVE ) {
+        rml += "<div class=\"gap\"></div>" + rml_ui::action_button_rml( ctxt, "CONFIRM",
+                _( "Set as current objective" ) );
+    }
+    return rml;
 }
 
-void mission_ui_impl::draw_selected_description( std::vector<point_of_interest> points_of_interest,
-        const int &selected_mission ) const
+std::string mission_ui_impl::point_of_interest_description_rml( const point_of_interest &poi )
+const
 {
-    const point_of_interest &selected_point_of_interest = points_of_interest[selected_mission];
-    ImGui::TextWrapped( _( "Point of Interest: %s" ), selected_point_of_interest.text.c_str() );
-    ImGui::Separator();
-    draw_location( _( "Target:" ), selected_point_of_interest.pos );
+    return "<p>" + rml_ui::escape_rml( string_format( _( "Point of Interest: %s" ), poi.text ) ) +
+           "</p><div class=\"sep\"></div>" + location_rml( _( "Target:" ), poi.pos ) +
+           "<div class=\"gap\"></div>" +
+           rml_ui::action_button_rml( ctxt, "CONFIRM", _( "Set as current objective" ) ) +
+           rml_ui::action_button_rml( ctxt, "DELETE_POINT_OF_INTEREST" );
 }
 
-void mission_ui_impl::draw_location( const std::string &label,
-                                     const tripoint_abs_omt &loc ) const
+std::string mission_ui_impl::location_rml( const std::string &label,
+        const tripoint_abs_omt &loc ) const
 {
     const tripoint_abs_omt pos = get_player_character().pos_abs_omt();
-    draw_label_with_value( label, display::overmap_position_text( loc ) );
+    std::string rml = label_with_value_rml( label, display::overmap_position_text( loc ) );
     if( !you_know_where_you_are() ) {
         // Don't display "Distance:" or direction arrow if we don't know where we are
-        return;
+        return rml;
     }
     int omt_distance = rl_dist( pos, loc );
     if( omt_distance > 0 ) {
@@ -491,13 +403,14 @@ void mission_ui_impl::draw_location( const std::string &label,
         //~Parenthesis is a real-world value for distance. Example string: "223 tiles (5.35km) ⇗"
         const std::string distance_str = string_format( _( "%1$d tiles (%2$s) %3$s" ),
                                          omt_distance, length_to_string_approx( actual_distance ), dir_arrow );
-        draw_label_with_value( _( "Distance:" ), distance_str );
+        rml += label_with_value_rml( _( "Distance:" ), distance_str );
     }
+    return rml;
 }
 } // namespace
 
 void game::list_missions()
 {
-    mission_ui new_instance;
-    new_instance.draw_mission_ui();
+    mission_ui_impl ui;
+    ui.run();
 }

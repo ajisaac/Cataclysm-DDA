@@ -141,7 +141,7 @@ bool input_popup::handle_custom_callbacks( const std::string &action )
     return next_loop;
 }
 
-string_input_popup_imgui::string_input_popup_imgui( int width, const std::string &old_input,
+text_input_popup::text_input_popup( int width, const std::string &old_input,
         const std::string &title ) :
     input_popup( width, title ),
     text( old_input ),
@@ -154,18 +154,18 @@ string_input_popup_imgui::string_input_popup_imgui( int width, const std::string
     show_text( text );
 }
 
-void string_input_popup_imgui::set_identifier( const std::string &ident )
+void text_input_popup::set_identifier( const std::string &ident )
 {
     identifier = ident;
 }
 
-void string_input_popup_imgui::set_text( const std::string &txt )
+void text_input_popup::set_text( const std::string &txt )
 {
     text = txt;
     show_text( txt );
 }
 
-void string_input_popup_imgui::show_history()
+void text_input_popup::show_history()
 {
     if( identifier.empty() ) {
         return;
@@ -205,7 +205,7 @@ void string_input_popup_imgui::show_history()
     }
 }
 
-void string_input_popup_imgui::step_history( bool up )
+void text_input_popup::step_history( bool up )
 {
     if( identifier.empty() ) {
         return;
@@ -247,7 +247,7 @@ void string_input_popup_imgui::step_history( bool up )
     set_text( hist[hist.size() - history_index] );
 }
 
-void string_input_popup_imgui::add_to_history( const std::string &value ) const
+void text_input_popup::add_to_history( const std::string &value ) const
 {
     if( !identifier.empty() && !value.empty() ) {
         std::vector<std::string> &hist = uistate.gethistory( identifier );
@@ -257,7 +257,7 @@ void string_input_popup_imgui::add_to_history( const std::string &value ) const
     }
 }
 
-std::string string_input_popup_imgui::query()
+std::string text_input_popup::query()
 {
     is_cancelled = false;
 
@@ -289,7 +289,7 @@ std::string string_input_popup_imgui::query()
     return old_input;
 }
 
-std::optional<tripoint_abs_omt> string_input_popup_imgui::query_coordinate( bool loop )
+std::optional<tripoint_abs_omt> text_input_popup::query_coordinate( bool loop )
 {
     do {
         const std::string &queried_string = query();
@@ -305,7 +305,7 @@ std::optional<tripoint_abs_omt> string_input_popup_imgui::query_coordinate( bool
     return tripoint_abs_omt::zero;
 }
 
-void string_input_popup_imgui::use_uilist_history( bool use_uilist )
+void text_input_popup::use_uilist_history( bool use_uilist )
 {
     is_uilist_history = use_uilist;
 }
@@ -360,7 +360,7 @@ number_input_popup<T>::number_input_popup( int width, T old_value, const std::st
 template<typename T>
 T number_input_popup<T>::step_amount( bool fast ) const
 {
-    // The defaults the ImGui popup had: 1 and 100 for whole numbers, and no
+    // The defaults the older popup had: 1 and 100 for whole numbers, and no
     // stepping for floats.
     if constexpr( std::is_integral_v<T> ) {
         return fast ? fast_step_size.value_or( 100 ) : step_size.value_or( 1 );

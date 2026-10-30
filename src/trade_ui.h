@@ -25,6 +25,7 @@
 #include "units.h"
 
 class npc;
+class trade_header;
 class trade_ui;
 
 class trade_selector : public inventory_drop_selector
@@ -41,7 +42,6 @@ class trade_selector : public inventory_drop_selector
         void on_toggle() override;
         select_t to_trade() const;
         void resize( point const &size, point const &origin );
-        shared_ptr_fast<ui_adaptor> get_ui() const;
         input_context const *get_ctxt() const;
 
         static constexpr char const *ACTION_AUTOBALANCE = "AUTO_BALANCE";
@@ -52,7 +52,7 @@ class trade_selector : public inventory_drop_selector
 
     private:
         trade_ui *_parent;
-        shared_ptr_fast<ui_adaptor> _ui;
+        shared_ptr_fast<inventory_ui_window> _ui;
         input_context _ctxt_trade;
 };
 
@@ -90,6 +90,7 @@ class trade_ui
         enum class event { TRADECANCEL = 0, TRADEOK = 1, SWITCH = 2, NEVENTS = 3 };
 
         trade_ui( party_t &you, npc &trader, currency_t cost = 0, std::string title = _( "Trade" ) );
+        ~trade_ui();
 
         void pushevent( event const &ev );
 
@@ -99,13 +100,19 @@ class trade_ui
         void bank_balance();
         void resize();
 
-        constexpr static int header_size = 5;
+        /// The header's height, in terminal rows.
+        constexpr static int header_size = 7;
 
     private:
+        friend class trade_header;
+
         constexpr static std::size_t npanes = 2;
         using panecont_t = std::array<std::unique_ptr<pane_t>, npanes>;
         using values_t = std::array<currency_t, npanes>;
         using parties_t = std::array<party_t *, npanes>;
+
+        /// Before the panes, so it is redrawn first and can size them
+        std::unique_ptr<trade_header> _header;
 
         constexpr static panecont_t::size_type _trader = 0;
         constexpr static panecont_t::size_type _you = 1;
@@ -123,12 +130,11 @@ class trade_ui
         currency_t _bank = 0;
         currency_t _delta_bank = 0;
         std::string const _title;
-        catacurses::window _header_w;
-        ui_adaptor _header_ui;
+        point _laid_out_term;
 
         void _process( event const &ev );
         bool _confirm_trade() const;
-        void _draw_header();
+        void _redraw_header( trade_header &header );
 };
 
 #endif // CATA_SRC_TRADE_UI_H

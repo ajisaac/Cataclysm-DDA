@@ -1,6 +1,5 @@
 #include "crafting_gui.h"
 
-#include <imgui/imgui.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -21,7 +20,6 @@
 #include <vector>
 
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "cata_utility.h"
 #include "catacharset.h"
 #include "character.h"
@@ -55,9 +53,10 @@
 #include "recipe.h"
 #include "recipe_dictionary.h"
 #include "requirements.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "skill.h"
 #include "string_formatter.h"
-#include "text.h"
 #include "translation.h"
 #include "translation_cache.h"
 #include "translations.h"
@@ -106,41 +105,6 @@ static int related_menu_fill( uilist &rmenu,
 static void compare_recipe_with_item( const item &recipe_item, Character &crafter );
 static void prioritize_components( const recipe &recipe, Character &crafter );
 static void deprioritize_components( const recipe &recipe );
-
-// Clickable text label -- mouse click or keyboard nav activation.
-// nav_idx/nav_cursor/nav_activated support keyboard navigation:
-//   nav_idx: this item's index in the nav sequence (-1 = not navigable)
-//   nav_cursor: currently focused nav index
-//   nav_activated: index that was activated by Enter (-1 = none)
-// Returns true when activated (mouse click or keyboard).
-static bool clickable_text( const char *label, nc_color col,
-                            int nav_idx = -1, int nav_cursor = -1, int nav_activated = -1 )
-{
-    bool focused = nav_idx >= 0 && nav_idx == nav_cursor;
-    if( focused ) {
-        // Draw highlight background
-        ImVec2 cursor = ImGui::GetCursorScreenPos();
-        float w = ImGui::CalcTextSize( label ).x;
-        float h = ImGui::GetTextLineHeight();
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            cursor, ImVec2( cursor.x + w, cursor.y + h ),
-            ImGui::GetColorU32( ImVec4( 0.3f, 0.3f, 0.5f, 0.5f ) ) );
-    }
-    ImGui::PushStyleColor( ImGuiCol_Text, cataimgui::imvec4_from_color( col ) );
-    ImGui::TextUnformatted( label );
-    ImGui::PopStyleColor();
-    bool hovered = ImGui::IsItemHovered();
-    if( hovered ) {
-        ImVec2 rmin = ImGui::GetItemRectMin();
-        ImVec2 rmax = ImGui::GetItemRectMax();
-        ImGui::GetForegroundDrawList()->AddLine(
-            ImVec2( rmin.x, rmax.y ), rmax,
-            ImGui::GetColorU32( cataimgui::imvec4_from_color( col ) ) );
-    }
-    bool mouse_click = hovered && ImGui::IsMouseClicked( ImGuiMouseButton_Left );
-    bool kb_activate = nav_idx >= 0 && nav_idx == nav_activated;
-    return mouse_click || kb_activate;
-}
 
 static std::string get_cat_unprefixed( std::string_view prefixed_name )
 {
@@ -365,7 +329,7 @@ static bool filter_crafting_recipes( std::string &filterstring )
     description +=
         _( "\nUse <color_red>up/down arrow</color> to go through your search history." );
 
-    string_input_popup_imgui popup( 85, filterstring );
+    text_input_popup popup( 85, filterstring );
     popup.set_label( _( "Search:" ) );
     popup.set_description( description, c_light_gray, /*monofont=*/ true );
     popup.set_identifier( "craft_recipe_filter" );
@@ -376,12 +340,12 @@ static bool filter_crafting_recipes( std::string &filterstring )
 }
 
 // ---------------------------------------------------------------------------
-// ImGui crafting UI implementation
+// RmlUi crafting UI implementation
 // ---------------------------------------------------------------------------
 
 namespace
 {
-class crafting_ui_impl : public cataimgui::window
+class crafting_ui_impl : public rml_ui::window
 {
     public:
         crafting_ui_impl( Character *crafter, const recipe_id &goto_recipe,
@@ -408,10 +372,12 @@ class crafting_ui_impl : public cataimgui::window
         int get_batch_size() const {
             return manual_batch;
         }
+        /// Take a click on a tab, a recipe, a button or a link. Returns
+        /// whether it was on one; process_action() then applies it.
+        bool handle_click();
 
     protected:
-        void draw_controls() override;
-        cataimgui::bounds get_bounds() override;
+        void on_redraw() override;
 
     private:
         // --- Core state ---
@@ -450,22 +416,18 @@ class crafting_ui_impl : public cataimgui::window
         // --- Scroll state ---
         int line_item_info_popup = 0;
         int embedded_item_scroll_dummy = 0;
-        cataimgui::scroll recipe_info_scroll = cataimgui::scroll::none;
-        cataimgui::scroll item_info_scroll = cataimgui::scroll::none;
+        std::optional<rml_ui::scroll> recipe_info_scroll;
+        std::optional<rml_ui::scroll> item_info_scroll;
 
         // --- Pending UI intents ---
-        int pending_tab_index = -1;
-        int pending_subtab_index = -1;
         int pending_line_click = -1;
         int pending_batch_delta = 0;    // +1/-1 from inline batch buttons
         bool pending_enter_batch = false;
         bool pending_exit_batch = false;
         bool need_scroll_to_selected = false;
 
-        // One-frame flags: force ImGui to select a specific tab, then clear.
-        // Set on programmatic tab changes (PREV_TAB/NEXT_TAB/LEFT/RIGHT).
-        bool force_select_tab = true;   // true initially to sync ImGui with tab state
-        bool force_select_subtab = true;
+        // hidden while another screen, such as comparing, is up
+        bool hide_ui = false;
 
         // --- Input context ---
         const input_context *ctxt_ptr = nullptr;
@@ -500,27 +462,40 @@ class crafting_ui_impl : public cataimgui::window
         // --- Info panel keyboard navigation ---
         bool info_nav_active = false;
         int info_nav_cursor = 0;
-        int info_nav_count = 0;    // set during draw, read during process_action
-        int info_nav_activated = -1; // set by process_action, consumed by draw
+        // What each link in the recipe info does, in the order the info shows
+        // them: clicking one, or confirming it in info-nav mode, runs it.
+        // Rebuilt with the info.
+        std::vector<std::function<void()>> clickables;
 
+        // --- Layout, in terminal cells ---
+        int window_width = 80;
+        // About how many characters fit across the recipe info
+        int info_chars = 40;
+
+        // The recipe list's RML, rebuilt only when what it shows changes; the
+        // generation counts recalculations of the list
+        std::string list_cache;
+        std::string list_cache_key;
+        int list_generation = 0;
 
         // --- Rendering helpers ---
-        void draw_category_tabs();
-        void draw_subcategory_tabs();
-        void draw_recipe_list();
-        void draw_recipe_info_panel();
-        bool nav_clickable( const char *label, nc_color col );
-        void draw_modifier_table( const recipe &recp, const availability &avail,
-                                  int batch_size );
-        void draw_requirement_tools( const requirement_data &req, const inventory &inv,
-                                     int batch_size, int group_offset );
-        void draw_components( const requirement_data &req, const inventory &inv,
-                              const std::function<bool( const item & )> &filter,
-                              int batch_size );
-        void draw_item_info_panel();
-        void draw_status_header();
-        void draw_hidden_count();
-        void draw_keybinding_footer();
+        std::string category_tabs_rml();
+        std::string subcategory_tabs_rml();
+        std::string recipe_list_rml();
+        std::string recipe_info_rml();
+        // A link in the recipe info, part of info-nav's sequence
+        std::string nav_clickable( const std::string &label, const nc_color &col,
+                                   std::function<void()> on_activate );
+        std::string modifier_table_rml( const recipe &recp, const availability &avail,
+                                        int batch_size );
+        std::string requirement_tools_rml( const requirement_data &req, const inventory &inv,
+                                           int batch_size, int group_offset );
+        std::string components_rml( const requirement_data &req, const inventory &inv,
+                                    const std::function<bool( const item & )> &filter,
+                                    int batch_size );
+        std::string item_info_panel_rml();
+        std::string status_header_rml();
+        std::string hidden_count_rml();
         void rebuild_keybinding_tips();
 
         // --- State management ---
@@ -535,8 +510,7 @@ class crafting_ui_impl : public cataimgui::window
 crafting_ui_impl::crafting_ui_impl( Character *crafter, const recipe_id &goto_recipe,
                                     std::string filterstring, bool camp_crafting,
                                     inventory *inventory_override )
-    : cataimgui::window( _( "Crafting" ),
-                         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav ),
+    : rml_ui::window( _( "Crafting" ), "crafting.rml" ),
       crafter( crafter ),
       camp_crafting( camp_crafting ),
       inventory_override( inventory_override ),
@@ -588,1265 +562,949 @@ crafting_ui_impl::crafting_ui_impl( Character *crafter, const recipe_id &goto_re
     }
 }
 
-// --- get_bounds ---
+// --- layout ---
 
-cataimgui::bounds crafting_ui_impl::get_bounds()
+// Text in this color, on a line of its own
+static std::string line_rml( const std::string &text, const nc_color &col )
 {
-    ImVec2 viewport = ImGui::GetMainViewport()->Size;
-    float char_w = ImGui::CalcTextSize( "X" ).x;
-    float full_screen_w = 80.f * char_w;
-
-    float free_w = viewport.x - full_screen_w;
-    bool wide = viewport.x > full_screen_w && free_w > 15.f * char_w;
-    float width;
-    if( wide ) {
-        width = ( free_w > full_screen_w ) ? full_screen_w * 2.f : viewport.x;
-    } else {
-        width = full_screen_w;
-    }
-
-    float x = ( viewport.x - width ) / 2.f;
-    return { x, 0.f, width, viewport.y };
+    return "<div class=\"pre\">" + rml_ui::markup_to_rml( text, col ) + "</div>";
 }
 
-// --- draw_controls ---
-
-void crafting_ui_impl::draw_controls()
+// The same, centered
+static std::string centered_rml( const std::string &content_rml, const std::string &cls = "" )
 {
-    hide_if_hidden();
-    // Debug: set to true to show borders around all child regions and table cells
-    static constexpr bool debug_layout = false;
-    if( debug_layout ) {
-        ImGui::PushStyleVar( ImGuiStyleVar_ChildBorderSize, 1.0f );
-    }
+    return "<div class=\"center" + ( cls.empty() ? std::string() : " " + cls ) + "\">" +
+           content_rml + "</div>";
+}
+
+// Indented by about this many characters
+static std::string indented_rml( const std::string &content_rml, int chars )
+{
+    return "<div style=\"margin-left: " + rml_ui::chars_width( chars ) + ";\">" + content_rml +
+           "</div>";
+}
+
+static int text_width( const std::string &text )
+{
+    return utf8_width( remove_color_tags( text ) );
+}
+
+void crafting_ui_impl::on_redraw()
+{
+    // Wide/narrow decision, in terminal cells: wide enough for a third column
+    // with the result's item info
+    const int full_screen_width = 80;
+    const int free_width = TERMX - full_screen_width;
+    is_wide = TERMX > full_screen_width && free_width > 15;
+    window_width = is_wide ? ( free_width > full_screen_width ? full_screen_width * 2 : TERMX ) :
+                   full_screen_width;
+    set_size( rml_ui::term_width( window_width ), "100%" );
+    set_position( std::string(), "0" );
+    set_class( "window", "hidden", hide_ui );
 
     if( recalc_unread ) {
         recalculate_unread();
     }
-
-    // Wide/narrow decision
-    float char_w = ImGui::CalcTextSize( "X" ).x;
-    float full_screen_width = 80.f * char_w;
-    float window_width = ImGui::GetWindowWidth();
-    float free_width = window_width - full_screen_width;
-    is_wide = ( window_width > full_screen_width && free_width > 15.f * char_w );
-
-    if( is_bounds_changed() || keybinding_tips.empty() ) {
+    if( keybinding_tips.empty() ) {
         rebuild_keybinding_tips();
     }
 
-    // Reserve a fixed height for the footer (separator + ~3 lines of tips)
-    float line_height = ImGui::GetTextLineHeightWithSpacing();
-    float footer_height = line_height * 4.f;
+    // Recipe list, recipe info and, when wide, the result's item info, side by side
+    const int list_width = 28;
+    const int item_info_width = is_wide ? std::min( 40, window_width - full_screen_width ) : 0;
+    info_chars = std::max( 20, window_width - list_width - item_info_width - 6 );
 
-    // Main content area (above footer)
-    ImGuiChildFlags content_flags = debug_layout ? ImGuiChildFlags_Borders : ImGuiChildFlags_None;
-    if( ImGui::BeginChild( "##CRAFT_CONTENT", ImVec2( 0, -footer_height ), content_flags ) ) {
-        // Section 1: split header (category tabs left, status right)
-        ImGuiTableFlags header_flags = debug_layout
-                                       ? ImGuiTableFlags_Borders : ImGuiTableFlags_None;
-        if( ImGui::BeginTable( "##HEADER_TOP", 2, header_flags ) ) {
-            int window_chars = static_cast<int>( window_width / char_w );
-            int status_chars = window_chars / 4;
-            float status_width = static_cast<float>( status_chars ) * char_w;
+    set_header( "<div class=\"hbox\"><div class=\"grow\">" + category_tabs_rml() +
+                subcategory_tabs_rml() + "</div><div class=\"fixed right\" style=\"width: 25%;\">" +
+                status_header_rml() + "</div></div>" );
 
-            ImGui::TableSetupColumn( "tabs", ImGuiTableColumnFlags_WidthStretch );
-            ImGui::TableSetupColumn( "status", ImGuiTableColumnFlags_WidthFixed, status_width );
-
-            ImGui::TableNextColumn();
-            draw_category_tabs();
-            // Apply pending category change immediately so subcategory
-            // tabs render with the correct list on the same frame
-            if( pending_tab_index >= 0 ) {
-                tab.set_index( pending_tab_index );
-                subtab = tab_list( crafting_category_id( tab.cur() )->subcategories );
-                recalc = true;
-                pending_tab_index = -1;
-                force_select_subtab = true;
-            }
-            draw_subcategory_tabs();
-            // Apply pending subcategory change immediately
-            if( pending_subtab_index >= 0 ) {
-                subtab.set_index( pending_subtab_index );
-                recalc = true;
-                pending_subtab_index = -1;
-            }
-
-            ImGui::TableNextColumn();
-            draw_status_header();
-
-            ImGui::EndTable();
-        }
-
-        // Section 3: main content table (recipe list + info panels)
-        float list_width = 28.f * char_w;
-        float item_info_width = is_wide ? std::min( 40.f * char_w,
-                                ( window_width - full_screen_width ) ) : 0.f;
-
-        int num_columns = is_wide ? 3 : 2;
-        ImGuiTableFlags main_flags = debug_layout
-                                     ? ImGuiTableFlags_Borders : ImGuiTableFlags_None;
-        if( ImGui::BeginTable( "##MAIN", num_columns, main_flags,
-                               ImGui::GetContentRegionAvail() ) ) {
-            ImGui::TableSetupColumn( "list", ImGuiTableColumnFlags_WidthFixed, list_width );
-            ImGui::TableSetupColumn( "info", ImGuiTableColumnFlags_WidthStretch );
-            if( is_wide ) {
-                ImGui::TableSetupColumn( "item", ImGuiTableColumnFlags_WidthFixed, item_info_width );
-            }
-            ImGui::TableNextRow();
-
-            ImGui::TableNextColumn();
-            draw_recipe_list();
-
-            ImGui::TableNextColumn();
-            draw_recipe_info_panel();
-            if( info_nav_active && info_nav_cursor >= info_nav_count ) {
-                info_nav_cursor = std::max( 0, info_nav_count - 1 );
-            }
-
-            if( is_wide ) {
-                ImGui::TableNextColumn();
-                draw_item_info_panel();
-            }
-
-            ImGui::EndTable();
-        }
+    std::string buttons;
+    if( !current.empty() ) {
+        // Recipes / Batch toggle buttons
+        const bool can_batch = line >= 0 && line < static_cast<int>( current.size() ) &&
+                               !current[line]->is_nested();
+        const std::string recipes_label = rml_ui::escape_rml( _( "Recipes" ) );
+        const std::string batch_label = rml_ui::escape_rml( _( "Batch" ) );
+        buttons = batch ?
+                  rml_ui::button_rml( "EXIT_BATCH", recipes_label ) +
+                  rml_ui::button_rml( "", batch_label, false ) :
+                  rml_ui::button_rml( "", recipes_label, false ) +
+                  rml_ui::button_rml( "ENTER_BATCH", batch_label, can_batch );
     }
-    ImGui::EndChild();
+    // The skeleton once, then each pane on its own, so a pane keeps its
+    // scroll while the others change
+    if( show( "body", "<div class=\"panes\" style=\"height: 100%;\">"
+              "<div class=\"pane narrow\" style=\"width: " + rml_ui::chars_width( list_width ) +
+              "; overflow: hidden; display: flex; flex-direction: column;\">"
+              "<div id=\"list-buttons\" class=\"fixed\"></div>"
+              "<div id=\"recipe-list\" class=\"scroll grow\"></div></div>"
+              "<div id=\"recipe-info\" class=\"pane pre\"></div>" +
+              std::string( is_wide ? "<div id=\"item-info\" class=\"pane pre narrow\" style=\"width: " +
+                           rml_ui::chars_width( item_info_width ) + ";\"></div>" : "" ) + "</div>" ) ) {
+        need_scroll_to_selected = true;
+    }
+    set_body_scrolls( false );
+    show( "list-buttons", buttons );
+    show( "recipe-list", recipe_list_rml() );
+    show( "recipe-info", recipe_info_rml() );
+    if( info_nav_active && info_nav_cursor >= static_cast<int>( clickables.size() ) ) {
+        info_nav_cursor = std::max( 0, static_cast<int>( clickables.size() ) - 1 );
+    }
+    if( is_wide ) {
+        show( "item-info", item_info_panel_rml() );
+    }
 
     // Footer
-    draw_keybinding_footer();
+    set_footer( rml_ui::markup_to_rml( keybinding_tips, c_dark_gray ) );
 
-    if( debug_layout ) {
-        ImGui::PopStyleVar();
+    if( need_scroll_to_selected ) {
+        need_scroll_to_selected = false;
+        scroll_into_view( "recipe-" + std::to_string( line ) );
+    }
+    if( info_nav_active ) {
+        scroll_into_view( "nav-focused" );
+    }
+    if( recipe_info_scroll ) {
+        scroll( "recipe-info", *recipe_info_scroll );
+        recipe_info_scroll.reset();
+    }
+    if( item_info_scroll ) {
+        scroll( "item-info", *item_info_scroll );
+        item_info_scroll.reset();
     }
 }
 
-// --- draw_category_tabs ---
-
-void crafting_ui_impl::draw_category_tabs()
+bool crafting_ui_impl::handle_click()
 {
-    if( batch ) {
-        if( ImGui::BeginTabBar( "##BATCH_TAB" ) ) {
-            if( cataimgui::BeginTabItem( _( "Batch" ), true ) ) {
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
-        }
-        return;
+    const int cat = hovered_index( "data-cat" );
+    const int subcat = hovered_index( "data-subcat" );
+    const int row = hovered_index( "data-row" );
+    const int link = hovered_index( "data-click" );
+    const std::string action = hovered_attribute( "data-action" );
+    if( cat >= 0 && !batch && filterstring.empty() &&
+        cat < static_cast<int>( crafting_cats.size() ) ) {
+        tab.set_index( cat );
+        subtab = tab_list( crafting_category_id( tab.cur() )->subcategories );
+        recalc = true;
+    } else if( subcat >= 0 && !batch && filterstring.empty() ) {
+        subtab.set_index( subcat );
+        recalc = true;
+    } else if( row >= 0 && row < static_cast<int>( current.size() ) ) {
+        pending_line_click = row;
+    } else if( link >= 0 && link < static_cast<int>( clickables.size() ) ) {
+        // Copied, since running it can rebuild the list
+        const std::function<void()> on_activate = clickables[link];
+        on_activate();
+    } else if( action == "ENTER_BATCH" ) {
+        pending_enter_batch = true;
+    } else if( action == "EXIT_BATCH" ) {
+        pending_exit_batch = true;
+    } else if( action == "BATCH_MINUS" ) {
+        pending_batch_delta = -1;
+    } else if( action == "BATCH_PLUS" ) {
+        pending_batch_delta = 1;
+    } else {
+        return false;
     }
-    if( !filterstring.empty() ) {
-        if( ImGui::BeginTabBar( "##FILTER_TAB" ) ) {
-            std::string label = _( "Searched" );
-            if( is_filtered_unread ) {
-                label += " +";
-            }
-            if( cataimgui::BeginTabItem( label.c_str(), true ) ) {
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
-        }
-        return;
-    }
+    return true;
+}
 
-    if( ImGui::BeginTabBar( "##CRAFT_CATS",
-                            ImGuiTabBarFlags_FittingPolicyScroll ) ) {
+// --- category tabs ---
+
+std::string crafting_ui_impl::category_tabs_rml()
+{
+    const auto tab_rml = []( const std::string & label, bool active, const std::string & attribute ) {
+        return "<div class=\"tab" + std::string( active ? " active" : "" ) + "\"" + attribute + ">" +
+               rml_ui::escape_rml( label ) + "</div>";
+    };
+    std::string rml = "<div class=\"tabs\">";
+    if( batch ) {
+        rml += tab_rml( _( "Batch" ), true, "" );
+    } else if( !filterstring.empty() ) {
+        std::string label = _( "Searched" );
+        if( is_filtered_unread ) {
+            label += " +";
+        }
+        rml += tab_rml( label, true, "" );
+    } else {
         for( size_t i = 0; i < crafting_cats.size(); ++i ) {
             std::string label = _( get_cat_unprefixed( crafting_cats[i] ) );
             if( is_cat_unread[crafting_cats[i]] ) {
                 label += " +";
             }
-            // Stable tab ID so adding/removing " +" doesn't change identity
-            label += "###cat_" + std::to_string( i );
-            // Only force-select for one frame after programmatic tab change
-            bool should_select = force_select_tab &&
-                                 ( tab.cur_index() == static_cast<int>( i ) );
-            if( cataimgui::BeginTabItem( label.c_str(), should_select ) ) {
-                if( tab.cur_index() != static_cast<int>( i ) ) {
-                    pending_tab_index = static_cast<int>( i );
-                }
-                ImGui::EndTabItem();
-            }
+            rml += tab_rml( label, tab.cur_index() == static_cast<int>( i ),
+                            " data-cat=\"" + std::to_string( i ) + "\"" );
         }
-        force_select_tab = false;
-        ImGui::EndTabBar();
     }
+    return rml + "</div>";
 }
 
-// --- draw_subcategory_tabs ---
+// --- subcategory tabs ---
 
-void crafting_ui_impl::draw_subcategory_tabs()
+std::string crafting_ui_impl::subcategory_tabs_rml()
 {
     if( batch || !filterstring.empty() ) {
-        return;
+        return std::string();
     }
 
     const crafting_category_id current_cat( tab.cur() );
     const auto &subcats = current_cat->subcategories;
 
-    if( ImGui::BeginTabBar( "##CRAFT_SUBCATS",
-                            ImGuiTabBarFlags_FittingPolicyScroll ) ) {
-        for( size_t i = 0; i < subcats.size(); ++i ) {
-            std::string label = _( get_subcat_unprefixed( tab.cur(), subcats[i] ) );
-            bool is_empty = available_recipes->empty_category(
-                                current_cat, subcats[i] != "CSC_ALL" ? subcats[i] : "" );
+    std::string rml = "<div class=\"tabs sub\">";
+    for( size_t i = 0; i < subcats.size(); ++i ) {
+        std::string label = _( get_subcat_unprefixed( tab.cur(), subcats[i] ) );
+        bool is_empty = available_recipes->empty_category(
+                            current_cat, subcats[i] != "CSC_ALL" ? subcats[i] : "" );
 
-            if( is_subcat_unread[tab.cur()][subcats[i]] ) {
-                label += " +";
-            }
-            // Stable tab ID so adding/removing " +" doesn't change identity
-            label += "###subcat_" + std::to_string( i );
-
-            if( is_empty ) {
-                ImGui::BeginDisabled();
-            }
-            bool should_select = force_select_subtab &&
-                                 ( subtab.cur_index() == static_cast<int>( i ) );
-            if( cataimgui::BeginTabItem( label.c_str(), should_select ) ) {
-                if( subtab.cur_index() != static_cast<int>( i ) ) {
-                    pending_subtab_index = static_cast<int>( i );
-                }
-                ImGui::EndTabItem();
-            }
-            if( is_empty ) {
-                ImGui::EndDisabled();
-            }
+        if( is_subcat_unread[tab.cur()][subcats[i]] ) {
+            label += " +";
         }
-        force_select_subtab = false;
-        ImGui::EndTabBar();
+        // An empty subcategory cannot be picked
+        rml += "<div class=\"tab" + std::string( subtab.cur_index() == static_cast<int>( i ) ?
+                " active" : "" ) + std::string( is_empty ? " disabled\"" : "\" data-subcat=\"" +
+                                                std::to_string( i ) + "\"" ) + ">" + rml_ui::escape_rml( label ) + "</div>";
     }
+    return rml + "</div>";
 }
 
-// --- draw_recipe_list ---
+// --- recipe list ---
 
-void crafting_ui_impl::draw_recipe_list()
+std::string crafting_ui_impl::recipe_list_rml()
 {
     if( current.empty() ) {
-        return;
+        list_cache.clear();
+        list_cache_key.clear();
+        return list_cache;
     }
-    float avail_width = ImGui::GetContentRegionAvail().x;
-
-    // Recipes / Batch toggle buttons
-    {
-        float spacing = ImGui::GetStyle().ItemSpacing.x;
-        float btn_w = ( avail_width - spacing ) / 2.f;
-        bool can_batch = !current.empty() && line >= 0 &&
-                         line < static_cast<int>( current.size() ) &&
-                         !current[line]->is_nested();
-
-        if( !batch ) {
-            ImGui::BeginDisabled();
-            ImGui::Button( _( "Recipes" ), ImVec2( btn_w, 0 ) );
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            ImGui::BeginDisabled( !can_batch );
-            if( ImGui::Button( _( "Batch" ), ImVec2( btn_w, 0 ) ) && can_batch ) {
-                pending_enter_batch = true;
-            }
-            ImGui::EndDisabled();
-        } else {
-            if( ImGui::Button( _( "Recipes" ), ImVec2( btn_w, 0 ) ) ) {
-                pending_exit_batch = true;
-            }
-            ImGui::SameLine();
-            ImGui::BeginDisabled();
-            ImGui::Button( _( "Batch" ), ImVec2( btn_w, 0 ) );
-            ImGui::EndDisabled();
-        }
+    // Only rebuild when what the list shows can have changed
+    const std::string key = string_format( "%d %d %d %d %d %d", list_generation, current.size(), line,
+                                           static_cast<int>( batch ), uistate.read_recipes.size(),
+                                           static_cast<int>( highlight_unread ) );
+    if( key == list_cache_key ) {
+        return list_cache;
     }
+    list_cache_key = key;
 
-    if( ImGui::BeginChild( "##RECIPES", ImVec2( avail_width,
-                           ImGui::GetContentRegionAvail().y ),
-                           ImGuiChildFlags_FrameStyle, ImGuiWindowFlags_NoNav ) ) {
-        ImGuiListClipper clipper;
-        clipper.Begin( static_cast<int>( current.size() ) );
-        if( need_scroll_to_selected && line >= 0
-            && line < static_cast<int>( current.size() ) ) {
-            clipper.IncludeItemByIndex( line );
+    std::string rml;
+    const char *new_label = pgettext( "crafting gui", "NEW!" );
+    for( int i = 0; i < static_cast<int>( current.size() ); ++i ) {
+        std::string name = current[i]->result_name( true );
+        if( batch ) {
+            name = string_format( _( "%2dx %s" ), i + 1, name );
         }
-        while( clipper.Step() ) {
-            for( int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i ) {
-                ImGui::PushID( i );
 
-                float indent_px = static_cast<float>( indent_vec[i] ) *
-                                  ImGui::CalcTextSize( " " ).x;
-                if( indent_px > 0 ) {
-                    ImGui::Indent( indent_px );
-                }
+        nc_color col = ( i == line )
+                       ? available[i].selected_color()
+                       : available[i].color();
 
-                std::string name = current[i]->result_name( true );
-                if( batch ) {
-                    name = string_format( _( "%2dx %s" ), i + 1, name );
-                }
-
-                nc_color col = ( i == line )
-                               ? available[i].selected_color()
-                               : available[i].color();
-
-                ImGui::PushStyleColor( ImGuiCol_Text,
-                                       cataimgui::imvec4_from_color( col ) );
-                ImGui::Selectable( name.c_str(), i == line );
-                ImGui::PopStyleColor();
-
-                if( ImGui::IsItemClicked() ) {
-                    pending_line_click = i;
-                }
-                if( i == line && need_scroll_to_selected ) {
-                    ImGui::SetScrollHereY();
-                    need_scroll_to_selected = false;
-                }
-
-                if( highlight_unread &&
-                    !uistate.read_recipes.count( current[i]->ident() ) ) {
-                    const char *new_label = pgettext( "crafting gui", "NEW!" );
-                    float label_w = ImGui::CalcTextSize( new_label ).x;
-                    ImGui::SameLine( avail_width - label_w -
-                                     ImGui::GetStyle().ItemSpacing.x );
-                    ImGui::TextColored(
-                        cataimgui::imvec4_from_color( c_light_green ),
-                        "%s", new_label );
-                }
-
-                if( indent_px > 0 ) {
-                    ImGui::Unindent( indent_px );
-                }
-                ImGui::PopID();
-            }
+        rml += string_format( "<div id=\"recipe-%d\" class=\"item hbox%s\" data-row=\"%d\">", i,
+                              i == line ? " selected" : "", i );
+        rml += "<div class=\"grow nowrap\" style=\"overflow: hidden; margin-left: " +
+               rml_ui::chars_width( indent_vec[i] ) + ";\">" + rml_ui::colored_rml( name, col ) + "</div>";
+        if( highlight_unread &&
+            !uistate.read_recipes.count( current[i]->ident() ) ) {
+            rml += "<div class=\"fixed\" style=\"margin-left: 6dp;\">" +
+                   rml_ui::colored_rml( new_label, c_light_green ) + "</div>";
         }
+        rml += "</div>";
     }
-    ImGui::EndChild();
+    list_cache = rml;
+    return list_cache;
 }
 
-// --- draw_recipe_info_panel ---
+// --- recipe info ---
 
-// Wrapper: register a clickable_text with the info panel nav system.
-// Returns true when activated (mouse or keyboard).
-bool crafting_ui_impl::nav_clickable( const char *label, nc_color col )
+std::string crafting_ui_impl::nav_clickable( const std::string &label, const nc_color &col,
+        std::function<void()> on_activate )
 {
-    int idx = info_nav_active ? info_nav_count : -1;
-    info_nav_count++;
-    return clickable_text( label, col, idx,
-                           info_nav_active ? info_nav_cursor : -1,
-                           info_nav_active ? info_nav_activated : -1 );
+    const int idx = static_cast<int>( clickables.size() );
+    clickables.push_back( std::move( on_activate ) );
+    const bool focused = info_nav_active && idx == info_nav_cursor;
+    return string_format( "<span %sclass=\"link%s\" data-click=\"%d\">",
+                          focused ? "id=\"nav-focused\" " : "", focused ? " focused" : "", idx ) +
+           rml_ui::colored_rml( label, col ) + "</span>";
 }
 
-void crafting_ui_impl::draw_recipe_info_panel()
+std::string crafting_ui_impl::recipe_info_rml()
 {
+    clickables.clear();
     if( current.empty() ) {
-        return;
+        return std::string();
     }
-    info_nav_count = 0;
-    // info_nav_activated persists from process_action until consumed this frame
     const recipe &recp = *current[line];
     const availability &avail = available[line];
+    std::string rml;
 
-    if( ImGui::BeginChild( "##RECIPE_INFO", ImGui::GetContentRegionAvail(), false,
-                           ImGuiWindowFlags_NoNav ) ) {
-        cataimgui::set_scroll( recipe_info_scroll );
+    // --- Summary ---
 
-        // --- Summary ---
+    // Line 1: recipe name with inline batch controls [-] name [xN] [+]
+    {
+        const std::string recipe_name = recp.result_name( true );
+        const bool show_batch_ui = !recp.is_nested();
+        const bool show_minus = show_batch_ui && manual_batch > 1;
+        const bool show_plus = show_batch_ui && manual_batch < 50;
 
-        // Line 1: recipe name with inline batch controls [-] name [xN] [+]
-        {
-            const std::string recipe_name = recp.result_name( true );
-            cataimgui::PushGuiFont1_5x();
-            float region_w = ImGui::GetContentRegionAvail().x;
-            float space = ImGui::CalcTextSize( " " ).x;
-
-            bool show_batch_ui = !recp.is_nested();
-            bool show_minus = show_batch_ui && manual_batch > 1;
-            bool show_plus = show_batch_ui && manual_batch < 50;
-
-            std::string mult_str;
-            if( show_batch_ui && manual_batch > 1 ) {
-                mult_str = string_format( " x%d", manual_batch );
-            }
-
-            // Measure total width for centering
-            float total_w = ImGui::CalcTextSize( recipe_name.c_str() ).x;
-            if( show_minus ) {
-                total_w += ImGui::CalcTextSize( "-" ).x + space;
-            }
-            if( !mult_str.empty() ) {
-                total_w += ImGui::CalcTextSize( mult_str.c_str() ).x;
-            }
-            if( show_plus ) {
-                total_w += space + ImGui::CalcTextSize( "+" ).x;
-            }
-            if( total_w < region_w ) {
-                ImGui::SetCursorPosX( ImGui::GetCursorPosX() + ( region_w - total_w ) / 2.f );
-            }
-
-            if( show_minus ) {
-                if( clickable_text( "-", c_dark_gray ) ) {
-                    pending_batch_delta = -1;
-                }
-                ImGui::SameLine( 0, space );
-            }
-
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                                recipe_name.c_str() );
-
-            if( !mult_str.empty() ) {
-                ImGui::SameLine( 0, 0 );
-                ImGui::TextColored( cataimgui::imvec4_from_color( c_cyan ), "%s",
-                                    mult_str.c_str() );
-            }
-
-            if( show_plus ) {
-                ImGui::SameLine( 0, space );
-                if( clickable_text( "+", c_dark_gray ) ) {
-                    pending_batch_delta = 1;
-                }
-            }
-
-            cataimgui::PopGuiFont1_5x();
+        std::string title;
+        if( show_minus ) {
+            title += "<span class=\"link\" data-action=\"BATCH_MINUS\">" +
+                     rml_ui::colored_rml( "-", c_dark_gray ) + "</span> ";
         }
-
-        // Batch size for all subsequent calculations
-        const int batch_size = get_batch_size();
-        float region_w = ImGui::GetContentRegionAvail().x;
-
-        {
-            // Line 2: centered source attribution
-            {
-                std::string source_text;
-                if( !crafter->knows_recipe( &recp ) ) {
-                    const inventory &src_inv = avail.inv_override
-                                               ? *avail.inv_override : crafter->crafting_inventory();
-                    const std::set<itype_id> books = crafter->get_books_for_recipe( src_inv, &recp );
-                    if( !books.empty() ) {
-                        auto it = books.begin();
-                        source_text = string_format( _( "as written in %s" ), item::nname( *it ) );
-                        int extra = static_cast<int>( books.size() ) - 1;
-                        if( extra > 0 ) {
-                            source_text += string_format( _( ", and %d more" ), extra );
-                        }
-                    }
-                }
-                if( source_text.empty() && !recp.is_nested() ) {
-                    const float success = recp.is_nested() ? 1.f :
-                                          crafter->recipe_success_chance( recp );
-                    // Confident phrases for >=60% success, uncertain for <60%
-                    size_t idx = std::hash<std::string> {}( recp.ident().str() );
-                    if( success >= 0.6f ) {
-                        static const std::array<std::string, 2> confident = {{
-                                translate_marker( "(\u2026as you remember it)" ),
-                                translate_marker( "(\u2026as you recall it)" ),
-                            }
-                        };
-                        source_text = _( confident[idx % confident.size()] );
-                    } else {
-                        static const std::array<std::string, 2> uncertain = {{
-                                translate_marker( "(\u2026as you imagine it)" ),
-                                translate_marker( "(\u2026as you see it)" ),
-                            }
-                        };
-                        source_text = _( uncertain[idx % uncertain.size()] );
-                    }
-                }
-                if( !source_text.empty() ) {
-                    float text_w = ImGui::CalcTextSize( source_text.c_str() ).x;
-                    if( text_w < region_w ) {
-                        ImGui::SetCursorPosX( ImGui::GetCursorPosX() + ( region_w - text_w ) / 2.f );
-                    }
-                    ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), "%s",
-                                        source_text.c_str() );
-                }
-            }
-
-            // Item flavor text: capped at 70% width, centered block.
-            // Short text (fits in one line) is centered; long text wraps
-            // left-aligned within the centered cap.
-            {
-                std::string desc;
-                if( recp.is_nested() || recp.is_practice() ) {
-                    desc = recp.get_description( *crafter );
-                } else if( recp.result() ) {
-                    if( !recp.variant().empty() ) {
-                        item temp_result( recp.result() );
-                        temp_result.set_itype_variant( recp.variant() );
-                        desc = temp_result.variant_description();
-                    }
-                    if( desc.empty() ) {
-                        desc = item::find_type( recp.result() )->description.translated();
-                    }
-                    if( desc == "generic item template" ) {
-                        desc.clear();
-                    }
-                }
-                if( !desc.empty() ) {
-                    float cap_w = region_w * 0.7f;
-                    float desc_w = ImGui::CalcTextSize( desc.c_str() ).x;
-                    if( desc_w <= cap_w ) {
-                        // Fits in one line: center it
-                        ImGui::SetCursorPosX( ImGui::GetCursorPosX() + ( region_w - desc_w ) / 2.f );
-                        ImGui::TextColored( cataimgui::imvec4_from_color( c_light_gray ), "%s",
-                                            desc.c_str() );
-                    } else {
-                        // Wraps: center the cap block, left-align text inside
-                        float offset = ( region_w - cap_w ) / 2.f;
-                        ImGui::SetCursorPosX( ImGui::GetCursorPosX() + offset );
-                        ImGui::PushTextWrapPos( ImGui::GetCursorPosX() + cap_w );
-                        ImGui::TextColored( cataimgui::imvec4_from_color( c_light_gray ), "%s",
-                                            desc.c_str() );
-                        ImGui::PopTextWrapPos();
-                    }
-                }
-            }
-
-            // Line 3: centered natural-language stats
-            if( !recp.is_nested() ) {
-                const int expected_turns = crafter->expected_time_to_craft( recp, batch_size )
-                                           / to_moves<int>( 1_turns );
-                const float success = 100.f * crafter->recipe_success_chance( recp );
-                const nc_color success_col = success < 25.f ? c_red :
-                                             success < 50.f ? c_yellow :
-                                             success < 75.f ? c_light_gray : c_green;
-                const nc_color activity_col = activity_level_color( recp.exertion_level() );
-
-                // Lowercase activity name
-                std::string activity_lc = lowercase_first_letter( display::activity_level_str(
-                                              recp.exertion_level() ) );
-
-                const std::string chance_str = string_format( "~%.0f%%", success );
-                const std::string time_str = approx_craft_time( expected_turns );
-                const std::string activity_str = string_format( _( "%s activity" ), activity_lc );
-                const int total_yield = recp.makes_amount() * batch_size;
-
-                // Single format string so translators can reorder parts.
-                // Plain version for width measurement, colored for rendering.
-                std::string plain;
-                std::string colored;
-                if( total_yield > 1 ) {
-                    //~ %1$s: success chance, %2$s: yield count, %3$s: time, %4$s: activity level
-                    const std::string fmt = _( "%1$s chance to yield %2$s in %3$s of %4$s" );
-                    const std::string yield_as_string = recp.result()->item_measure_prefix( total_yield );
-                    plain = string_format( fmt, chance_str, yield_as_string, time_str, activity_str );
-                    colored = string_format( fmt,
-                                             colorize( chance_str, success_col ),
-                                             colorize( yield_as_string, c_light_blue ),
-                                             colorize( time_str, c_cyan ),
-                                             colorize( activity_str, activity_col ) );
-                } else {
-                    //~ %1$s: success chance, %2$s: time, %3$s: activity level
-                    const std::string fmt = _( "%1$s chance you can make it in %2$s of %3$s" );
-                    plain = string_format( fmt, chance_str, time_str, activity_str );
-                    colored = string_format( fmt,
-                                             colorize( chance_str, success_col ),
-                                             colorize( time_str, c_cyan ),
-                                             colorize( activity_str, activity_col ) );
-                }
-                float line_w = ImGui::CalcTextSize( plain.c_str() ).x;
-                if( line_w < region_w ) {
-                    ImGui::SetCursorPosX( ImGui::GetCursorPosX() + ( region_w - line_w ) / 2.f );
-                }
-                cataimgui::draw_colored_text( colored, c_light_gray );
-            }
+        title += rml_ui::colored_rml( recipe_name, c_white );
+        if( show_batch_ui && manual_batch > 1 ) {
+            title += rml_ui::colored_rml( string_format( " x%d", manual_batch ), c_cyan );
         }
-
-        // Line 4: lighting warning, if applicable
-        if( !recp.is_nested() && crafter->lighting_craft_speed_multiplier( recp ) <= 0.0f ) {
-            const std::string lighting_str = _( "Lighting conditions are too poor to craft this." );
-            float line_w = ImGui::CalcTextSize( lighting_str.c_str() ).x;
-            if( line_w < region_w ) {
-                ImGui::SetCursorPosX( ImGui::GetCursorPosX() + ( region_w - line_w ) / 2.f );
-            }
-            cataimgui::draw_colored_text( lighting_str, c_red );
+        if( show_plus ) {
+            title += " <span class=\"link\" data-action=\"BATCH_PLUS\">" +
+                     rml_ui::colored_rml( "+", c_dark_gray ) + "</span>";
         }
-        ImGui::Separator();
+        rml += centered_rml( title, "big" );
+    }
 
-        // Warnings (right after stats)
-        if( avail.can_craft && avail.would_use_rotten ) {
-            cataimgui::TextColoredParagraphNewline( c_red, _( "Will use rotten ingredients" ) );
-        }
-        if( avail.can_craft && avail.would_use_favorite ) {
-            cataimgui::TextColoredParagraphNewline( c_red, _( "Will use favorited ingredients" ) );
-        }
-        if( !avail.can_craft && !avail.has_proficiencies ) {
-            cataimgui::TextColoredParagraph( c_red,
-                                             _( "Missing required proficiencies: " ) );
-            auto profs = recp.required_proficiencies();
-            for( const auto &prof : profs ) {
-                cataimgui::TextColoredParagraph( c_red, prof->name() );
-                if( ( profs.size() > 1 ) && ( &prof != &profs.back() ) ) {
-                    cataimgui::TextColoredParagraph( c_red, _( ", " ) );
-                }
-            }
-            cataimgui::TextColoredParagraphNewline( c_red, "" );
-        }
-        if( !avail.crafter_has_primary_skill ) {
-            cataimgui::TextColoredParagraphNewline( c_red,
-                                                    recp.is_practice()
-                                                    ? _( "Crafter lacks theoretical knowledge to practice this." )
-                                                    : _( "Crafter lacks theoretical knowledge for this recipe." ) );
-        }
+    // Batch size for all subsequent calculations
+    const int batch_size = get_batch_size();
 
-        // Complex/overlapping requirement warnings
-        if( !recp.is_nested() ) {
-            const bool too_complex = recp.deduped_requirements().is_too_complex();
-            if( avail.can_craft && too_complex ) {
-                cataimgui::TextColoredParagraphNewline( c_yellow,
-                                                        _( "Due to the complex overlapping requirements, this recipe "
-                                                                "may appear to be craftable when it is not." ) );
-            }
-            std::string npc_reason;
-            const bool npc_cant = avail.crafter.is_npc()
-                                  && !recp.npc_can_craft( npc_reason )
-                                  && !avail.inv_override;
-            if( !avail.can_craft && avail.apparently_craftable
-                && !npc_cant ) {
-                cataimgui::TextColoredParagraphNewline( c_red,
-                                                        _( "Cannot be crafted because the same item is needed "
-                                                                "for multiple components." ) );
-            }
-            if( !avail.can_craft && npc_cant ) {
-                cataimgui::TextColoredParagraphNewline( c_red, npc_reason );
-            }
-        }
-
-        // Batch time savings
-        if( batch_size > 1 ) {
-            const std::string savings = recp.batch_savings_string();
-            if( !savings.empty() ) {
-                cataimgui::draw_colored_text(
-                    string_format( _( "Batch time savings: %s" ),
-                                   colorize( savings, c_cyan ) ), c_light_gray );
-            }
-        }
-
-        // Centered "Details" button that opens the modifier table
-        if( !recp.is_nested() ) {
-            // Practice recipes always show details
-            bool show_details = uistate.crafting_expand_details || recp.is_practice();
-            if( !recp.is_practice() ) {
-                const char *details_label = uistate.crafting_expand_details ? _( "- details -" ) :
-                                            _( "+ details +" );
-                float btn_w = ImGui::CalcTextSize( details_label ).x;
-                float rgn_w = ImGui::GetContentRegionAvail().x;
-                ImGui::SetCursorPosX( ImGui::GetCursorPosX() + ( rgn_w - btn_w ) / 2.f );
-                if( nav_clickable( details_label, c_cyan ) ) {
-                    uistate.crafting_expand_details = !uistate.crafting_expand_details;
-                }
-            }
-            if( show_details ) {
-                draw_modifier_table( recp, avail, batch_size );
-
-                // Practice-specific info after the modifier table
-                if( recp.is_practice() && recp.practice_data ) {
-                    ImGui::NewLine();
-                    if( recp.skill_used ) {
-                        const int skill_lvl = crafter->get_skill_level( recp.skill_used );
-                        if( skill_lvl < recp.practice_data->min_difficulty ) {
-                            ImGui::TextColored( cataimgui::imvec4_from_color( c_red ), "%s",
-                                                string_format(
-                                                    _( "Requires minimum %s skill of %d (you have %d)" ),
-                                                    recp.skill_used->name(),
-                                                    recp.practice_data->min_difficulty,
-                                                    skill_lvl ).c_str() );
-                        }
-                        std::string gains = string_format(
-                                                _( "This practice will train %s" ),
-                                                recp.skill_used->name() );
-                        if( recp.practice_data->skill_limit < MAX_SKILL ) {
-                            gains += string_format( _( " up to level %d" ),
-                                                    recp.practice_data->skill_limit );
-                        }
-                        nc_color gain_col = skill_lvl >= recp.practice_data->skill_limit ?
-                                            c_brown : c_green;
-                        ImGui::TextColored( cataimgui::imvec4_from_color( gain_col ), "%s",
-                                            gains.c_str() );
-
-                        // Proficiency gains
-                        for( const recipe_proficiency &prof : recp.get_proficiencies() ) {
-                            if( prof.required ) {
-                                continue;
-                            }
-                            bool known = crafter->has_proficiency( prof.id );
-                            if( !known ) {
-                                ImGui::TextColored( cataimgui::imvec4_from_color( c_green ), "%s",
-                                                    string_format( _( "Will train: %s" ),
-                                                                   prof.id->name() ).c_str() );
-                            }
-                        }
-                    }
+    // Line 2: centered source attribution
+    {
+        std::string source_text;
+        if( !crafter->knows_recipe( &recp ) ) {
+            const inventory &src_inv = avail.inv_override
+                                       ? *avail.inv_override : crafter->crafting_inventory();
+            const std::set<itype_id> books = crafter->get_books_for_recipe( src_inv, &recp );
+            if( !books.empty() ) {
+                auto it = books.begin();
+                source_text = string_format( _( "as written in %s" ), item::nname( *it ) );
+                int extra = static_cast<int>( books.size() ) - 1;
+                if( extra > 0 ) {
+                    source_text += string_format( _( ", and %d more" ), extra );
                 }
             }
         }
-
-        // --- Recipe ---
-        const bool has_recipe_content = !recp.is_nested() &&
-                                        ( !recp.simple_requirements().is_empty() || recp.has_steps() );
-        if( has_recipe_content ) {
-            ImGui::NewLine();
-            {
-                const char *recipe_hdr = _( "Recipe" );
-                float hdr_w = ImGui::CalcTextSize( recipe_hdr ).x;
-                float rgn_w = ImGui::GetContentRegionAvail().x;
-                if( hdr_w < rgn_w ) {
-                    ImGui::SetCursorPosX( ImGui::GetCursorPosX() + ( rgn_w - hdr_w ) / 2.f );
-                }
-                ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s", recipe_hdr );
-            }
-            ImGui::Separator();
-
-            const inventory &crafting_inv = avail.inv_override
-                                            ? *avail.inv_override : crafter->crafting_inventory();
-
-            // Single step recipes
-            if( recp.has_steps() && ( recp.steps().size() <= 1 ) ) {
-                const recipe_step &step = recp.steps().front();
-                ImGui::TextColored( cataimgui::imvec4_from_color( c_white ),
-                                    "%s", step.name.translated().c_str() );
-                ImGui::NewLine();
-            }
-
-            // Components (always recipe-level)
-            draw_components( recp.simple_requirements(), crafting_inv,
-                             recp.get_component_filter(), batch_size );
-
-            // Byproducts
-            if( recp.has_byproducts() ) {
-                if( cached_byproduct_recipe != &recp ) {
-                    cached_byproduct_recipe = &recp;
-                    cached_byproducts = recp.get_byproducts();
-                }
-                ImGui::Spacing();
-                ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                                    _( "Byproducts:" ) );
-                for( const auto &[bp_id, bp_count] : cached_byproducts ) {
-                    const int bp_c = bp_count * batch_size;
-                    ImGui::BulletText( "%s", string_format( "%s x%d",
-                                                            item::nname( bp_id, bp_c ), bp_c ).c_str() );
-                }
-            }
-
-            // Multi step details
-            if( recp.has_steps() && ( recp.steps().size() > 1 ) ) {
-                // Step details are collapsible; collapsed shows flat merged view
-                {
-                    const char *steps_label = uistate.crafting_expand_steps
-                                              ? _( "- steps -" ) : _( "+ steps +" );
-                    float btn_w = ImGui::CalcTextSize( steps_label ).x;
-                    float rgn_w = ImGui::GetContentRegionAvail().x;
-                    if( btn_w < rgn_w ) {
-                        ImGui::SetCursorPosX( ImGui::GetCursorPosX() +
-                                              ( rgn_w - btn_w ) / 2.f );
+        if( source_text.empty() && !recp.is_nested() ) {
+            const float success = crafter->recipe_success_chance( recp );
+            // Confident phrases for >=60% success, uncertain for <60%
+            size_t idx = std::hash<std::string> {}( recp.ident().str() );
+            if( success >= 0.6f ) {
+                static const std::array<std::string, 2> confident = {{
+                        translate_marker( "(…as you remember it)" ),
+                        translate_marker( "(…as you recall it)" ),
                     }
-                    if( nav_clickable( steps_label, c_cyan ) ) {
-                        uistate.crafting_expand_steps = !uistate.crafting_expand_steps;
-                    }
-                }
-
-                if( uistate.crafting_expand_steps ) {
-                    int tool_group_offset = 0;
-                    float step_indent = ImGui::CalcTextSize( "    " ).x;
-                    float sub_indent = ImGui::CalcTextSize( "  " ).x;
-                    const crafting_cost_context step_ctx{
-                        crafter->book_bonuses_nearby(),
-                        compute_tool_speeds( recp, *crafter )
-                    };
-                    for( size_t si = 0; si < recp.steps().size(); ++si ) {
-                        const recipe_step &step = recp.steps()[si];
-                        const double step_moves = recp.step_budget_moves(
-                                                      *crafter, si, batch_size, step_ctx );
-                        const std::string time_str = to_string(
-                                                         time_duration::from_moves( static_cast<int64_t>( step_moves ) ) );
-                        const std::string activity = display::activity_level_str( step.exertion );
-                        nc_color act_col = activity_level_color( step.exertion );
-
-                        // Per-step batch savings annotation
-                        std::string batch_note;
-                        if( batch_size > 1 ) {
-                            const double single_moves = recp.step_budget_moves(
-                                                            *crafter, si, 1, step_ctx );
-                            if( step_moves < single_moves * batch_size * 0.99 ) {
-                                batch_note = string_format( _( " (x%d, saves %s)" ), batch_size,
-                                                            to_string( time_duration::from_moves(
-                                                                    static_cast<int64_t>( single_moves * batch_size - step_moves ) ) ) );
-                            }
-                        }
-
-                        // Step header: "1. Name  time  activity  [batch note]"
-                        ImGui::TextColored( cataimgui::imvec4_from_color( c_white ),
-                                            "%d. %s", static_cast<int>( si + 1 ),
-                                            step.name.translated().c_str() );
-                        ImGui::SameLine( 0, ImGui::CalcTextSize( "  " ).x );
-                        ImGui::TextColored( cataimgui::imvec4_from_color( c_cyan ), "%s",
-                                            time_str.c_str() );
-                        if( !batch_note.empty() ) {
-                            ImGui::SameLine( 0, 0 );
-                            ImGui::TextColored( cataimgui::imvec4_from_color( c_light_green ), "%s",
-                                                batch_note.c_str() );
-                        }
-                        ImGui::SameLine( 0, ImGui::CalcTextSize( "  " ).x );
-                        ImGui::TextColored( cataimgui::imvec4_from_color( act_col ), "%s",
-                                            activity.c_str() );
-                        if( step.attention == step_attention::unattended ) {
-                            ImGui::SameLine( 0, ImGui::CalcTextSize( "  " ).x );
-                            ImGui::TextColored( cataimgui::imvec4_from_color( c_yellow ),
-                                                "%s", _( "[unattended]" ) );
-                        }
-
-                        ImGui::Indent( step_indent );
-
-                        // Per-step proficiencies
-                        if( !step.proficiencies.empty() ) {
-                            ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                                                _( "Proficiencies:" ) );
-                            ImGui::Indent( sub_indent );
-                            for( const recipe_proficiency &prof : step.proficiencies ) {
-                                bool known = crafter->has_proficiency( prof.id );
-                                nc_color pcol = prof.required ? ( known ? c_green : c_red ) :
-                                                ( known ? c_dark_gray : c_yellow );
-                                ImGui::TextColored( cataimgui::imvec4_from_color( pcol ), "%s%s",
-                                                    prof.id->name().c_str(),
-                                                    prof.required && !known ? _( " (required)" ) : "" );
-                            }
-                            ImGui::Unindent( sub_indent );
-                        }
-
-                        // Per-step tools + qualities
-                        const requirement_data &step_req = step.requirements;
-                        if( !step_req.get_tools().empty() || !step_req.get_qualities().empty() ) {
-                            draw_requirement_tools( step_req, crafting_inv, batch_size,
-                                                    tool_group_offset );
-                        }
-
-                        ImGui::Unindent( step_indent );
-                        tool_group_offset += step_req.get_tools().size();
-                    }
-                } else {
-                    // Collapsed: flat merged tools view
-                    draw_requirement_tools( recp.simple_requirements(), crafting_inv,
-                                            batch_size, 0 );
-                }
+                };
+                source_text = _( confident[idx % confident.size()] );
             } else {
-                // Legacy: flat tools + qualities
-                draw_requirement_tools( recp.simple_requirements(), crafting_inv,
-                                        batch_size, 0 );
-            }
-
-            // Helpers who know this recipe
-            if( !crafter->knows_recipe( &recp ) ) {
-                std::vector<const Character *> helpers;
-                for( const Character *h : crafting_group ) {
-                    if( crafter->getID() != h->getID() && h->knows_recipe( &recp ) ) {
-                        helpers.push_back( h );
+                static const std::array<std::string, 2> uncertain = {{
+                        translate_marker( "(…as you imagine it)" ),
+                        translate_marker( "(…as you see it)" ),
                     }
-                }
-                if( !helpers.empty() ) {
-                    const std::string helper_list = enumerate_as_string( helpers,
-                    []( const Character * h ) {
-                        return colorize( h->is_avatar() ? _( "You" ) : h->get_name(), c_cyan );
-                    } );
-                    cataimgui::TextColoredParagraph( c_white,
-                                                     string_format( _( "Known by: %s" ), helper_list ) );
-                    ImGui::NewLine();
-                }
+                };
+                source_text = _( uncertain[idx % uncertain.size()] );
             }
         }
+        if( !source_text.empty() ) {
+            rml += centered_rml( rml_ui::colored_rml( source_text, c_dark_gray ) );
+        }
+    }
 
-        // Nested recipe groups: clickable sub-recipe list in middle column
-        if( recp.is_nested() ) {
-            for( const recipe_id &child_id : recp.nested_category_data ) {
-                const recipe &child = child_id.obj();
-                if( !available_recipes->contains( &child ) ) {
-                    continue;
+    // Item flavor text: capped at 70% width, centered block.
+    {
+        std::string desc;
+        if( recp.is_nested() || recp.is_practice() ) {
+            desc = recp.get_description( *crafter );
+        } else if( recp.result() ) {
+            if( !recp.variant().empty() ) {
+                item temp_result( recp.result() );
+                temp_result.set_itype_variant( recp.variant() );
+                desc = temp_result.variant_description();
+            }
+            if( desc.empty() ) {
+                desc = item::find_type( recp.result() )->description.translated();
+            }
+            if( desc == "generic item template" ) {
+                desc.clear();
+            }
+        }
+        if( !desc.empty() ) {
+            rml += "<div class=\"center\" style=\"width: 70%; margin: 0 auto;\">" +
+                   rml_ui::markup_to_rml( desc, c_light_gray ) + "</div>";
+        }
+    }
+
+    // Line 3: centered natural-language stats
+    if( !recp.is_nested() ) {
+        const int expected_turns = crafter->expected_time_to_craft( recp, batch_size )
+                                   / to_moves<int>( 1_turns );
+        const float success = 100.f * crafter->recipe_success_chance( recp );
+        const nc_color success_col = success < 25.f ? c_red :
+                                     success < 50.f ? c_yellow :
+                                     success < 75.f ? c_light_gray : c_green;
+        const nc_color activity_col = activity_level_color( recp.exertion_level() );
+
+        // Lowercase activity name
+        std::string activity_lc = lowercase_first_letter( display::activity_level_str(
+                                      recp.exertion_level() ) );
+
+        const std::string chance_str = string_format( "~%.0f%%", success );
+        const std::string time_str = approx_craft_time( expected_turns );
+        const std::string activity_str = string_format( _( "%s activity" ), activity_lc );
+        const int total_yield = recp.makes_amount() * batch_size;
+
+        // Single format string so translators can reorder parts.
+        std::string colored;
+        if( total_yield > 1 ) {
+            //~ %1$s: success chance, %2$s: yield count, %3$s: time, %4$s: activity level
+            const std::string fmt = _( "%1$s chance to yield %2$s in %3$s of %4$s" );
+            const std::string yield_as_string = recp.result()->item_measure_prefix( total_yield );
+            colored = string_format( fmt,
+                                     colorize( chance_str, success_col ),
+                                     colorize( yield_as_string, c_light_blue ),
+                                     colorize( time_str, c_cyan ),
+                                     colorize( activity_str, activity_col ) );
+        } else {
+            //~ %1$s: success chance, %2$s: time, %3$s: activity level
+            const std::string fmt = _( "%1$s chance you can make it in %2$s of %3$s" );
+            colored = string_format( fmt,
+                                     colorize( chance_str, success_col ),
+                                     colorize( time_str, c_cyan ),
+                                     colorize( activity_str, activity_col ) );
+        }
+        rml += centered_rml( rml_ui::markup_to_rml( colored, c_light_gray ) );
+    }
+
+    // Line 4: lighting warning, if applicable
+    if( !recp.is_nested() && crafter->lighting_craft_speed_multiplier( recp ) <= 0.0f ) {
+        rml += centered_rml( rml_ui::colored_rml(
+                                 _( "Lighting conditions are too poor to craft this." ), c_red ) );
+    }
+    rml += "<div class=\"sep\"></div>";
+
+    // Warnings (right after stats)
+    if( avail.can_craft && avail.would_use_rotten ) {
+        rml += line_rml( _( "Will use rotten ingredients" ), c_red );
+    }
+    if( avail.can_craft && avail.would_use_favorite ) {
+        rml += line_rml( _( "Will use favorited ingredients" ), c_red );
+    }
+    if( !avail.can_craft && !avail.has_proficiencies ) {
+        std::string missing = _( "Missing required proficiencies: " );
+        auto profs = recp.required_proficiencies();
+        for( const auto &prof : profs ) {
+            missing += prof->name();
+            if( ( profs.size() > 1 ) && ( &prof != &profs.back() ) ) {
+                missing += _( ", " );
+            }
+        }
+        rml += line_rml( missing, c_red );
+    }
+    if( !avail.crafter_has_primary_skill ) {
+        rml += line_rml( recp.is_practice()
+                         ? _( "Crafter lacks theoretical knowledge to practice this." )
+                         : _( "Crafter lacks theoretical knowledge for this recipe." ), c_red );
+    }
+
+    // Complex/overlapping requirement warnings
+    if( !recp.is_nested() ) {
+        const bool too_complex = recp.deduped_requirements().is_too_complex();
+        if( avail.can_craft && too_complex ) {
+            rml += line_rml( _( "Due to the complex overlapping requirements, this recipe "
+                                "may appear to be craftable when it is not." ), c_yellow );
+        }
+        std::string npc_reason;
+        const bool npc_cant = avail.crafter.is_npc()
+                              && !recp.npc_can_craft( npc_reason )
+                              && !avail.inv_override;
+        if( !avail.can_craft && avail.apparently_craftable
+            && !npc_cant ) {
+            rml += line_rml( _( "Cannot be crafted because the same item is needed "
+                                "for multiple components." ), c_red );
+        }
+        if( !avail.can_craft && npc_cant ) {
+            rml += line_rml( npc_reason, c_red );
+        }
+    }
+
+    // Batch time savings
+    if( batch_size > 1 ) {
+        const std::string savings = recp.batch_savings_string();
+        if( !savings.empty() ) {
+            rml += line_rml( string_format( _( "Batch time savings: %s" ),
+                                            colorize( savings, c_cyan ) ), c_light_gray );
+        }
+    }
+
+    // Centered "Details" link that opens the modifier table
+    if( !recp.is_nested() ) {
+        // Practice recipes always show details
+        bool show_details = uistate.crafting_expand_details || recp.is_practice();
+        if( !recp.is_practice() ) {
+            const char *details_label = uistate.crafting_expand_details ? _( "- details -" ) :
+                                        _( "+ details +" );
+            rml += centered_rml( nav_clickable( details_label, c_cyan, []() {
+                uistate.crafting_expand_details = !uistate.crafting_expand_details;
+            } ) );
+        }
+        if( show_details ) {
+            rml += modifier_table_rml( recp, avail, batch_size );
+
+            // Practice-specific info after the modifier table
+            if( recp.is_practice() && recp.practice_data && recp.skill_used ) {
+                rml += "<div class=\"gap\"></div>";
+                const int skill_lvl = crafter->get_skill_level( recp.skill_used );
+                if( skill_lvl < recp.practice_data->min_difficulty ) {
+                    rml += line_rml( string_format(
+                                         _( "Requires minimum %s skill of %d (you have %d)" ),
+                                         recp.skill_used->name(),
+                                         recp.practice_data->min_difficulty,
+                                         skill_lvl ), c_red );
                 }
-                availability child_avail( *crafter, &child );
-                nc_color col = child_avail.color();
-                std::string child_name = child.result_name( true );
-                ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "  \u2022 " );
-                ImGui::SameLine( 0, 0 );
-                if( nav_clickable( child_name.c_str(), col ) ) {
-                    filterstring = child_name;
-                    recalc = true;
+                std::string gains = string_format(
+                                        _( "This practice will train %s" ),
+                                        recp.skill_used->name() );
+                if( recp.practice_data->skill_limit < MAX_SKILL ) {
+                    gains += string_format( _( " up to level %d" ),
+                                            recp.practice_data->skill_limit );
+                }
+                nc_color gain_col = skill_lvl >= recp.practice_data->skill_limit ?
+                                    c_brown : c_green;
+                rml += line_rml( gains, gain_col );
+
+                // Proficiency gains
+                for( const recipe_proficiency &prof : recp.get_proficiencies() ) {
+                    if( !prof.required && !crafter->has_proficiency( prof.id ) ) {
+                        rml += line_rml( string_format( _( "Will train: %s" ), prof.id->name() ), c_green );
+                    }
                 }
             }
         }
     }
-    ImGui::EndChild();
-    info_nav_activated = -1;
+
+    // --- Recipe ---
+    const bool has_recipe_content = !recp.is_nested() &&
+                                    ( !recp.simple_requirements().is_empty() || recp.has_steps() );
+    if( has_recipe_content ) {
+        rml += "<div class=\"gap\"></div>" + centered_rml( rml_ui::colored_rml( _( "Recipe" ),
+                c_white ) ) + "<div class=\"sep\"></div>";
+
+        const inventory &crafting_inv = avail.inv_override
+                                        ? *avail.inv_override : crafter->crafting_inventory();
+
+        // Single step recipes
+        if( recp.has_steps() && ( recp.steps().size() <= 1 ) ) {
+            const recipe_step &step = recp.steps().front();
+            rml += line_rml( step.name.translated(), c_white ) + "<div class=\"gap\"></div>";
+        }
+
+        // Components (always recipe-level)
+        rml += components_rml( recp.simple_requirements(), crafting_inv,
+                               recp.get_component_filter(), batch_size );
+
+        // Byproducts
+        if( recp.has_byproducts() ) {
+            if( cached_byproduct_recipe != &recp ) {
+                cached_byproduct_recipe = &recp;
+                cached_byproducts = recp.get_byproducts();
+            }
+            rml += line_rml( _( "Byproducts:" ), c_white );
+            for( const auto &[bp_id, bp_count] : cached_byproducts ) {
+                const int bp_c = bp_count * batch_size;
+                rml += line_rml( string_format( "  • %s x%d", item::nname( bp_id, bp_c ), bp_c ),
+                                 c_light_gray );
+            }
+        }
+
+        // Multi step details
+        if( recp.has_steps() && ( recp.steps().size() > 1 ) ) {
+            // Step details are collapsible; collapsed shows flat merged view
+            const char *steps_label = uistate.crafting_expand_steps
+                                      ? _( "- steps -" ) : _( "+ steps +" );
+            rml += centered_rml( nav_clickable( steps_label, c_cyan, []() {
+                uistate.crafting_expand_steps = !uistate.crafting_expand_steps;
+            } ) );
+
+            if( uistate.crafting_expand_steps ) {
+                int tool_group_offset = 0;
+                const crafting_cost_context step_ctx{
+                    crafter->book_bonuses_nearby(),
+                    compute_tool_speeds( recp, *crafter )
+                };
+                for( size_t si = 0; si < recp.steps().size(); ++si ) {
+                    const recipe_step &step = recp.steps()[si];
+                    const double step_moves = recp.step_budget_moves(
+                                                  *crafter, si, batch_size, step_ctx );
+                    const std::string time_str = to_string(
+                                                     time_duration::from_moves( static_cast<int64_t>( step_moves ) ) );
+                    const std::string activity = display::activity_level_str( step.exertion );
+                    nc_color act_col = activity_level_color( step.exertion );
+
+                    // Per-step batch savings annotation
+                    std::string batch_note;
+                    if( batch_size > 1 ) {
+                        const double single_moves = recp.step_budget_moves(
+                                                        *crafter, si, 1, step_ctx );
+                        if( step_moves < single_moves * batch_size * 0.99 ) {
+                            batch_note = string_format( _( " (x%d, saves %s)" ), batch_size,
+                                                        to_string( time_duration::from_moves(
+                                                                static_cast<int64_t>( single_moves * batch_size - step_moves ) ) ) );
+                        }
+                    }
+
+                    // Step header: "1. Name  time  activity  [batch note]"
+                    std::string header = colorize( string_format( "%d. %s", static_cast<int>( si + 1 ),
+                                                   step.name.translated() ), c_white ) + "  " + colorize( time_str, c_cyan );
+                    if( !batch_note.empty() ) {
+                        header += colorize( batch_note, c_light_green );
+                    }
+                    header += "  " + colorize( activity, act_col );
+                    if( step.attention == step_attention::unattended ) {
+                        header += "  " + colorize( _( "[unattended]" ), c_yellow );
+                    }
+                    rml += line_rml( header, c_white );
+
+                    std::string step_rml;
+                    // Per-step proficiencies
+                    if( !step.proficiencies.empty() ) {
+                        step_rml += line_rml( _( "Proficiencies:" ), c_white );
+                        std::string profs;
+                        for( const recipe_proficiency &prof : step.proficiencies ) {
+                            bool known = crafter->has_proficiency( prof.id );
+                            nc_color pcol = prof.required ? ( known ? c_green : c_red ) :
+                                            ( known ? c_dark_gray : c_yellow );
+                            profs += line_rml( prof.id->name() + ( prof.required && !known ?
+                                               _( " (required)" ) : "" ), pcol );
+                        }
+                        step_rml += indented_rml( profs, 2 );
+                    }
+
+                    // Per-step tools + qualities
+                    const requirement_data &step_req = step.requirements;
+                    if( !step_req.get_tools().empty() || !step_req.get_qualities().empty() ) {
+                        step_rml += requirement_tools_rml( step_req, crafting_inv, batch_size,
+                                                           tool_group_offset );
+                    }
+                    rml += indented_rml( step_rml, 4 );
+                    tool_group_offset += step_req.get_tools().size();
+                }
+            } else {
+                // Collapsed: flat merged tools view
+                rml += requirement_tools_rml( recp.simple_requirements(), crafting_inv,
+                                              batch_size, 0 );
+            }
+        } else {
+            // Legacy: flat tools + qualities
+            rml += requirement_tools_rml( recp.simple_requirements(), crafting_inv,
+                                          batch_size, 0 );
+        }
+
+        // Helpers who know this recipe
+        if( !crafter->knows_recipe( &recp ) ) {
+            std::vector<const Character *> helpers;
+            for( const Character *h : crafting_group ) {
+                if( crafter->getID() != h->getID() && h->knows_recipe( &recp ) ) {
+                    helpers.push_back( h );
+                }
+            }
+            if( !helpers.empty() ) {
+                const std::string helper_list = enumerate_as_string( helpers,
+                []( const Character * h ) {
+                    return colorize( h->is_avatar() ? _( "You" ) : h->get_name(), c_cyan );
+                } );
+                rml += line_rml( string_format( _( "Known by: %s" ), helper_list ), c_white );
+            }
+        }
+    }
+
+    // Nested recipe groups: clickable sub-recipe list in middle column
+    if( recp.is_nested() ) {
+        for( const recipe_id &child_id : recp.nested_category_data ) {
+            const recipe &child = child_id.obj();
+            if( !available_recipes->contains( &child ) ) {
+                continue;
+            }
+            availability child_avail( *crafter, &child );
+            nc_color col = child_avail.color();
+            std::string child_name = child.result_name( true );
+            rml += "<div>" + rml_ui::colored_rml( "  • ", c_white ) +
+            nav_clickable( child_name, col, [this, child_name]() {
+                filterstring = child_name;
+                recalc = true;
+            } ) + "</div>";
+        }
+    }
+    return rml;
 }
 
-// --- draw_modifier_table ---
+// --- modifier table ---
 
-void crafting_ui_impl::draw_modifier_table( const recipe &recp,
+std::string crafting_ui_impl::modifier_table_rml( const recipe &recp,
         const availability &avail, int batch_size )
 {
+    const auto cell = []( const std::string & content_rml ) {
+        return "<td>" + content_rml + "</td>";
+    };
     // Helper: time impact as percentage. Input is a time multiplier
     // (>1 = slower, <1 = faster). Shows "+50%" (red) or "-20%" (green).
     const auto time_pct_cell = [&]( float time_mult ) {
         float pct = ( time_mult - 1.0f ) * 100.f;
-        ImGui::TableNextColumn();
         if( std::abs( pct ) < 0.5f ) {
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), "-" );
-        } else {
-            nc_color col = pct > 0.5f ? c_red : c_green;
-            ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%+.0f%%", pct );
+            return cell( rml_ui::colored_rml( "-", c_dark_gray ) );
         }
+        return cell( rml_ui::colored_rml( string_format( "%+.0f%%", pct ), pct > 0.5f ? c_red : c_green ) );
     };
     // Helper: effective skill modifier cell
     const auto skill_mod_cell = [&]( float val ) {
-        ImGui::TableNextColumn();
         if( std::abs( val ) < 0.01f ) {
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), "-" );
-        } else {
-            nc_color col = val > 0.01f ? c_green : c_red;
-            ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%+.1f", val );
+            return cell( rml_ui::colored_rml( "-", c_dark_gray ) );
         }
+        return cell( rml_ui::colored_rml( string_format( "%+.1f", val ), val > 0.01f ? c_green : c_red ) );
     };
     const auto dash_cell = [&]() {
-        ImGui::TableNextColumn();
-        ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), "-" );
+        return cell( rml_ui::colored_rml( "-", c_dark_gray ) );
     };
     // Section label row: dimmed text in Source, empty other columns
     const auto section_label = [&]( const char *label ) {
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), "%s", label );
-        ImGui::TableNextColumn();
-        ImGui::TableNextColumn();
+        return "<tr>" + cell( rml_ui::colored_rml( label, c_dark_gray ) ) + "<td></td><td></td></tr>";
+    };
+    // An indented source cell
+    const auto source_cell = []( const std::string & content_rml ) {
+        return "<td style=\"padding-left: 1em;\">" + content_rml + "</td>";
     };
 
-    float row_indent = ImGui::CalcTextSize( "  " ).x;
+    std::string rml = "<table class=\"grid\" style=\"width: auto;\"><tr>" +
+                      cell( rml_ui::colored_rml( _( "Source" ), c_white ) ) +
+                      cell( rml_ui::colored_rml( _( "Time" ), c_white ) ) +
+                      // NOLINTNEXTLINE(cata-text-style)
+                      cell( rml_ui::colored_rml( _( "Eff. skill" ), c_white ) ) + "</tr>";
 
-    if( ImGui::BeginTable( "##MODIFIERS", 3, ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_SizingFixedFit ) ) {
-        ImGui::TableSetupColumn( "source", ImGuiTableColumnFlags_WidthFixed );
-        ImGui::TableSetupColumn( "time", ImGuiTableColumnFlags_WidthFixed );
-        ImGui::TableSetupColumn( "eff_skill", ImGuiTableColumnFlags_WidthFixed );
-        // Manual header row
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s", _( "Source" ) );
-        ImGui::TableNextColumn();
-        ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s", _( "Time" ) );
-        ImGui::TableNextColumn();
-        // NOLINTNEXTLINE(cata-text-style)
-        ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s", _( "Eff. skill" ) );
-
-        // Base row
-        {
-            const int64_t base_moves = recp.time_to_craft_moves(
-                                           *crafter, {}, recipe_time_flag::ignore_proficiencies );
-            const std::string base_str = to_string(
-                                             time_duration::from_moves( base_moves ) );
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            if( batch_size > 1 ) {
-                ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                                    _( "base (per item)" ) );
-            } else {
-                ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                                    pgettext( "Value without modifier", "base" ) );
-            }
-            ImGui::TableNextColumn();
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_light_gray ), "%s",
-                                base_str.c_str() );
-            dash_cell();
-        }
-
-        // --- Skills ---
-        {
-            bool has_skills = static_cast<bool>( recp.skill_used ) ||
-                              !recp.required_skills.empty();
-            if( has_skills ) {
-                section_label( _( "Skills" ) );
-            }
-
-            const auto skill_row = [&]( const skill_id & sk, int required_level,
-            const std::string & suffix ) {
-                const int level = crafter->get_skill_level( sk );
-                const int delta = level - required_level;
-                nc_color col = delta >= 2 ? c_green : delta >= 0 ? c_light_gray :
-                               delta >= -2 ? c_yellow : c_red;
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Indent( row_indent );
-                ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s %d/%d",
-                                    sk->name().c_str(), level, required_level );
-                if( !suffix.empty() ) {
-                    ImGui::SameLine( 0, 0 );
-                    ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), " %s",
-                                        suffix.c_str() );
-                }
-                ImGui::Unindent( row_indent );
-                dash_cell();
-                skill_mod_cell( static_cast<float>( delta ) );
-            };
-
-            if( recp.skill_used ) {
-                std::string range;
-                if( recp.is_practice() && recp.practice_data &&
-                    recp.practice_data->min_difficulty != recp.practice_data->max_difficulty ) {
-                    range = string_format( "(%d-%d)",
-                                           recp.practice_data->min_difficulty,
-                                           recp.practice_data->max_difficulty );
-                }
-                skill_row( recp.skill_used, recp.get_difficulty( *crafter ), range );
-            }
-            for( const auto &secondary : recp.required_skills ) {
-                skill_row( secondary.first, secondary.second, {} );
-            }
-        }
-
-        // --- Proficiencies ---
-        {
-            const auto &profs = recp.get_proficiencies();
-            if( !profs.empty() ) {
-                section_label( _( "Proficiencies" ) );
-            }
-
-            const auto crafter_or_helper_has_proficiency = [&avail]( const proficiency_id & prof ) {
-                if( avail.crafter.has_proficiency( prof ) ) {
-                    return true;
-                }
-                std::vector<Character *> helpers = avail.crafter.get_crafting_group();
-                return std::any_of( helpers.begin(), helpers.end(), [&prof]( const Character * helper ) {
-                    return helper->has_proficiency( prof );
-                } );
-            };
-
-            for( const recipe_proficiency &prof : profs ) {
-                bool known = crafter_or_helper_has_proficiency( prof.id );
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Indent( row_indent );
-
-                if( prof.required ) {
-                    nc_color col = known ? c_dark_gray : c_red;
-                    ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s",
-                                        prof.id->name().c_str() );
-                    ImGui::Unindent( row_indent );
-                    if( known ) {
-                        dash_cell();
-                    } else {
-                        ImGui::TableNextColumn();
-                        ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s",
-                                            _( "required" ) );
-                    }
-                    dash_cell();
-                } else if( known ) {
-                    ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), "%s",
-                                        prof.id->name().c_str() );
-                    ImGui::Unindent( row_indent );
-                    dash_cell();
-                    dash_cell();
-                } else {
-                    ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                                        prof.id->name().c_str() );
-                    ImGui::Unindent( row_indent );
-                    time_pct_cell( prof.time_multiplier );
-                    skill_mod_cell( -prof.skill_penalty );
-                }
-            }
-        }
-
-        // --- Conditions ---
-        {
-            float morale_mult = crafter->morale_crafting_speed_multiplier( recp );
-            float light_mult = crafter->lighting_craft_speed_multiplier( recp );
-            float pain_mult = crafter->pain_crafting_speed_multiplier( recp );
-            float limb_mult = crafter->limb_score_crafting_speed_multiplier( recp );
-            float mut_mult = crafter->mut_crafting_speed_multiplier( recp );
-            float mut_skill_bonus = 0.0f;
-            for( const trait_id &mut : crafter->get_functioning_mutations() ) {
-                for( const std::pair<const skill_id, int> &bonus : mut->craft_skill_bonus ) {
-                    if( recp.skill_used == bonus.first ) {
-                        mut_skill_bonus += bonus.second;
-                    }
-                }
-            }
-            float int_bonus = crafter->get_int() / 4.0f;
-            float baseline_int = 2.0f; // INT 8 / 4
-            float int_delta = int_bonus - baseline_int;
-
-            bool has_farsight = false;
-            float vision_penalty = 0.0f;
-            if( crafter->has_flag( json_flag_HYPEROPIC ) &&
-                !crafter->worn_with_flag( flag_FIX_FARSIGHT ) &&
-                !crafter->has_effect( effect_contacts ) ) {
-                if( recp.skill_used == skill_electronics ) {
-                    vision_penalty = 2.0f;
-                } else if( recp.skill_used == skill_tailor ) {
-                    vision_penalty = 1.0f;
-                }
-                has_farsight = vision_penalty > 0.0f;
-            }
-
-            bool has_conditions =
-                std::abs( morale_mult - 1.0f ) > 0.01f ||
-                light_mult <= 0.0f || std::abs( light_mult - 1.0f ) > 0.01f ||
-                std::abs( pain_mult - 1.0f ) > 0.01f ||
-                std::abs( limb_mult - 1.0f ) > 0.01f ||
-                std::abs( mut_mult - 1.0f ) > 0.01f || std::abs( mut_skill_bonus ) > 0.01f ||
-                std::abs( int_delta ) > 0.01f ||
-                has_farsight;
-
-            if( has_conditions ) {
-                section_label( _( "Conditions" ) );
-
-                // Start an indented condition row in the Source column
-                const auto cond_source = [&]() {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    ImGui::Indent( row_indent );
-                };
-                // End the Source column indent (call before moving to Time/Eff.skill)
-                const auto cond_source_end = [&]() {
-                    ImGui::Unindent( row_indent );
-                };
-
-                if( std::abs( morale_mult - 1.0f ) > 0.01f ) {
-                    cond_source();
-                    ImGui::Text( "%s", _( "morale" ) );
-                    cond_source_end();
-                    time_pct_cell( 1.0f / morale_mult );
-                    dash_cell();
-                }
-
-                if( light_mult <= 0.0f ) {
-                    cond_source();
-                    ImGui::TextColored( cataimgui::imvec4_from_color( c_red ), "%s",
-                                        _( "lighting" ) );
-                    cond_source_end();
-                    ImGui::TableNextColumn();
-                    ImGui::TextColored( cataimgui::imvec4_from_color( i_red ), "%s",
-                                        _( "blocked" ) );
-                    dash_cell();
-                } else if( std::abs( light_mult - 1.0f ) > 0.01f ) {
-                    cond_source();
-                    ImGui::Text( "%s", _( "lighting" ) );
-                    cond_source_end();
-                    time_pct_cell( 1.0f / light_mult );
-                    dash_cell();
-                }
-
-                if( std::abs( pain_mult - 1.0f ) > 0.01f ) {
-                    cond_source();
-                    ImGui::Text( "%s", _( "pain" ) );
-                    cond_source_end();
-                    time_pct_cell( 1.0f / pain_mult );
-                    dash_cell();
-                }
-
-                if( std::abs( limb_mult - 1.0f ) > 0.01f ) {
-                    cond_source();
-                    ImGui::Text( "%s", _( "limbs" ) );
-                    cond_source_end();
-                    time_pct_cell( 1.0f / limb_mult );
-                    dash_cell();
-                }
-
-                if( std::abs( mut_mult - 1.0f ) > 0.01f || std::abs( mut_skill_bonus ) > 0.01f ) {
-                    cond_source();
-                    ImGui::Text( "%s", _( "mutations" ) );
-                    cond_source_end();
-                    if( std::abs( mut_mult - 1.0f ) > 0.01f ) {
-                        time_pct_cell( 1.0f / mut_mult );
-                    } else {
-                        dash_cell();
-                    }
-                    if( std::abs( mut_skill_bonus ) > 0.01f ) {
-                        skill_mod_cell( mut_skill_bonus );
-                    } else {
-                        dash_cell();
-                    }
-                }
-
-                if( std::abs( int_delta ) > 0.01f ) {
-                    cond_source();
-                    ImGui::Text( "%s %d", _( "intelligence" ), crafter->get_int() );
-                    cond_source_end();
-                    dash_cell();
-                    skill_mod_cell( int_delta );
-                }
-
-                if( has_farsight ) {
-                    cond_source();
-                    ImGui::Text( "%s", _( "farsightedness" ) );
-                    cond_source_end();
-                    dash_cell();
-                    skill_mod_cell( -vision_penalty );
-                }
-            }
-        }
-
-        // Separator + Total
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::Separator();
-        ImGui::TableNextColumn();
-        ImGui::Separator();
-        ImGui::TableNextColumn();
-        ImGui::Separator();
-
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s", _( "Total" ) );
-
-        // Total time
-        {
-            const int expected_turns = crafter->expected_time_to_craft( recp, batch_size )
-                                       / to_moves<int>( 1_turns );
-            ImGui::TableNextColumn();
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_cyan ), "%s",
-                                to_string( time_duration::from_turns( expected_turns ) ).c_str() );
-        }
-
-        // Total success + catastrophic failure stacked in Eff. skill cell
-        {
-            float success = 100.f * crafter->recipe_success_chance( recp );
-            nc_color success_col = success < 25.f ? c_red :
-                                   success < 50.f ? c_yellow :
-                                   success < 75.f ? c_light_gray : c_green;
-            ImGui::TableNextColumn();
-            ImGui::TextColored( cataimgui::imvec4_from_color( success_col ), "%.1f%% %s",
-                                success, _( "success" ) );
-
-            float cata_fail = 100.f * crafter->item_destruction_chance( recp );
-            if( cata_fail > 0.01f ) {
-                nc_color cata_col = cata_fail > 50.f ? i_red :
-                                    cata_fail > 20.f ? c_red :
-                                    cata_fail > 5.f ? c_yellow : c_light_gray;
-                ImGui::TextColored( cataimgui::imvec4_from_color( cata_col ), "%.1f%% %s",
-                                    cata_fail, _( "destroy" ) );
-            }
-        }
-
-        ImGui::EndTable();
+    // Base row
+    {
+        const int64_t base_moves = recp.time_to_craft_moves(
+                                       *crafter, {}, recipe_time_flag::ignore_proficiencies );
+        const std::string base_str = to_string(
+                                         time_duration::from_moves( base_moves ) );
+        rml += "<tr>" + cell( rml_ui::colored_rml( batch_size > 1 ? _( "base (per item)" ) :
+                              pgettext( "Value without modifier", "base" ), c_white ) ) +
+               cell( rml_ui::colored_rml( base_str, c_light_gray ) ) + dash_cell() + "</tr>";
     }
+
+    // --- Skills ---
+    {
+        bool has_skills = static_cast<bool>( recp.skill_used ) ||
+                          !recp.required_skills.empty();
+        if( has_skills ) {
+            rml += section_label( _( "Skills" ) );
+        }
+
+        const auto skill_row = [&]( const skill_id & sk, int required_level,
+        const std::string & suffix ) {
+            const int level = crafter->get_skill_level( sk );
+            const int delta = level - required_level;
+            nc_color col = delta >= 2 ? c_green : delta >= 0 ? c_light_gray :
+                           delta >= -2 ? c_yellow : c_red;
+            std::string source = rml_ui::colored_rml( string_format( "%s %d/%d", sk->name(), level,
+                                 required_level ), col );
+            if( !suffix.empty() ) {
+                source += rml_ui::colored_rml( " " + suffix, c_dark_gray );
+            }
+            return "<tr>" + source_cell( source ) + dash_cell() + skill_mod_cell( static_cast<float>( delta ) )
+                   + "</tr>";
+        };
+
+        if( recp.skill_used ) {
+            std::string range;
+            if( recp.is_practice() && recp.practice_data &&
+                recp.practice_data->min_difficulty != recp.practice_data->max_difficulty ) {
+                range = string_format( "(%d-%d)",
+                                       recp.practice_data->min_difficulty,
+                                       recp.practice_data->max_difficulty );
+            }
+            rml += skill_row( recp.skill_used, recp.get_difficulty( *crafter ), range );
+        }
+        for( const auto &secondary : recp.required_skills ) {
+            rml += skill_row( secondary.first, secondary.second, {} );
+        }
+    }
+
+    // --- Proficiencies ---
+    {
+        const auto &profs = recp.get_proficiencies();
+        if( !profs.empty() ) {
+            rml += section_label( _( "Proficiencies" ) );
+        }
+
+        const auto crafter_or_helper_has_proficiency = [&avail]( const proficiency_id & prof ) {
+            if( avail.crafter.has_proficiency( prof ) ) {
+                return true;
+            }
+            std::vector<Character *> helpers = avail.crafter.get_crafting_group();
+            return std::any_of( helpers.begin(), helpers.end(), [&prof]( const Character * helper ) {
+                return helper->has_proficiency( prof );
+            } );
+        };
+
+        for( const recipe_proficiency &prof : profs ) {
+            bool known = crafter_or_helper_has_proficiency( prof.id );
+            rml += "<tr>";
+            if( prof.required ) {
+                nc_color col = known ? c_dark_gray : c_red;
+                rml += source_cell( rml_ui::colored_rml( prof.id->name(), col ) );
+                rml += known ? dash_cell() : cell( rml_ui::colored_rml( _( "required" ), col ) );
+                rml += dash_cell();
+            } else if( known ) {
+                rml += source_cell( rml_ui::colored_rml( prof.id->name(), c_dark_gray ) ) + dash_cell() +
+                       dash_cell();
+            } else {
+                rml += source_cell( rml_ui::colored_rml( prof.id->name(), c_white ) ) +
+                       time_pct_cell( prof.time_multiplier ) + skill_mod_cell( -prof.skill_penalty );
+            }
+            rml += "</tr>";
+        }
+    }
+
+    // --- Conditions ---
+    {
+        float morale_mult = crafter->morale_crafting_speed_multiplier( recp );
+        float light_mult = crafter->lighting_craft_speed_multiplier( recp );
+        float pain_mult = crafter->pain_crafting_speed_multiplier( recp );
+        float limb_mult = crafter->limb_score_crafting_speed_multiplier( recp );
+        float mut_mult = crafter->mut_crafting_speed_multiplier( recp );
+        float mut_skill_bonus = 0.0f;
+        for( const trait_id &mut : crafter->get_functioning_mutations() ) {
+            for( const std::pair<const skill_id, int> &bonus : mut->craft_skill_bonus ) {
+                if( recp.skill_used == bonus.first ) {
+                    mut_skill_bonus += bonus.second;
+                }
+            }
+        }
+        float int_bonus = crafter->get_int() / 4.0f;
+        float baseline_int = 2.0f; // INT 8 / 4
+        float int_delta = int_bonus - baseline_int;
+
+        bool has_farsight = false;
+        float vision_penalty = 0.0f;
+        if( crafter->has_flag( json_flag_HYPEROPIC ) &&
+            !crafter->worn_with_flag( flag_FIX_FARSIGHT ) &&
+            !crafter->has_effect( effect_contacts ) ) {
+            if( recp.skill_used == skill_electronics ) {
+                vision_penalty = 2.0f;
+            } else if( recp.skill_used == skill_tailor ) {
+                vision_penalty = 1.0f;
+            }
+            has_farsight = vision_penalty > 0.0f;
+        }
+
+        bool has_conditions =
+            std::abs( morale_mult - 1.0f ) > 0.01f ||
+            light_mult <= 0.0f || std::abs( light_mult - 1.0f ) > 0.01f ||
+            std::abs( pain_mult - 1.0f ) > 0.01f ||
+            std::abs( limb_mult - 1.0f ) > 0.01f ||
+            std::abs( mut_mult - 1.0f ) > 0.01f || std::abs( mut_skill_bonus ) > 0.01f ||
+            std::abs( int_delta ) > 0.01f ||
+            has_farsight;
+
+        if( has_conditions ) {
+            rml += section_label( _( "Conditions" ) );
+
+            const auto cond_row = [&]( const std::string & source, const std::string & time_rml,
+            const std::string & skill_rml ) {
+                return "<tr>" + source_cell( source ) + time_rml + skill_rml + "</tr>";
+            };
+            const auto plain = []( const std::string & text ) {
+                return rml_ui::escape_rml( text );
+            };
+
+            if( std::abs( morale_mult - 1.0f ) > 0.01f ) {
+                rml += cond_row( plain( _( "morale" ) ), time_pct_cell( 1.0f / morale_mult ), dash_cell() );
+            }
+
+            if( light_mult <= 0.0f ) {
+                rml += cond_row( rml_ui::colored_rml( _( "lighting" ), c_red ),
+                                 cell( rml_ui::colored_rml( _( "blocked" ), i_red ) ), dash_cell() );
+            } else if( std::abs( light_mult - 1.0f ) > 0.01f ) {
+                rml += cond_row( plain( _( "lighting" ) ), time_pct_cell( 1.0f / light_mult ), dash_cell() );
+            }
+
+            if( std::abs( pain_mult - 1.0f ) > 0.01f ) {
+                rml += cond_row( plain( _( "pain" ) ), time_pct_cell( 1.0f / pain_mult ), dash_cell() );
+            }
+
+            if( std::abs( limb_mult - 1.0f ) > 0.01f ) {
+                rml += cond_row( plain( _( "limbs" ) ), time_pct_cell( 1.0f / limb_mult ), dash_cell() );
+            }
+
+            if( std::abs( mut_mult - 1.0f ) > 0.01f || std::abs( mut_skill_bonus ) > 0.01f ) {
+                rml += cond_row( plain( _( "mutations" ) ),
+                                 std::abs( mut_mult - 1.0f ) > 0.01f ? time_pct_cell( 1.0f / mut_mult ) : dash_cell(),
+                                 std::abs( mut_skill_bonus ) > 0.01f ? skill_mod_cell( mut_skill_bonus ) : dash_cell() );
+            }
+
+            if( std::abs( int_delta ) > 0.01f ) {
+                rml += cond_row( plain( string_format( "%s %d", _( "intelligence" ), crafter->get_int() ) ),
+                                 dash_cell(), skill_mod_cell( int_delta ) );
+            }
+
+            if( has_farsight ) {
+                rml += cond_row( plain( _( "farsightedness" ) ), dash_cell(),
+                                 skill_mod_cell( -vision_penalty ) );
+            }
+        }
+    }
+
+    // Total, below a rule
+    rml += "<tr><td style=\"border-top: 1dp #39465c;\">" + rml_ui::colored_rml( _( "Total" ),
+            c_white ) + "</td>";
+
+    // Total time
+    {
+        const int expected_turns = crafter->expected_time_to_craft( recp, batch_size )
+                                   / to_moves<int>( 1_turns );
+        rml += "<td style=\"border-top: 1dp #39465c;\">" + rml_ui::colored_rml( to_string(
+                    time_duration::from_turns( expected_turns ) ), c_cyan ) + "</td>";
+    }
+
+    // Total success + catastrophic failure stacked in Eff. skill cell
+    {
+        float success = 100.f * crafter->recipe_success_chance( recp );
+        nc_color success_col = success < 25.f ? c_red :
+                               success < 50.f ? c_yellow :
+                               success < 75.f ? c_light_gray : c_green;
+        std::string total = rml_ui::colored_rml( string_format( "%.1f%% %s", success, _( "success" ) ),
+                            success_col );
+
+        float cata_fail = 100.f * crafter->item_destruction_chance( recp );
+        if( cata_fail > 0.01f ) {
+            nc_color cata_col = cata_fail > 50.f ? i_red :
+                                cata_fail > 20.f ? c_red :
+                                cata_fail > 5.f ? c_yellow : c_light_gray;
+            total += "<br/>" + rml_ui::colored_rml( string_format( "%.1f%% %s", cata_fail, _( "destroy" ) ),
+                     cata_col );
+        }
+        rml += "<td style=\"border-top: 1dp #39465c;\">" + total + "</td></tr>";
+    }
+    rml += "</table>";
 
     // Darkness and nearby count live under the Details spoiler
     const std::string darkness = recp.has_flag( "BLIND_EASY" ) ? _( "easy" ) :
                                  recp.has_flag( "BLIND_HARD" ) ? _( "hard" ) :
                                  _( "impossible" );
-    ImGui::TextColored( cataimgui::imvec4_from_color( c_light_gray ), "%s",
-                        string_format( _( "Crafting in the dark: %s" ), darkness ).c_str() );
+    rml += line_rml( string_format( _( "Crafting in the dark: %s" ), darkness ), c_light_gray );
 
     if( recp.result() ) {
         const inventory &det_inv = crafter->crafting_inventory();
         const int nearby = det_inv.count_item( recp.result() );
         if( nearby > 0 ) {
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_yellow ), "%s",
-                                string_format( _( "%d already nearby" ), nearby ).c_str() );
+            rml += line_rml( string_format( _( "%d already nearby" ), nearby ), c_yellow );
         }
     }
-    ImGui::Spacing();
+    return rml;
 }
 
-// --- draw_tools_section ---
+// --- components and tools ---
 
-// Lazy-built lookup: sorted item IDs of a tool group -> requirement display name.
-void crafting_ui_impl::draw_components( const requirement_data &req,
-                                        const inventory &crafting_inv, const std::function<bool( const item & )> &filter,
-                                        int batch_size )
+std::string crafting_ui_impl::components_rml( const requirement_data &req,
+        const inventory &crafting_inv, const std::function<bool( const item & )> &filter,
+        int batch_size )
 {
     const requirement_data::alter_item_comp_vector &comp_groups = req.get_components();
     if( comp_groups.empty() ) {
-        return;
+        return std::string();
     }
 
     // Ensure availability cache is fresh
@@ -1861,8 +1519,7 @@ void crafting_ui_impl::draw_components( const requirement_data &req,
         return crafting_inv.amount_of( ic.type, false, INT_MAX, filter );
     };
 
-    ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                        _( "Components:" ) );
+    std::string rml = line_rml( _( "Components:" ), c_white );
 
     for( int gi = 0; gi < static_cast<int>( comp_groups.size() ); ++gi ) {
         const auto &comp_alts = comp_groups[gi];
@@ -1894,91 +1551,73 @@ void crafting_ui_impl::draw_components( const requirement_data &req,
         } );
 
         const bool is_expanded = expanded_comp_groups.count( gi ) > 0;
-        const std::string bullet = "  \u2022 ";
+        const std::string bullet = "  • ";
+        const auto alt_rml = [&]( const item_comp * ic ) {
+            nc_color col = ic->get_color( any_available, crafting_inv, filter, batch_size );
+            return rml_ui::colored_rml( ic->to_string( batch_size, avail_count( *ic ) ), col );
+        };
 
         if( is_expanded ) {
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s", bullet.c_str() );
-            float indent = ImGui::CalcTextSize( "    " ).x;
-            for( size_t i = 0; i < sorted_alts.size(); ++i ) {
-                const item_comp *ic = sorted_alts[i];
-                // Draw the first item on the same line as the bullet, then indent the rest
-                if( i == 0 ) {
-                    ImGui::SameLine( 0, 0 );
-                }
-                if( i == 1 ) {
-                    ImGui::Indent( indent );
-                }
-                nc_color col = ic->get_color( any_available, crafting_inv, filter, batch_size );
-                ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s",
-                                    ic->to_string( batch_size, avail_count( *ic ) ).c_str() );
+            // The first on the bullet's line, the rest indented below it
+            std::string rest;
+            for( size_t i = 1; i < sorted_alts.size(); ++i ) {
+                rest += "<div>" + alt_rml( sorted_alts[i] ) + "</div>";
             }
-            if( nav_clickable( _( "show less" ), c_dark_gray ) ) {
+            rest += "<div>" + nav_clickable( _( "show less" ), c_dark_gray, [this, gi]() {
                 expanded_comp_groups.erase( gi );
-            }
-            ImGui::Unindent( indent );
+            } ) + "</div>";
+            rml += "<div class=\"pre\">" + rml_ui::colored_rml( bullet, c_white ) +
+                   alt_rml( sorted_alts.front() ) + "</div>" + indented_rml( rest, 4 );
         } else {
-            const float avail_width = ImGui::GetContentRegionAvail().x;
-            const float or_w = ImGui::CalcTextSize( _( " OR " ) ).x;
-            float used_w = ImGui::CalcTextSize( bullet.c_str() ).x;
-
+            // As many as fit on the line, then how many more there are
+            int used_w = text_width( bullet );
+            const int or_w = text_width( _( " OR " ) );
             int fits = 0;
             for( size_t i = 0; i < sorted_alts.size(); ++i ) {
-                std::string text = sorted_alts[i]->to_string( batch_size, avail_count( *sorted_alts[i] ) );
-                float tw = ImGui::CalcTextSize( text.c_str() ).x;
-                float sep = ( i > 0 ) ? or_w : 0.f;
-                int rem = static_cast<int>( sorted_alts.size() ) - fits - 1;
-                float reserve = 0.f;
-                if( rem > 0 ) {
-                    std::string more = string_format( _( "or %d more" ), rem );
-                    reserve = or_w + ImGui::CalcTextSize( more.c_str() ).x;
-                }
-                if( used_w + sep + tw + reserve > avail_width && fits > 0 ) {
+                const int tw = text_width( sorted_alts[i]->to_string( batch_size,
+                                           avail_count( *sorted_alts[i] ) ) );
+                const int sep = i > 0 ? or_w : 0;
+                const int rem = static_cast<int>( sorted_alts.size() ) - fits - 1;
+                const int reserve = rem > 0 ? or_w + text_width( string_format( _( "or %d more" ),
+                                    rem ) ) : 0;
+                if( used_w + sep + tw + reserve > info_chars && fits > 0 ) {
                     break;
                 }
                 used_w += sep + tw;
                 fits++;
             }
 
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s", bullet.c_str() );
-            ImGui::SameLine( 0, 0 );
-
+            std::string group = rml_ui::colored_rml( bullet, c_white );
             for( int i = 0; i < fits; ++i ) {
                 if( i > 0 ) {
-                    ImGui::SameLine( 0, 0 );
-                    ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), "%s",
-                                        _( " or " ) );
-                    ImGui::SameLine( 0, 0 );
+                    group += rml_ui::colored_rml( _( " or " ), c_dark_gray );
                 }
-                nc_color col = sorted_alts[i]->get_color( any_available, crafting_inv, filter, batch_size );
-                ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s",
-                                    sorted_alts[i]->to_string( batch_size, avail_count( *sorted_alts[i] ) ).c_str() );
+                group += alt_rml( sorted_alts[i] );
             }
-
-            int remaining = static_cast<int>( sorted_alts.size() ) - fits;
+            const int remaining = static_cast<int>( sorted_alts.size() ) - fits;
             if( remaining > 0 ) {
-                ImGui::SameLine( 0, 0 );
-                std::string more_text = string_format( _( " or %d more" ), remaining );
-                if( nav_clickable( more_text.c_str(), c_cyan ) ) {
+                group += nav_clickable( string_format( _( " or %d more" ), remaining ), c_cyan,
+                [this, gi]() {
                     expanded_comp_groups.insert( gi );
-                }
+                } );
             }
+            rml += "<div class=\"pre\">" + group + "</div>";
         }
-        ImGui::Dummy( ImVec2( 0, 0 ) );
     }
+    return rml;
 }
 
-void crafting_ui_impl::draw_requirement_tools( const requirement_data &req,
+std::string crafting_ui_impl::requirement_tools_rml( const requirement_data &req,
         const inventory &crafting_inv, int batch_size, int group_offset )
 {
     const requirement_data::alter_tool_comp_vector &tool_groups = req.get_tools();
     const requirement_data::alter_quali_req_vector &qual_groups = req.get_qualities();
 
     if( tool_groups.empty() && qual_groups.empty() ) {
-        return;
+        return std::string();
     }
 
-    ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                        _( "Tools:" ) );
+    std::string rml = line_rml( _( "Tools:" ), c_white );
 
     // Quality requirements -- bullet per group, colored by availability
     for( const auto &qual_alts : qual_groups ) {
@@ -1989,23 +1628,18 @@ void crafting_ui_impl::draw_requirement_tools( const requirement_data &req,
                 break;
             }
         }
-        ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "  \u2022 " );
-        ImGui::SameLine( 0, 0 );
+        std::string group = rml_ui::colored_rml( "  • ", c_white );
         bool first = true;
         for( const quality_requirement &qr : qual_alts ) {
             if( !first ) {
-                ImGui::SameLine( 0, 0 );
-                ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), " %s ",
-                                    _( "OR" ) );
-                ImGui::SameLine( 0, 0 );
+                group += rml_ui::colored_rml( string_format( " %s ", _( "OR" ) ), c_white );
             }
             first = false;
             nc_color col = qr.has( crafting_inv, return_true<item>, 1 ) ? c_green :
                            ( any_has ? c_dark_gray : c_red );
-            ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s",
-                                qr.to_string( 1 ).c_str() );
+            group += rml_ui::colored_rml( qr.to_string( 1 ), col );
         }
-        ImGui::Dummy( ImVec2( 0, 0 ) );
+        rml += "<div class=\"pre\">" + group + "</div>";
     }
 
     // Tool groups -- bullet per group, with named req labels and expand/collapse
@@ -2036,144 +1670,102 @@ void crafting_ui_impl::draw_requirement_tools( const requirement_data &req,
         [&]( const tool_comp * tc ) {
             return tc->has( crafting_inv, return_true<item>, batch_size );
         } );
+        const auto alt_rml = [&]( const tool_comp * tc ) {
+            nc_color col = tc->has( crafting_inv, return_true<item>, batch_size ) ? c_green :
+                           ( any_available ? c_dark_gray : c_red );
+            return rml_ui::colored_rml( tc->to_string( batch_size ), col );
+        };
 
         // Label
-        std::string label = string_format( _( "\u2022 %s: " ), has_name ? group_name : _( "One of" ) );
+        std::string label = string_format( _( "• %s: " ), has_name ? group_name : _( "One of" ) );
 
         if( is_expanded ) {
-            // Expanded: label line, then each tool as a bullet below
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "  %s",
-                                label.c_str() );
-            float indent = ImGui::CalcTextSize( "      " ).x;
-            ImGui::Indent( indent );
+            // Expanded: label line, then each tool below
+            std::string tools;
             for( const tool_comp *tc : unique_alts ) {
-                nc_color col = tc->has( crafting_inv, return_true<item>, batch_size ) ? c_green :
-                               ( any_available ? c_dark_gray : c_red );
-                ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s",
-                                    tc->to_string( batch_size ).c_str() );
+                tools += "<div>" + alt_rml( tc ) + "</div>";
             }
-            if( nav_clickable( _( "show less" ), c_dark_gray ) ) {
+            tools += "<div>" + nav_clickable( _( "show less" ), c_dark_gray, [this, global_gi]() {
                 expanded_tool_groups.erase( global_gi );
-            }
-            ImGui::Unindent( indent );
+            } ) + "</div>";
+            rml += line_rml( "  " + label, c_white ) + indented_rml( tools, 6 );
         } else {
             // Collapsed: label + tools on one line, truncated
-            float avail_width = ImGui::GetContentRegionAvail().x;
-            float or_w = ImGui::CalcTextSize( _( " or " ) ).x;
-            std::string bullet_label = "  " + label;
-            float used_w = ImGui::CalcTextSize( bullet_label.c_str() ).x;
-
-            // Pre-measure how many fit
+            const std::string bullet_label = "  " + label;
+            const int or_w = text_width( _( " or " ) );
+            int used_w = text_width( bullet_label );
             int fits = 0;
             for( size_t i = 0; i < unique_alts.size(); ++i ) {
-                std::string text = unique_alts[i]->to_string( batch_size );
-                float tw = ImGui::CalcTextSize( text.c_str() ).x;
-                float sep = ( i > 0 ) ? or_w : 0.f;
-                int rem = static_cast<int>( unique_alts.size() ) - fits - 1;
-                float reserve = 0.f;
-                if( rem > 0 ) {
-                    std::string more = string_format( _( "or %d more" ), rem );
-                    reserve = or_w + ImGui::CalcTextSize( more.c_str() ).x;
-                }
-                if( used_w + sep + tw + reserve > avail_width && fits > 0 ) {
+                const int tw = text_width( unique_alts[i]->to_string( batch_size ) );
+                const int sep = i > 0 ? or_w : 0;
+                const int rem = static_cast<int>( unique_alts.size() ) - fits - 1;
+                const int reserve = rem > 0 ? or_w + text_width( string_format( _( "or %d more" ),
+                                    rem ) ) : 0;
+                if( used_w + sep + tw + reserve > info_chars && fits > 0 ) {
                     break;
                 }
                 used_w += sep + tw;
                 fits++;
             }
 
-            ImGui::TextColored( cataimgui::imvec4_from_color( c_white ), "%s",
-                                bullet_label.c_str() );
-            ImGui::SameLine( 0, 0 );
-
+            std::string group = rml_ui::colored_rml( bullet_label, c_white );
             for( int i = 0; i < fits; ++i ) {
                 if( i > 0 ) {
-                    ImGui::SameLine( 0, 0 );
-                    ImGui::TextColored( cataimgui::imvec4_from_color( c_dark_gray ), "%s",
-                                        _( " or " ) );
-                    ImGui::SameLine( 0, 0 );
+                    group += rml_ui::colored_rml( _( " or " ), c_dark_gray );
                 }
-                const tool_comp *tc = unique_alts[i];
-                nc_color col = tc->has( crafting_inv, return_true<item>, batch_size ) ? c_green :
-                               ( any_available ? c_dark_gray : c_red );
-                ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s",
-                                    tc->to_string( batch_size ).c_str() );
+                group += alt_rml( unique_alts[i] );
             }
-
-            int remaining = static_cast<int>( unique_alts.size() ) - fits;
+            const int remaining = static_cast<int>( unique_alts.size() ) - fits;
             if( remaining > 0 ) {
-                ImGui::SameLine( 0, 0 );
-                std::string more_text = string_format( _( " or %d more" ), remaining );
-                if( nav_clickable( more_text.c_str(), c_cyan ) ) {
+                group += nav_clickable( string_format( _( " or %d more" ), remaining ), c_cyan,
+                [this, global_gi]() {
                     expanded_tool_groups.insert( global_gi );
-                }
+                } );
             }
+            rml += "<div class=\"pre\">" + group + "</div>";
         }
-        ImGui::Dummy( ImVec2( 0, 0 ) );
     }
+    return rml;
 }
 
-// --- draw_item_info_panel ---
+// --- item info panel ---
 
-void crafting_ui_impl::draw_item_info_panel()
+std::string crafting_ui_impl::item_info_panel_rml()
 {
     if( current.empty() || !is_wide ) {
-        return;
+        return std::string();
     }
     const recipe *cur_recipe = current[line];
+    if( cur_recipe->is_nested() || cur_recipe->is_practice() ) {
+        // Nested groups and practice recipes are shown in the middle column
+        return std::string();
+    }
     const int batch_size = get_batch_size();
-
-    if( ImGui::BeginChild( "##ITEM_INFO", ImGui::GetContentRegionAvail(), false,
-                           ImGuiWindowFlags_NoNav ) ) {
-        cataimgui::set_scroll( item_info_scroll );
-        if( cur_recipe->is_nested() || cur_recipe->is_practice() ) {
-            // Nested groups and practice recipes are shown in the middle column
-        } else {
-            // panel_width is only used for centering separator titles;
-            // display_item_info handles pixel-based text wrapping.
-            int panel_width = static_cast<int>( ImGui::GetContentRegionAvail().x /
-                                                ImGui::CalcTextSize( "X" ).x );
-            item_info_data data = result_info->get_result_data(
-                                      cur_recipe, batch_size, embedded_item_scroll_dummy,
-                                      panel_width, false );
-            if( !data.get_item_name().empty() ) {
-                cataimgui::TextColoredParagraph( c_light_gray, data.get_item_name() );
-                ImGui::Spacing();
-            }
-            display_item_info( data.get_item_display(), data.get_item_compare() );
-        }
+    // panel_width is only used for centering separator titles
+    const int panel_width = std::min( 40, window_width - 80 );
+    item_info_data data = result_info->get_result_data(
+                              cur_recipe, batch_size, embedded_item_scroll_dummy,
+                              panel_width, false );
+    std::string rml;
+    if( !data.get_item_name().empty() ) {
+        rml += "<p>" + rml_ui::markup_to_rml( data.get_item_name(), c_light_gray ) + "</p>";
     }
-    ImGui::EndChild();
+    return rml + item_info_rml( data.get_item_display(), data.get_item_compare() );
 }
 
-// --- draw_status_header ---
+// --- status header ---
 
-void crafting_ui_impl::draw_status_header()
+std::string crafting_ui_impl::status_header_rml()
 {
-    if( ImGui::BeginTable( "##STATUS", 1, ImGuiTableFlags_None ) ) {
-        ImGui::TableSetupColumn( "info", ImGuiTableColumnFlags_WidthStretch );
-
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        if( cataimgui::BeginRightAlign( "##CRAFTER_NAME" ) ) {
-            ImGui::Text( "%s: %s", _( "Crafter" ),
-                         crafter->name_and_maybe_activity().c_str() );
-            cataimgui::EndRightAlign();
-        }
-
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        if( !show_hidden ) {
-            draw_hidden_count();
-        }
-
-        ImGui::EndTable();
+    std::string rml = rml_ui::escape_rml( string_format( "%s: %s", _( "Crafter" ),
+                                          crafter->name_and_maybe_activity() ) );
+    if( !show_hidden ) {
+        rml += "<br/>" + hidden_count_rml();
     }
+    return rml;
 }
 
-// --- draw_hidden_count ---
-
-void crafting_ui_impl::draw_hidden_count()
+std::string crafting_ui_impl::hidden_count_rml()
 {
     nc_color col;
     std::string text;
@@ -2190,11 +1782,7 @@ void crafting_ui_impl::draw_hidden_count()
         col = c_green;
         text = string_format( _( "* No hidden recipe - %d in category *" ), num_recipe );
     }
-
-    if( cataimgui::BeginRightAlign( "##HIDDEN_COUNT" ) ) {
-        ImGui::TextColored( cataimgui::imvec4_from_color( col ), "%s", text.c_str() );
-        cataimgui::EndRightAlign();
-    }
+    return rml_ui::colored_rml( text, col );
 }
 
 // --- rebuild_keybinding_tips ---
@@ -2240,19 +1828,12 @@ void crafting_ui_impl::rebuild_keybinding_tips()
     keybinding_tips = enumerate_as_string( act_descs, enumeration_conjunction::none );
 }
 
-// --- draw_keybinding_footer ---
-
-void crafting_ui_impl::draw_keybinding_footer()
-{
-    ImGui::Separator();
-    cataimgui::TextColoredParagraph( c_dark_gray, keybinding_tips );
-}
-
 // --- recalculate_recipes ---
 
 void crafting_ui_impl::recalculate_recipes()
 {
     recalc = false;
+    list_generation++;
     const recipe *prev_rcp = nullptr;
     if( keepline && line >= 0 && static_cast<size_t>( line ) < current.size() ) {
         prev_rcp = current[line];
@@ -2390,8 +1971,8 @@ void crafting_ui_impl::recalculate_unread()
 
 void crafting_ui_impl::invalidate_info_panels()
 {
-    recipe_info_scroll = cataimgui::scroll::begin;
-    item_info_scroll = cataimgui::scroll::begin;
+    recipe_info_scroll = rml_ui::scroll::top;
+    item_info_scroll = rml_ui::scroll::top;
     need_scroll_to_selected = true;
     expanded_tool_groups.clear();
     expanded_comp_groups.clear();
@@ -2413,7 +1994,7 @@ void crafting_ui_impl::process_action( const std::string &action_in,
     const bool previously_toggled_unread = just_toggled_unread;
     just_toggled_unread = false;
 
-    // Consume pending line click (tab/subtab intents are handled inline in draw_controls)
+    // Consume pending line click (tab/subtab clicks are applied in handle_click)
     if( pending_line_click >= 0 && info_nav_active ) {
         info_nav_active = false;
         rebuild_keybinding_tips();
@@ -2490,18 +2071,22 @@ void crafting_ui_impl::process_action( const std::string &action_in,
         handled_by_nav = true;
         if( action == "DOWN" ) {
             info_nav_cursor = std::min( info_nav_cursor + 1,
-                                        std::max( 0, info_nav_count - 1 ) );
+                                        std::max( 0, static_cast<int>( clickables.size() ) - 1 ) );
         } else if( action == "UP" ) {
             info_nav_cursor = std::max( info_nav_cursor - 1, 0 );
         } else if( action == "CONFIRM" ) {
-            info_nav_activated = info_nav_cursor;
+            if( info_nav_cursor >= 0 && info_nav_cursor < static_cast<int>( clickables.size() ) ) {
+                // Copied, since running it can rebuild the links
+                const std::function<void()> on_activate = clickables[info_nav_cursor];
+                on_activate();
+            }
         } else if( action == "TOGGLE_INFO_NAV" || action == "QUIT" ) {
             info_nav_active = false;
             rebuild_keybinding_tips();
         } else if( action == "PAGE_UP" ) {
-            recipe_info_scroll = cataimgui::scroll::page_up;
+            recipe_info_scroll = rml_ui::scroll::page_up;
         } else if( action == "PAGE_DOWN" ) {
-            recipe_info_scroll = cataimgui::scroll::page_down;
+            recipe_info_scroll = rml_ui::scroll::page_down;
         } else if( action == "BATCH_SIZE_UP" ) {
             pending_batch_delta = 1;
         } else if( action == "BATCH_SIZE_DOWN" ) {
@@ -2532,13 +2117,13 @@ void crafting_ui_impl::process_action( const std::string &action_in,
     if( handled_by_nav ) {
         // nothing -- fall through to shared tail
     } else if( action == "SCROLL_RECIPE_INFO_UP" ) {
-        recipe_info_scroll = cataimgui::scroll::page_up;
+        recipe_info_scroll = rml_ui::scroll::page_up;
     } else if( action == "SCROLL_RECIPE_INFO_DOWN" ) {
-        recipe_info_scroll = cataimgui::scroll::page_down;
+        recipe_info_scroll = rml_ui::scroll::page_down;
     } else if( action == "SCROLL_ITEM_INFO_UP" ) {
-        item_info_scroll = cataimgui::scroll::page_up;
+        item_info_scroll = rml_ui::scroll::page_up;
     } else if( action == "SCROLL_ITEM_INFO_DOWN" ) {
-        item_info_scroll = cataimgui::scroll::page_down;
+        item_info_scroll = rml_ui::scroll::page_down;
     } else if( action == "LEFT" ) {
         if( !batch && filterstring.empty() ) {
             std::string start = subtab.cur();
@@ -2548,7 +2133,6 @@ void crafting_ui_impl::process_action( const std::string &action_in,
                      available_recipes->empty_category( crafting_category_id( tab.cur() ),
                              subtab.cur() != "CSC_ALL" ? subtab.cur() : "" ) );
             recalc = true;
-            force_select_subtab = true;
         }
     } else if( action == "RIGHT" ) {
         if( !batch && filterstring.empty() ) {
@@ -2559,20 +2143,15 @@ void crafting_ui_impl::process_action( const std::string &action_in,
                      available_recipes->empty_category( crafting_category_id( tab.cur() ),
                              subtab.cur() != "CSC_ALL" ? subtab.cur() : "" ) );
             recalc = true;
-            force_select_subtab = true;
         }
     } else if( action == "PREV_TAB" ) {
         tab.prev();
         subtab = tab_list( crafting_category_id( tab.cur() )->subcategories );
         recalc = true;
-        force_select_tab = true;
-        force_select_subtab = true;
     } else if( action == "NEXT_TAB" ) {
         tab.next();
         subtab = tab_list( crafting_category_id( tab.cur() )->subcategories );
         recalc = true;
-        force_select_tab = true;
-        force_select_subtab = true;
     } else if( action == "DOWN" ) {
         if( !previously_toggled_unread ) {
             last_line = line;
@@ -2631,10 +2210,8 @@ void crafting_ui_impl::process_action( const std::string &action_in,
         uistate.read_recipes.insert( current[line]->ident() );
         recalc_unread = highlight_unread;
 
-        int info_width = std::min( static_cast<int>( ImGui::GetMainViewport()->Size.x /
-                                   ImGui::CalcTextSize( "X" ).x ), 80 );
-        int info_height = static_cast<int>( ImGui::GetMainViewport()->Size.y /
-                                            ImGui::GetTextLineHeightWithSpacing() );
+        int info_width = std::min( TERMX, 80 );
+        int info_height = TERMY;
         item_info_data data = result_info->get_result_data( current[line], 1,
                               line_item_info_popup, info_width );
         data.handle_scrolling = true;
@@ -2684,8 +2261,8 @@ void crafting_ui_impl::process_action( const std::string &action_in,
 
             recalc = true;
             keepline = true;
-            recipe_info_scroll = cataimgui::scroll::begin;
-            item_info_scroll = cataimgui::scroll::begin;
+            recipe_info_scroll = rml_ui::scroll::top;
+            item_info_scroll = rml_ui::scroll::top;
             need_scroll_to_selected = true;
         }
     } else if( action == "TOGGLE_FAVORITE" && selection_ok( current, line, true ) ) {
@@ -2869,14 +2446,18 @@ std::pair<Character *, const recipe *> select_crafter_and_crafting_recipe( int &
                            camp_crafting, inventory_override );
     input_context ctxt = make_crafting_context(
                              get_option<bool>( "HIGHLIGHT_UNREAD_RECIPES" ) );
-    ctxt.set_timeout( 10 );
     impl.set_input_context( &ctxt );
 
     while( !impl.is_done() ) {
         ui_manager::redraw_invalidated();
         std::string action = ctxt.handle_input();
-        if( !impl.get_is_open() ) {
-            return { nullptr, nullptr };
+        // A click on a tab, recipe, button or link is applied by process_action()
+        if( action == "SELECT" && !impl.handle_click() ) {
+            action = impl.resolve_click( action );
+            // The close button
+            if( action == "QUIT" ) {
+                return { nullptr, nullptr };
+            }
         }
         impl.process_action( action, ctxt );
     }

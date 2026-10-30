@@ -13,13 +13,9 @@
 #include <vector>
 
 #include "cata_assert.h"
-#include "cata_imgui.h"
 #include "color.h"
 #include "cuboid_rectangle.h"
 #include "cursesdef.h"
-#define IMGUI_DEFINE_MATH_OPERATORS
-#include "imgui/imgui.h"
-#undef IMGUI_DEFINE_MATH_OPERATORS
 #include "input_context.h"
 #include "memory_fast.h"
 #include "pimpl.h"
@@ -42,8 +38,21 @@ const int UILIST_TIMEOUT = -1028;
 const int UILIST_ADDITIONAL = -1029;
 const int MENU_AUTOASSIGN = -1;
 
-class string_input_popup_imgui;
+class text_input_popup;
 class uilist_impl;
+
+/**
+ * Where a uilist goes and how big it is, in terminal cells: the grid the
+ * catacurses windows are laid out on. A negative position centers the menu
+ * on that axis. A size of at most 1 on both axes is a fraction of the screen
+ * instead, and a size of 0 or less fits the content on that axis.
+ */
+struct uilist_bounds {
+    float x = -1.f;
+    float y = -1.f;
+    float w = -1.f;
+    float h = -1.f;
+};
 
 catacurses::window new_centered_win( int nlines, int ncols );
 
@@ -483,7 +492,7 @@ class uilist // NOLINT(cata-xy)
 
         uilist_callback *callback;
 
-        std::optional<cataimgui::bounds> desired_bounds;
+        std::optional<uilist_bounds> desired_bounds;
         bool desc_enabled = false;
 
         std::string filter;
@@ -526,7 +535,7 @@ class uilist // NOLINT(cata-xy)
 
         weak_ptr_fast<uilist_impl> ui;
 
-        std::unique_ptr<string_input_popup_imgui> filter_popup;
+        std::unique_ptr<text_input_popup> filter_popup;
 
         int max_entry_len = 0;
         int max_column_len = 0;

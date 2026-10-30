@@ -1,6 +1,5 @@
 #include "game_inventory.h"
 
-#include <imgui/imgui.h>
 #include <algorithm>
 #include <bitset>
 #include <climits>
@@ -61,12 +60,12 @@
 #include "proficiency.h"
 #include "recipe.h"
 #include "recipe_dictionary.h"
+#include "rml_markup.h"
 #include "requirements.h"
 #include "ret_val.h"
 #include "skill.h"
 #include "stomach.h"
 #include "string_formatter.h"
-#include "text.h"
 #include "translation.h"
 #include "translations.h"
 #include "type_id.h"
@@ -2628,8 +2627,7 @@ drop_locations game_menus::inv::smoke_food( Character &you, units::volume total_
 
 game_menus::inv::compare_item_menu::compare_item_menu( const item &first, const item &second,
         const std::string &confirm_message ) :
-    cataimgui::window( "compare", ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoNavInputs ),
+    rml_ui::window( std::string() ),
     first( first ),
     second( second ),
     confirm_message( confirm_message )
@@ -2640,65 +2638,39 @@ game_menus::inv::compare_item_menu::compare_item_menu( const item &first, const 
     }
     ctxt.register_action( "QUIT" );
     ctxt.register_navigate_ui_list();
+    // For the buttons
+    ctxt.register_action( "SELECT" );
     ctxt.set_timeout( 10 );
 
     // todo: regen info when toggling language?
     first.info( true, first_info );
     second.info( true, second_info );
-}
 
-static void draw_column( const std::string &label, const ImVec2 &size, const item &it,
-                         std::vector<iteminfo> &first, std::vector<iteminfo> &second, cataimgui::scroll &s )
-{
-    if( ImGui::BeginChild( label.c_str(), size ) ) {
-        cataimgui::TextColoredParagraph( c_light_gray, it.tname() );
-        ImGui::NewLine();
+    // The items side by side, each compared to the other
+    const auto column = []( const item & it, const std::vector<iteminfo> &info,
+    const std::vector<iteminfo> &other ) {
+        std::string rml = "<p>" + rml_ui::markup_to_rml( it.tname(), c_light_gray ) + "</p>";
         if( it.tname().find( it.type_name() ) == std::string::npos ) {
-            cataimgui::TextColoredParagraph( c_light_gray, it.type_name() );
-            ImGui::NewLine();
+            rml += "<p>" + rml_ui::markup_to_rml( it.type_name(), c_light_gray ) + "</p>";
         }
-        ImGui::NewLine();
-        cataimgui::set_scroll( s );
-        display_item_info( first, second );
-    }
-    ImGui::EndChild();
+        return rml + "<div class=\"gap\"></div>" + item_info_rml( info, other );
+    };
+    set_body_scrolls( false );
+    set_body( "<div class=\"panes\"><div id=\"compare-left\" class=\"pane pre\">" +
+              column( first, first_info, second_info ) +
+              "</div><div id=\"compare-right\" class=\"pane pre\">" +
+              column( second, second_info, first_info ) + "</div></div>" );
 }
 
-void game_menus::inv::compare_item_menu::draw_controls()
+void game_menus::inv::compare_item_menu::on_redraw()
 {
-    float half_width = ImGui::GetContentRegionAvail().x / 2;
-    float height = ImGui::GetContentRegionAvail().y;
-    ImGuiStyle &style = ImGui::GetStyle();
-    float spacing_x = style.ItemSpacing.x;
-    float top_y = ImGui::GetCursorPosY();
-    float confirm_height = confirm_message.empty() ? 0.f : ImGui::GetFrameHeightWithSpacing();
-
-    // cataimgui::set_scroll resets scroll, so we need a copy for parallel scrolling
-    // not ideal, but this is such a special use case it's probably not worth changing
-    // todo: also synchronize scrolling when using mouse wheel/dragging scroll bar?
-    cataimgui::scroll s_copy = s;
-
-    draw_column( "compare_left", ImVec2( half_width - spacing_x, height - confirm_height ), first,
-                 first_info, second_info, s );
-    ImGui::SetCursorPos( { half_width + spacing_x, top_y } );
-    draw_column( "compare_right", ImVec2( half_width - spacing_x, height - confirm_height ), second,
-                 second_info, first_info, s_copy );
-
+    set_size( "100%", "100%" );
     if( !confirm_message.empty() ) {
-        ImGui::AlignTextToFramePadding();
-        cataimgui::TextColoredParagraph( c_white, confirm_message );
-        // todo: spacing should be part of paragraph so it behaves the same as other elements
-        ImGui::Spacing();
-        ImGui::SameLine();
-        action_button( "CONFIRM", ctxt.get_button_text( "CONFIRM" ) );
-        ImGui::SameLine();
-        action_button( "QUIT", ctxt.get_button_text( "QUIT" ) );
+        set_footer( "<div class=\"hbox\" style=\"align-items: center;\"><div class=\"grow\">" +
+                    rml_ui::markup_to_rml( confirm_message, c_white ) + "</div>" +
+                    rml_ui::action_button_rml( ctxt, "CONFIRM" ) +
+                    rml_ui::action_button_rml( ctxt, "QUIT" ) + "</div>" );
     }
-}
-
-cataimgui::bounds game_menus::inv::compare_item_menu::get_bounds()
-{
-    return { 0.f, 0.f, ImGui::GetMainViewport()->Size.x, ImGui::GetMainViewport()->Size.y };
 }
 
 bool game_menus::inv::compare_item_menu::show()
@@ -2706,24 +2678,30 @@ bool game_menus::inv::compare_item_menu::show()
     while( true ) {
         ui_manager::redraw();
 
-        std::string action = has_button_action() ? get_button_action() : ctxt.handle_input();
+        const std::string action = resolve_click( ctxt.handle_input() );
 
+        // Both columns scroll together; the wheel scrolls the one it is over
+        std::optional<rml_ui::scroll> how;
         if( action == "UP" ) {
-            s = cataimgui::scroll::line_up;
+            how = rml_ui::scroll::line_up;
         } else if( action == "DOWN" ) {
-            s = cataimgui::scroll::line_down;
+            how = rml_ui::scroll::line_down;
         } else if( action == "PAGE_UP" ) {
-            s = cataimgui::scroll::page_up;
+            how = rml_ui::scroll::page_up;
         } else if( action == "PAGE_DOWN" ) {
-            s = cataimgui::scroll::page_down;
+            how = rml_ui::scroll::page_down;
         } else if( action == "HOME" ) {
-            s = cataimgui::scroll::begin;
+            how = rml_ui::scroll::top;
         } else if( action == "END" ) {
-            s = cataimgui::scroll::end;
+            how = rml_ui::scroll::bottom;
         } else if( action == "CONFIRM" ) {
             return true;
         } else if( action == "QUIT" ) {
             return false;
+        }
+        if( how ) {
+            scroll( "compare-left", *how );
+            scroll( "compare-right", *how );
         }
     }
 

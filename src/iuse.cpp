@@ -4988,8 +4988,8 @@ std::optional<int> iuse::spray_can( Character *p, item *it, const tripoint_bub_m
 std::optional<int> iuse::handle_ground_graffiti( Character &p, item *it, const std::string &prefix,
         map *here, const tripoint_bub_ms &where )
 {
-    string_input_popup_imgui popup( 50,
-                                    here->has_graffiti_at( where ) ? here->graffiti_at( where ) : std::string() );
+    text_input_popup popup( 50,
+                            here->has_graffiti_at( where ) ? here->graffiti_at( where ) : std::string() );
     popup.set_description( prefix + " " + _( "(To delete, clear the text and confirm)" ) );
     popup.set_identifier( "graffiti" );
     std::string message = popup.query();

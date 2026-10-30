@@ -57,7 +57,6 @@
 #include "butchery_requirements.h"
 #include "butchery.h"
 #include "cached_options.h"
-#include "cata_imgui.h"
 #include "cata_path.h"
 #include "cata_scope_helpers.h"
 #include "cata_utility.h"
@@ -116,7 +115,6 @@
 #include "get_version.h"
 #include "harvest.h"
 #include "iexamine.h"
-#include "imgui/imgui_stdlib.h"
 #include "init.h"
 #include "input.h"
 #include "input_context.h"
@@ -185,6 +183,7 @@
 #include "recipe_dictionary.h"
 #include "regional_settings.h"
 #include "ret_val.h"
+#include "rml_ui.h"
 #include "rng.h"
 #include "safemode_ui.h"
 #include "scenario.h"
@@ -207,6 +206,7 @@
 #include "trap.h"
 #include "ui_helpers.h"
 #include "ui_extended_description.h"
+#include "ui_iteminfo.h"
 #include "ui_manager.h"
 #include "uilist.h"
 #include "uistate.h"
@@ -2047,7 +2047,7 @@ static hint_rating rate_action_insert( const avatar &you, const item_location &l
 }
 
 /* item submenu for 'i' and '/'
-* It use draw_item_info to draw item info and action menu
+* It shows the item's info in an iteminfo_window, beside the action menu
 *
 * @param locThisItem the item
 * @param iStartX Left coordinate of the item info window
@@ -2074,14 +2074,12 @@ int game::inventory_item_menu( item_location locThisItem,
         std::vector<iteminfo> vDummy;
         item_info_data data;
         int iScrollPos = 0;
-        int iScrollHeight = 0;
         uilist action_menu;
-        std::unique_ptr<ui_adaptor> ui;
+        std::unique_ptr<iteminfo_window> info_window;
 
         bool exit = false;
         bool first_execution = true;
         static int lang_version = detail::get_current_language_version();
-        catacurses::window w_info;
         shared_ptr_fast<uilist_impl> ui_impl;
         do {
             //lang check here is needed to redraw the menu when using "Toggle language to English" option
@@ -2094,7 +2092,7 @@ int game::inventory_item_menu( item_location locThisItem,
                 action_menu.allow_anykey = true;
                 float popup_width = 0.0;
                 const auto addentry = [&]( const char key, const std::string & text, const hint_rating hint ) {
-                    popup_width = std::max( popup_width, ImGui::CalcTextSize( text.c_str() ).x );
+                    popup_width = std::max( popup_width, static_cast<float>( utf8_width( text, true ) ) );
                     // The char is used as retval from the uilist *and* as hotkey.
                     action_menu.addentry( key, true, key, text );
                     auto &entry = action_menu.entries.back();
@@ -2147,8 +2145,8 @@ int game::inventory_item_menu( item_location locThisItem,
 
                 oThisItem.info( true, vThisItem );
 
-                popup_width += ImGui::CalcTextSize( " [X] " ).x + 2 * ( ImGui::GetStyle().WindowPadding.x +
-                               ImGui::GetStyle().WindowBorderSize );
+                // The hotkey column, and the menu's padding either side, in terminal cells
+                popup_width += utf8_width( " [X] " ) + 4;
                 // Filtering isn't needed, the number of entries is manageable.
                 action_menu.filtering = false;
                 // Default menu border color is different, this matches the border of the item info window.
@@ -2157,36 +2155,26 @@ int game::inventory_item_menu( item_location locThisItem,
                 data = item_info_data( oThisItem.tname(), oThisItem.type_name(), vThisItem, vDummy, iScrollPos );
                 data.without_getch = true;
 
-                ui = std::make_unique<ui_adaptor>();
                 float x = 0.0;
-                ui->on_screen_resize( [&]( ui_adaptor & ui ) {
-                    w_info = catacurses::newwin( TERMY, iWidth(), point( iStartX(), 0 ) );
-                    iScrollHeight = TERMY - 2;
-                    ui.position_from_window( w_info );
-
-                    switch( position ) {
-                        default:
-                        case RIGHT_TERMINAL_EDGE:
-                            x = 0.0;
-                            break;
-                        case LEFT_OF_INFO:
-                            x = ( iStartX() * ImGui::CalcTextSize( "X" ).x ) - popup_width;
-                            break;
-                        case RIGHT_OF_INFO:
-                            x = ( iStartX() + iWidth() ) * ImGui::CalcTextSize( "X" ).x;
-                            break;
-                        case LEFT_TERMINAL_EDGE:
-                            x = ImGui::GetMainViewport()->Size.x - popup_width;
-                            break;
-                    }
-                    action_menu.desired_bounds = { x, 0.0, popup_width, -1.0 };
-                    action_menu.reposition();
-                } );
-                ui->mark_resize();
-
-                ui->on_redraw( [&]( const ui_adaptor & ) {
-                    draw_item_info( w_info, data );
-                } );
+                switch( position ) {
+                    default:
+                    case RIGHT_TERMINAL_EDGE:
+                        x = 0.0;
+                        break;
+                    case LEFT_OF_INFO:
+                        x = iStartX() - popup_width;
+                        break;
+                    case RIGHT_OF_INFO:
+                        x = iStartX() + iWidth();
+                        break;
+                    case LEFT_TERMINAL_EDGE:
+                        x = TERMX - popup_width;
+                        break;
+                }
+                action_menu.desired_bounds = { x, 0.0, popup_width, -1.0 };
+                action_menu.reposition();
+                // Opened before the menu queries, so the menu is above it
+                info_window = std::make_unique<iteminfo_window>( data, point( iStartX(), 0 ), iWidth(), TERMY );
 
                 action_menu.additional_actions = {
                     { "RIGHT", translation() }
@@ -2216,7 +2204,7 @@ int game::inventory_item_menu( item_location locThisItem,
 
             if( action_menu.ret != UILIST_WAIT_INPUT && action_menu.ret != UILIST_UNBOUND ) {
                 exit = true;
-                ui = nullptr;
+                info_window = nullptr;
             }
 
             action_menu.set_hide( true );
@@ -2341,15 +2329,13 @@ int game::inventory_item_menu( item_location locThisItem,
                     game_menus::inv::reassign_letter( oThisItem );
                     break;
                 case KEY_PPAGE:
-                    iScrollPos -= iScrollHeight;
-                    if( ui ) {
-                        ui->invalidate_ui();
+                    if( info_window ) {
+                        info_window->scroll_body( rml_ui::scroll::page_up );
                     }
                     break;
                 case KEY_NPAGE:
-                    iScrollPos += iScrollHeight;
-                    if( ui ) {
-                        ui->invalidate_ui();
+                    if( info_window ) {
+                        info_window->scroll_body( rml_ui::scroll::page_down );
                     }
                     break;
                 case '+':
@@ -6212,7 +6198,7 @@ look_around_result game::look_around(
             creature_tracker &creatures = get_creature_tracker();
             monster *const mon = creatures.creature_at<monster>( lp, true );
             if( mon ) {
-                string_input_popup_imgui popup( 50, mon->nickname );
+                text_input_popup popup( 50, mon->nickname );
                 popup.set_label( _( "Nickname:" ) );
                 mon->nickname = popup.query();
             }

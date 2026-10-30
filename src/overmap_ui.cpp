@@ -22,7 +22,6 @@
 #include "basecamp.h"
 #include "calendar.h"
 #include "cata_assert.h"
-#include "cata_imgui.h"
 #include "cata_utility.h"
 #include "cata_variant.h"
 #include "catacharset.h"
@@ -43,7 +42,6 @@
 #include "generic_factory.h"
 #include "horde_entity.h"
 #include "horde_map.h"
-#include "imgui/imgui.h"
 #include "input_context.h"
 #include "input_enums.h"
 #include "json.h"
@@ -69,13 +67,13 @@
 #include "overmapbuffer.h"
 #include "point.h"
 #include "regional_settings.h"
+#include "rml_markup.h"
 #include "rng.h"
 #include "sdltiles.h" // IWYU pragma: keep
 #include "simple_pathfinding.h"
 #include "sounds.h"
 #include "string_formatter.h"
 #include "string_input_popup.h"
-#include "text.h"
 #include "translation.h"
 #include "translations.h"
 #include "type_id.h"
@@ -124,71 +122,75 @@ static const int npm_width = 3;
 /** Note preview map height without borders. Odd number. */
 static const int npm_height = 3;
 
-//forwards to cataimgui::draw_colored_text with automatic wrapping
-void overmap_sidebar::draw_sidebar_text( const std::string_view &original_text,
-        const nc_color &color )
+std::string overmap_sidebar::sidebar_text_rml( std::string_view text, const nc_color &color )
 {
-    cataimgui::TextColoredParagraph( color, original_text );
-    ImGui::NewLine();
+    return "<div class=\"pre\">" + rml_ui::markup_to_rml( text, color ) + "</div>";
 }
 
 overmap_sidebar::overmap_sidebar( overmap_ui::overmap_draw_data_t &data,
                                   const input_context &ictxt ) :
-    cataimgui::window( _( "OVERMAP_SIDEBAR" ),
-                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoNav ),
+    rml_ui::window( std::string() ),
     draw_data( data ), ictxt( ictxt )
 {
-    init();
+    set_close_action( std::string() );
 }
 
-void overmap_sidebar::init()
+bool overmap_sidebar::handle_click()
 {
-}
-
-void overmap_sidebar::draw_controls()
-{
-    // This info is always shown at the top of the sidebar
-    draw_tile_info();
-    ImGui::Separator();
-    draw_settings_info();
-    ImGui::Separator();
-    draw_mission_info();
-    ImGui::Separator();
-
-    // This info can be scrolled through
+    if( !hovering( "window" ) ) {
+        return false;
+    }
     overmap_sidebar_uistate &om_sidebar_state = uistate.overmap_sidebar_state;
-    ImGui::BeginChild( "Overmap Sidebar Scrolling Content", {0, 0}, 0, ImGuiWindowFlags_NoNav );
-    bool &quickref = om_sidebar_state.quickref_header;
-    ImGui::SetNextItemOpen( quickref );
-    quickref = ImGui::CollapsingHeader( _( "Quick Reference" ) );
-    if( quickref ) {
-        draw_quick_reference();
-    };
-    bool &layers = om_sidebar_state.layers_header;
-    ImGui::SetNextItemOpen( layers );
-    layers = ImGui::CollapsingHeader( _( "Layers" ) );
-    if( layers ) {
-        draw_layer_info();
+    const std::string clicked = hovered_attribute( "data-action" );
+    if( clicked == "QUICKREF" ) {
+        om_sidebar_state.quickref_header = !om_sidebar_state.quickref_header;
+    } else if( clicked == "LAYERS" ) {
+        om_sidebar_state.layers_header = !om_sidebar_state.layers_header;
+    } else if( clicked == "DEBUG" ) {
+        om_sidebar_state.debug_header = !om_sidebar_state.debug_header;
     }
-
-    if( debug_mode || draw_data.debug_editor ) {
-        bool &debug_info = om_sidebar_state.debug_header;
-        ImGui::SetNextItemOpen( debug_info );
-        debug_info = ImGui::CollapsingHeader( _( "Debug" ) );
-        if( debug_info ) {
-            draw_debug();
-        }
-    }
-    ImGui::EndChild();
+    return true;
 }
 
-void overmap_sidebar::print_hint( const std::string &action, nc_color color )
+void overmap_sidebar::on_redraw()
 {
-    draw_sidebar_text( string_format( _( "%s - %s" ),
-                                      ictxt.get_desc( action ), ictxt.get_action_name( action ) ), color );
+    // OVERMAP_LEGEND_WIDTH is our width in character cells in the
+    // old-school terminal emulation, even though the overmap tiles
+    // are a different size entirely.
+    set_position( rml_ui::term_width( TERMX - OVERMAP_LEGEND_WIDTH ), "0" );
+    set_size( rml_ui::term_width( OVERMAP_LEGEND_WIDTH ), "100%" );
+
+    // This info is always shown at the top of the sidebar
+    set_header( tile_info_rml() + "<div class=\"sep\"></div>" + settings_info_rml() +
+                "<div class=\"sep\"></div>" + mission_info_rml() + "<div class=\"sep\"></div>" );
+
+    // This info can be scrolled through. Clicking a heading opens or closes
+    // its section; see handle_click().
+    const overmap_sidebar_uistate &om_sidebar_state = uistate.overmap_sidebar_state;
+    const auto section = []( const std::string & id, const std::string & title, bool open,
+    const std::string & content ) {
+        return "<div class=\"section-head\" data-action=\"" + id + "\">" +
+               std::string( open ? "- " : "+ " ) + rml_ui::escape_rml( title ) + "</div>" +
+               ( open ? content : std::string() );
+    };
+    std::string body = section( "QUICKREF", _( "Quick Reference" ), om_sidebar_state.quickref_header,
+                                om_sidebar_state.quickref_header ? quick_reference_rml() : std::string() ) +
+                       section( "LAYERS", _( "Layers" ), om_sidebar_state.layers_header,
+                                om_sidebar_state.layers_header ? layer_info_rml() : std::string() );
+    if( debug_mode || draw_data.debug_editor ) {
+        body += section( "DEBUG", _( "Debug" ), om_sidebar_state.debug_header,
+                         om_sidebar_state.debug_header ? debug_rml() : std::string() );
+    }
+    set_body( body );
 }
 
-void overmap_sidebar::draw_tile_info()
+std::string overmap_sidebar::hint_rml( const std::string &action, nc_color color ) const
+{
+    return sidebar_text_rml( string_format( _( "%s - %s" ),
+                                            ictxt.get_desc( action ), ictxt.get_action_name( action ) ), color );
+}
+
+std::string overmap_sidebar::tile_info_rml() const
 {
     const tripoint_abs_omt &cursor_pos = draw_data.cursor_pos;
 
@@ -203,20 +205,22 @@ void overmap_sidebar::draw_tile_info()
                              player_character.overmap_modified_sight_range( g->light_level( player_character.posz() ) ) :
                              100;
 
+    std::string rml;
     // Draw text describing the overmap tile at the cursor position.
     if( center_vision != om_vision_level::unseen ) {
         const oter_t &ter = overmap_buffer.ter( cursor_pos ).obj();
         const auto sm_pos = project_to<coords::sm>( cursor_pos );
 
+        std::string symbol;
         if( ter.blends_adjacent( center_vision ) ) {
             oter_vision::blended_omt info = oter_vision::get_blended_omt_info( cursor_pos, center_vision );
-            draw_sidebar_text( info.sym, info.color );
+            symbol = rml_ui::markup_to_rml( info.sym, info.color );
         } else {
-            draw_sidebar_text( ter.get_symbol( center_vision ), ter.get_color( center_vision ) );
+            symbol = rml_ui::markup_to_rml( ter.get_symbol( center_vision ), ter.get_color( center_vision ) );
         }
-
-        ImGui::SameLine();
-        overmap_buffer.display_description_at( sm_pos, true );
+        // The symbol, then what is there, on one line
+        rml += "<div class=\"pre\">" + symbol + " " +
+               rml_ui::markup_to_rml( overmap_buffer.get_description_at( sm_pos, true ) ) + "</div>";
         if( center_vision != om_vision_level::full ) {
             std::string vision_level_string;
             switch( center_vision ) {
@@ -233,16 +237,12 @@ void overmap_sidebar::draw_tile_info()
                     vision_level_string = _( "This is a bug!" );
                     break;
             }
-            draw_sidebar_text( vision_level_string, c_light_gray );
+            rml += sidebar_text_rml( vision_level_string, c_light_gray );
         }
     } else {
         const oter_t &ter = oter_unexplored.obj();
-
-        draw_sidebar_text( ter.get_symbol( om_vision_level::full ) + " ",
-                           ter.get_color( om_vision_level::full ) );
-        ImGui::SameLine();
-        draw_sidebar_text( ter.get_name( om_vision_level::full ),
-                           ter.get_color( om_vision_level::full ) );
+        rml += sidebar_text_rml( ter.get_symbol( om_vision_level::full ) + " " +
+                                 ter.get_name( om_vision_level::full ), ter.get_color( om_vision_level::full ) );
     }
 
     // Describe the weather conditions on the following line, if weather is visible
@@ -250,71 +250,64 @@ void overmap_sidebar::draw_tile_info()
         const bool weather_is_visible = uistate.overmap_debug_weather ||
                                         player_character.overmap_los( cursor_pos, sight_points * 2 );
         if( weather_is_visible ) {
-            draw_sidebar_text( _( "Weather: " ), c_white );
-            ImGui::SameLine();
-            draw_sidebar_text( overmap_ui::get_weather_at_point( cursor_pos )->name.translated(),
-                               overmap_ui::get_weather_at_point( cursor_pos )->color );
+            rml += "<div class=\"pre\">" + rml_ui::colored_rml( _( "Weather: " ), c_white ) +
+                   rml_ui::markup_to_rml( overmap_ui::get_weather_at_point( cursor_pos )->name.translated(),
+                                          overmap_ui::get_weather_at_point( cursor_pos )->color ) + "</div>";
         } else {
-            draw_sidebar_text( _( "# Weather unknown" ), c_dark_gray );
+            rml += sidebar_text_rml( _( "# Weather unknown" ), c_dark_gray );
         }
     } else {
-        draw_sidebar_text( _( "Not viewing weather" ), c_dark_gray );
+        rml += sidebar_text_rml( _( "Not viewing weather" ), c_dark_gray );
     }
 
     const std::string coords = display::overmap_position_text( cursor_pos );
-    draw_sidebar_text( coords, c_red );
+    return rml + sidebar_text_rml( coords, c_red );
 }
 
-void overmap_sidebar::draw_settings_info()
+std::string overmap_sidebar::settings_info_rml() const
 {
-    print_hint( "TOGGLE_FAST_SCROLL", uistate.overmap_fast_scroll ? c_pink : c_magenta );
-    print_hint( "TOGGLE_FAST_TRAVEL", uistate.overmap_fast_travel ? c_pink : c_magenta );
+    return hint_rml( "TOGGLE_FAST_SCROLL", uistate.overmap_fast_scroll ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_FAST_TRAVEL", uistate.overmap_fast_travel ? c_pink : c_magenta );
 }
 
-void overmap_sidebar::draw_quick_reference()
+std::string overmap_sidebar::quick_reference_rml() const
 {
-    draw_sidebar_text( _( "Use movement keys to pan." ), c_magenta );
-    draw_sidebar_text( string_format( _( "Press %s to preview efficient route." ),
-                                      ictxt.get_desc( "CHOOSE_DESTINATION" ) ), c_magenta );
-    draw_sidebar_text( string_format( _( "Press %s to preview direct route." ),
-                                      ictxt.get_desc( "CHOOSE_DESTINATION_DIRECT" ) ), c_magenta );
-    draw_sidebar_text( _( "Press route button again to confirm." ), c_magenta );
-    print_hint( "LEVEL_UP" );
-    print_hint( "LEVEL_DOWN" );
-    print_hint( "look" );
-    print_hint( "CENTER" );
-    print_hint( "CENTER_ON_DESTINATION" );
-    print_hint( "GO_TO_DESTINATION" );
-    print_hint( "SEARCH" );
-    print_hint( "CREATE_NOTE" );
-    print_hint( "DELETE_NOTE" );
-    print_hint( "MARK_DANGER" );
-    print_hint( "LIST_NOTES" );
-    print_hint( "CREATE_POINT_OF_INTEREST" );
-    print_hint( "MISSIONS" );
+    std::string rml = sidebar_text_rml( _( "Use movement keys to pan." ), c_magenta );
+    rml += sidebar_text_rml( string_format( _( "Press %s to preview efficient route." ),
+                                            ictxt.get_desc( "CHOOSE_DESTINATION" ) ), c_magenta );
+    rml += sidebar_text_rml( string_format( _( "Press %s to preview direct route." ),
+                                            ictxt.get_desc( "CHOOSE_DESTINATION_DIRECT" ) ), c_magenta );
+    rml += sidebar_text_rml( _( "Press route button again to confirm." ), c_magenta );
+    for( const char *action : {
+             "LEVEL_UP", "LEVEL_DOWN", "look", "CENTER", "CENTER_ON_DESTINATION", "GO_TO_DESTINATION",
+             "SEARCH", "CREATE_NOTE", "DELETE_NOTE", "MARK_DANGER", "LIST_NOTES",
+             "CREATE_POINT_OF_INTEREST", "MISSIONS"
+         } ) {
+        rml += hint_rml( action );
+    }
+    return rml;
 }
 
-void overmap_sidebar::draw_layer_info()
+std::string overmap_sidebar::layer_info_rml() const
 {
-
     const tripoint_abs_omt &cursor_pos = draw_data.cursor_pos;
     const bool show_overlays = uistate.overmap_show_overlays || uistate.overmap_blinking;
     const bool is_explored = overmap_buffer.is_explored( cursor_pos );
 
-    print_hint( "TOGGLE_MAP_NOTES", uistate.overmap_show_map_notes ? c_pink : c_magenta );
-    print_hint( "TOGGLE_BLINKING", uistate.overmap_blinking ? c_pink : c_magenta );
-    print_hint( "TOGGLE_OVERLAYS", show_overlays ? c_pink : c_magenta );
-    print_hint( "TOGGLE_CITY_LABELS", uistate.overmap_show_city_labels ? c_pink : c_magenta );
-    print_hint( "TOGGLE_HORDES", uistate.overmap_show_hordes ? c_pink : c_magenta );
-    print_hint( "TOGGLE_MAP_REVEALS", uistate.overmap_show_revealed_omts ? c_pink : c_magenta );
-    print_hint( "TOGGLE_EXPLORED", is_explored ? c_pink : c_magenta );
-    print_hint( "TOGGLE_FOREST_TRAILS", uistate.overmap_show_forest_trails ? c_pink : c_magenta );
-    print_hint( "TOGGLE_OVERMAP_WEATHER",
-                !get_map().is_outside( get_player_character().pos_bub() ) ? c_dark_gray :
-                uistate.overmap_visible_weather ? c_pink : c_magenta );
+    return hint_rml( "TOGGLE_MAP_NOTES", uistate.overmap_show_map_notes ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_BLINKING", uistate.overmap_blinking ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_OVERLAYS", show_overlays ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_CITY_LABELS", uistate.overmap_show_city_labels ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_HORDES", uistate.overmap_show_hordes ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_MAP_REVEALS", uistate.overmap_show_revealed_omts ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_EXPLORED", is_explored ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_FOREST_TRAILS", uistate.overmap_show_forest_trails ? c_pink : c_magenta ) +
+           hint_rml( "TOGGLE_OVERMAP_WEATHER",
+                     !get_map().is_outside( get_player_character().pos_bub() ) ? c_dark_gray :
+                     uistate.overmap_visible_weather ? c_pink : c_magenta );
 }
 
-void overmap_sidebar::draw_debug()
+std::string overmap_sidebar::debug_rml() const
 {
     const tripoint_abs_omt &cursor_pos = draw_data.cursor_pos;
     avatar &player_character = get_avatar();
@@ -323,43 +316,43 @@ void overmap_sidebar::draw_debug()
     om_vision_level center_vision = has_debug_vision ? om_vision_level::full :
                                     overmap_buffer.seen( cursor_pos );
 
+    std::string rml;
     if( debug_mode ) {
-        print_hint( "TOGGLE_LAND_USE_CODES", uistate.overmap_show_land_use_codes ? c_pink : c_magenta );
+        rml += hint_rml( "TOGGLE_LAND_USE_CODES", uistate.overmap_show_land_use_codes ? c_pink : c_magenta );
     }
     if( draw_data.debug_editor ) {
-        print_hint( "REVEAL_MAP", c_light_blue );
-        print_hint( "LONG_TELEPORT", c_light_blue );
-        print_hint( "PLACE_SPECIAL", c_light_blue );
-        print_hint( "PLACE_TERRAIN", c_light_blue );
-        print_hint( "SET_SPECIAL_ARGS", c_light_blue );
-        print_hint( "MODIFY_HORDE", c_light_blue );
-        print_hint( "PRINT_NOISE_MAPS", c_light_blue );
+        for( const char *action : {
+                 "REVEAL_MAP", "LONG_TELEPORT", "PLACE_SPECIAL", "PLACE_TERRAIN", "SET_SPECIAL_ARGS",
+                 "MODIFY_HORDE", "PRINT_NOISE_MAPS"
+             } ) {
+            rml += hint_rml( action, c_light_blue );
+        }
     }
 
     if( ( draw_data.debug_editor && center_vision != om_vision_level::unseen ) ||
         draw_data.debug_info ) {
-        draw_sidebar_text( string_format( "current dimension: %s",
-                                          g->get_dimension_prefix().str() ), c_white );
-        draw_sidebar_text( string_format( "abs_omt: %s", cursor_pos.to_string() ), c_white );
+        rml += sidebar_text_rml( string_format( "current dimension: %s",
+                                                g->get_dimension_prefix().str() ), c_white );
+        rml += sidebar_text_rml( string_format( "abs_omt: %s", cursor_pos.to_string() ), c_white );
         const oter_t &oter = overmap_buffer.ter( cursor_pos ).obj();
-        draw_sidebar_text( string_format( "oter: %s (rot %d)", oter.id.str(),
-                                          oter.get_rotation() ), c_white );
-        draw_sidebar_text( string_format( "oter_type: %s", oter.get_type_id().str() ), c_white );
+        rml += sidebar_text_rml( string_format( "oter: %s (rot %d)", oter.id.str(),
+                                                oter.get_rotation() ), c_white );
+        rml += sidebar_text_rml( string_format( "oter_type: %s", oter.get_type_id().str() ), c_white );
         // tileset ids come with a prefix that must be stripped
-        draw_sidebar_text( string_format( "tileset id: '%s'",
-                                          oter.get_tileset_id( center_vision ).substr( 3 ) ), c_white );
+        rml += sidebar_text_rml( string_format( "tileset id: '%s'",
+                                                oter.get_tileset_id( center_vision ).substr( 3 ) ), c_white );
         std::vector<oter_id> predecessors = overmap_buffer.predecessors( cursor_pos );
         if( !predecessors.empty() ) {
-            draw_sidebar_text( "predecessors:", c_white );
+            rml += sidebar_text_rml( "predecessors:", c_white );
             for( auto pred = predecessors.rbegin(); pred != predecessors.rend(); ++pred ) {
-                draw_sidebar_text( string_format( "- %s", pred->id().str() ), c_white );
+                rml += sidebar_text_rml( string_format( "- %s", pred->id().str() ), c_white );
             }
         }
 
         auto print_arguments = [&]( std::unordered_map<std::string, cata_variant> &map ) {
             for( const std::pair<const std::string, cata_variant> &arg : map ) {
-                draw_sidebar_text( string_format( "%s = %s", arg.first, arg.second.get_string() ),
-                                   c_white );
+                rml += sidebar_text_rml( string_format( "%s = %s", arg.first, arg.second.get_string() ),
+                                         c_white );
             }
         };
         std::optional<mapgen_arguments> *args = overmap_buffer.mapgen_args( cursor_pos );
@@ -367,7 +360,7 @@ void overmap_sidebar::draw_debug()
             if( *args ) {
                 print_arguments( ( **args ).map );
             } else {
-                draw_sidebar_text( "Special scoped parameter values not set yet", c_yellow );
+                rml += sidebar_text_rml( "Special scoped parameter values not set yet", c_yellow );
             }
         }
         std::optional<mapgen_arguments> args_omt_stack =
@@ -378,8 +371,8 @@ void overmap_sidebar::draw_debug()
 
         for( cube_direction dir : all_enum_values<cube_direction>() ) {
             if( std::string *join = overmap_buffer.join_used_at( { cursor_pos, dir } ) ) {
-                draw_sidebar_text( string_format( "join %s: %s", io::enum_to_string( dir ), *join ),
-                                   c_white );
+                rml += sidebar_text_rml( string_format( "join %s: %s", io::enum_to_string( dir ), *join ),
+                                         c_white );
             }
         }
 
@@ -392,79 +385,64 @@ void overmap_sidebar::draw_debug()
                 horde_size += horde->size();
                 for( std::pair<const tripoint_abs_ms, horde_entity> &entity : *horde ) {
                     const mtype *horde_type = entity.second.get_type();
-                    ImGui::Indent();
-                    draw_sidebar_text( string_format( "Species: %s", horde_type->nname() ), c_blue );
-                    draw_sidebar_text( string_format( "Interest: %d", entity.second.tracking_intensity ),
-                                       c_blue );
-                    draw_sidebar_text( string_format( "Target: %s",
-                                                      entity.second.destination.to_string() ), c_blue );
-                    ImGui::Unindent();
-                    //mvwprintz(wbar, desc_pos + point(0, line_number++), c_red, "x"); ???
+                    rml += "<div style=\"margin-left: 1em;\">" +
+                           sidebar_text_rml( string_format( "Species: %s", horde_type->nname() ), c_blue ) +
+                           sidebar_text_rml( string_format( "Interest: %d", entity.second.tracking_intensity ),
+                                             c_blue ) +
+                           sidebar_text_rml( string_format( "Target: %s",
+                                             entity.second.destination.to_string() ), c_blue ) + "</div>";
                 }
             }
-            draw_sidebar_text( string_format( "Horde, population: %d", horde_size ), c_white );
+            rml += sidebar_text_rml( string_format( "Horde, population: %d", horde_size ), c_white );
         }
     }
+    return rml;
 }
 
-void overmap_sidebar::draw_mission_info()
+std::string overmap_sidebar::mission_info_rml() const
 {
     const tripoint_abs_omt &cursor_pos = draw_data.cursor_pos;
     avatar &player_character = get_avatar();
     const tripoint_abs_omt target = player_character.get_active_mission_target();
     const bool has_target = !target.is_invalid();
 
-    if( has_target ) {
-        const int distance = rl_dist( cursor_pos, target );
-        std::string mission_name;
-        mission *current_mission = player_character.get_active_mission();
-
-        if( current_mission != nullptr ) {
-            mission_name = player_character.get_active_mission()->name();
-
-            draw_sidebar_text( _( "Current objective:" ), c_white );
-        } else {
-            mission_name = player_character.get_active_point_of_interest().text;
-
-            draw_sidebar_text( _( "Current Point of Interest:" ), c_white );
-        }
-        draw_sidebar_text( mission_name, c_light_blue );
-        const int above_below = target.z() - cursor_pos.z();
-        std::string msg;
-        if( above_below > 0 ) {
-            msg = _( "Above us" );
-        } else if( above_below < 0 ) {
-            msg = _( "Below us" );
-        }
-        // One OMT is 24 tiles across, at 1x1 meters each, so we can simply do number of OMTs * 24
-        units::length actual_distance = distance * 24_meter;
-        const std::string dir_arrow = direction_arrow( direction_from( cursor_pos.xy(), target.xy() ) );
-        //~Parenthesis is a real-world value for distance. Example string: "223 tiles (5.35km) ⇗"
-        const std::string distance_str = string_format( _( "%1$d tiles (%2$s) %3$s" ),
-                                         distance, length_to_string_approx( actual_distance ), dir_arrow );
-        draw_sidebar_text( string_format( _( "Distance: %s" ), distance_str ), c_white );
-        if( !msg.empty() ) {
-            draw_sidebar_text( msg, c_white );
-        }
-    } else {
-        draw_sidebar_text( _( "No mission selected." ), c_white );
+    if( !has_target ) {
+        return sidebar_text_rml( _( "No mission selected." ), c_white );
     }
-}
 
-cataimgui::bounds overmap_sidebar::get_bounds()
-{
-    float character_cell_width = static_cast<float>( fontwidth );
-    ImVec2 viewport = ImGui::GetMainViewport()->WorkSize;
-    // OVERMAP_LEGEND_WIDTH is our width in character cells in the
-    // old-school terminal emulation, even though the overmap tiles
-    // are a different size entirely.
-    float width = static_cast<float>( OVERMAP_LEGEND_WIDTH ) * character_cell_width;
-    float window_x_position = viewport.x - width;
-    return { window_x_position,
-             0,
-             viewport.x - window_x_position,
-             viewport.y
-           };
+    std::string rml;
+    const int distance = rl_dist( cursor_pos, target );
+    std::string mission_name;
+    mission *current_mission = player_character.get_active_mission();
+
+    if( current_mission != nullptr ) {
+        mission_name = player_character.get_active_mission()->name();
+
+        rml += sidebar_text_rml( _( "Current objective:" ), c_white );
+    } else {
+        mission_name = player_character.get_active_point_of_interest().text;
+
+        rml += sidebar_text_rml( _( "Current Point of Interest:" ), c_white );
+    }
+    rml += sidebar_text_rml( mission_name, c_light_blue );
+    const int above_below = target.z() - cursor_pos.z();
+    std::string msg;
+    if( above_below > 0 ) {
+        msg = _( "Above us" );
+    } else if( above_below < 0 ) {
+        msg = _( "Below us" );
+    }
+    // One OMT is 24 tiles across, at 1x1 meters each, so we can simply do number of OMTs * 24
+    units::length actual_distance = distance * 24_meter;
+    const std::string dir_arrow = direction_arrow( direction_from( cursor_pos.xy(), target.xy() ) );
+    //~Parenthesis is a real-world value for distance. Example string: "223 tiles (5.35km) ⇗"
+    const std::string distance_str = string_format( _( "%1$d tiles (%2$s) %3$s" ),
+                                     distance, length_to_string_approx( actual_distance ), dir_arrow );
+    rml += sidebar_text_rml( string_format( _( "Distance: %s" ), distance_str ), c_white );
+    if( !msg.empty() ) {
+        rml += sidebar_text_rml( msg, c_white );
+    }
+    return rml;
 }
 
 void overmap_sidebar_uistate::serialize( JsonOut &json ) const
@@ -2181,6 +2159,10 @@ static tripoint_abs_omt display()
             scroll_timeout = 33;
         }
         action = ictxt.handle_input( scroll_timeout );
+        // A click on the sidebar is its own, not the map's
+        if( action == "SELECT" && om_sidebar.handle_click() ) {
+            action.clear();
+        }
         if( !display_path.empty() ) {
             std::chrono::time_point<std::chrono::steady_clock> now = std::chrono::steady_clock::now();
             // We go faster per-tile the more we have to go

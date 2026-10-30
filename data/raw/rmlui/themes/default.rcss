@@ -1,0 +1,8 @@
+/*
+ * The default look: no overrides.
+ *
+ * A theme is an RCSS file attached to every RmlUi document after its own
+ * styles, so its rules win where they match as specifically. Pick one from
+ * the main menu under Settings, which copies it to config/rmlui_theme.rcss;
+ * your own go in config/custom_themes/.
+ */

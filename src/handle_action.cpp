@@ -926,7 +926,7 @@ static void haul()
             autohaul ? player_character.stop_autohaul() : player_character.start_autohaul();
             break;
         case 4: {
-            string_input_popup_imgui filter_popup( 50, player_character.hauling_filter );
+            text_input_popup filter_popup( 50, player_character.hauling_filter );
             filter_popup.set_label( _( "Filter:" ) );
             filter_popup.set_description( item_filter_rule_string( item_filter_type::FILTER ), c_white, true );
             filter_popup.set_identifier( "item_filter" );

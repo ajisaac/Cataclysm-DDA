@@ -27,7 +27,6 @@
 #include "cached_options.h"
 #include "calendar.h"
 #include "cata_assert.h"
-#include "cata_imgui.h"
 #include "cata_scope_helpers.h"
 #include "catacharset.h"
 #include "character.h"
@@ -37,7 +36,6 @@
 #include "enums.h"
 #include "game.h"
 #include "game_constants.h"
-#include "imgui/imgui.h"
 #include "input.h"
 #include "input_context.h"
 #include "inventory.h"
@@ -49,6 +47,7 @@
 #include "itype.h"
 #include "localized_comparator.h"
 #include "map.h"
+#include "mapdata.h"
 #include "messages.h"
 #include "options.h"
 #include "output.h"
@@ -58,8 +57,8 @@
 #include "point.h"
 #include "ret_val.h"
 #include "rml_markup.h"
+#include "rml_window.h"
 #include "string_formatter.h"
-#include "string_input_popup.h"
 #include "translations.h"
 #include "type_id.h"
 #include "uilist.h"
@@ -119,6 +118,22 @@ namespace
 {
 std::unique_ptr<advanced_inventory> advinv;
 } // namespace
+
+/** The window the advanced inventory is shown in; see advanced_inventory::redraw(). */
+class advanced_inv_window : public rml_ui::window
+{
+    public:
+        explicit advanced_inv_window( advanced_inventory &inv ) :
+            rml_ui::window( _( "Advanced Inventory Management" ), "advanced_inv.rml" ), inv( inv ) {}
+
+    protected:
+        void on_redraw() override {
+            inv.redraw();
+        }
+
+    private:
+        advanced_inventory &inv;
+};
 
 void create_advanced_inv()
 {
@@ -290,15 +305,13 @@ void advanced_inventory::init()
     }
 }
 
-void advanced_inventory::print_items( side p, bool active )
+std::string advanced_inventory::items_rml( side p, bool active )
 {
     map &here = get_map();
     advanced_inventory_pane &pane = panes[p];
     const auto &items = pane.items;
-    const catacurses::window &window = pane.window;
     const int index = pane.index;
     bool compact = TERMX <= 100;
-    pane.other_cont = -1;
     std::unordered_set<const item *> other_pane_conts;
     if( panes[-p + 1].container ) {
         item_location parent_recursive = panes[-p + 1].container;
@@ -309,13 +322,11 @@ void advanced_inventory::print_items( side p, bool active )
         }
     }
 
-    int columns = getmaxx( window );
-    std::string spaces( columns - 4, ' ' );
-
     nc_color norm = active ? c_white : c_dark_gray;
 
     Character &player_character = get_player_character();
     //print inventory's current and total weight + volume
+    std::string summary;
     if( pane.get_area() == AIM_INVENTORY || pane.get_area() == AIM_WORN ||
         ( pane.get_area() == AIM_CONTAINER && pane.container ) ) {
 
@@ -334,20 +345,15 @@ void advanced_inventory::print_items( side p, bool active )
             volume_carried = player_character.volume_capacity() - player_character.free_space();
             volume_capacity = player_character.volume_capacity();
         }
-        // align right, so calculate formatted head length
-        const std::string formatted_head = string_format( "%.1f/%.1f %s  %s/%s %s",
-                                           weight_carried, weight_capacity, weight_units(),
-                                           format_volume( volume_carried ),
-                                           format_volume( volume_capacity ),
-                                           volume_units_abbr() );
-        const int hrightcol = columns - 1 - utf8_width( formatted_head );
         nc_color color = weight_carried > weight_capacity ? c_red : c_light_green;
-        mvwprintz( window, point( hrightcol, 4 ), color, "%.1f", weight_carried );
-        wprintz( window, c_light_gray, "/%.1f %s  ", weight_capacity, weight_units() );
+        summary = rml_ui::colored_rml( string_format( "%.1f", weight_carried ), color ) +
+                  rml_ui::colored_rml( string_format( "/%.1f %s  ", weight_capacity, weight_units() ),
+                                       c_light_gray );
         color = volume_carried.value() > volume_capacity.value() ?
                 c_red : c_light_green;
-        wprintz( window, color, format_volume( volume_carried ) );
-        wprintz( window, c_light_gray, "/%s %s", format_volume( volume_capacity ), volume_units_abbr() );
+        summary += rml_ui::colored_rml( format_volume( volume_carried ), color ) +
+                   rml_ui::colored_rml( string_format( "/%s %s", format_volume( volume_capacity ),
+                                        volume_units_abbr() ), c_light_gray );
     } else {
         //print square's current and total weight + volume
         std::string formatted_head;
@@ -374,66 +380,62 @@ void advanced_inventory::print_items( side p, bool active )
                                             format_volume( maxvolume ),
                                             volume_units_abbr() );
         }
-        mvwprintz( window, point( columns - 1 - utf8_width( formatted_head ), 4 ), norm, formatted_head );
-    }
-
-    //print header row and determine max item name length
-    // Last printable column
-    const int lastcol = columns - 2;
-    const size_t name_startpos = compact ? 1 : 4;
-    const size_t src_startpos = lastcol - 18;
-    const size_t amt_startpos = lastcol - 15;
-    const size_t weight_startpos = lastcol - 10;
-    const size_t vol_startpos = lastcol - 4;
-    // Default name length
-    int max_name_length = amt_startpos - name_startpos - 1;
-
-    //~ Items list header (length type 1). Table fields length without spaces: amt - 4, weight - 5, vol - 4.
-    const int table_hdr_len1 = utf8_width( _( "amt weight vol" ) );
-    //~ Items list header (length type 2). Table fields length without spaces: src - 2, amt - 4, weight - 5, vol - 4.
-    const int table_hdr_len2 = utf8_width( _( "src amt weight vol" ) );
-
-    mvwprintz( window, point( compact ? 1 : 4, 5 ), c_light_gray, _( "Name (charges)" ) );
-    if( pane.get_area() == AIM_ALL && !compact ) {
-        mvwprintz( window, point( lastcol - table_hdr_len2 + 1, 5 ), c_light_gray,
-                   _( "src amt weight vol" ) );
-        // 1 for space
-        max_name_length = src_startpos - name_startpos - 1;
-    } else {
-        mvwprintz( window, point( lastcol - table_hdr_len1 + 1, 5 ), c_light_gray, _( "amt weight vol" ) );
+        summary = rml_ui::colored_rml( formatted_head, norm );
     }
 
     int pageStart = 0; // index of first item on current page
+    int cur_page = 0;
 
     advanced_inventory_pagination pagination( linesPerPage, pane );
-    if( !items.empty() ) {
-        // paginate up to the current item (to count pages)
-        for( int i = 0; i <= index; i++ ) {
-            const bool pagebreak = pagination.step( i );
-            if( pagebreak ) {
-                pageStart = i;
-            }
+    for( int i = 0; i < static_cast<int>( items.size() ); i++ ) {
+        const bool pagebreak = pagination.step( i );
+        if( i <= index && pagebreak ) {
+            pageStart = i;
+        }
+        if( i == index ) {
+            cur_page = pagination.page;
         }
     }
+    const int max_page = pagination.page;
 
+    std::string page_rml;
+    if( active ) {
+        page_rml = rml_ui::colored_rml( string_format( _( "[<] page %1$d of %2$d [>]" ), cur_page + 1,
+                                        max_page + 1 ), c_light_blue );
+    }
+    std::string rml = "<div class=\"hbox aim-info\"><div class=\"grow\">" + page_rml +
+                      "</div><div class=\"fixed\">" + summary + "</div></div>";
+
+    // The numbers are in a fixed-width font, so the header lines up with them
+    // as it did in the terminal.
+    //~ Items list header (length type 1). Table fields length without spaces: amt - 4, weight - 5, vol - 4.
+    std::string columns_header = _( "amt weight vol" );
+    if( pane.get_area() == AIM_ALL && !compact ) {
+        //~ Items list header (length type 2). Table fields length without spaces: src - 2, amt - 4, weight - 5, vol - 4.
+        columns_header = _( "src amt weight vol" );
+    }
+    rml += "<div class=\"line aim-row aim-titles\"><span class=\"aim-mark\"></span><span class=\"aim-name\">" +
+           rml_ui::colored_rml( _( "Name (charges)" ), c_light_gray ) + "</span><span class=\"aim-nums\">" +
+           rml_ui::colored_rml( columns_header, c_light_gray ) + "</span></div>";
+
+    rml += string_format( "<div class=\"aim-list\" style=\"height: %ddp;\">",
+                          static_cast<int>( linesPerPage * rml_ui::line_dp ) );
     pagination.reset_page();
     for( size_t i = pageStart; i < items.size(); i++ ) {
         const advanced_inv_listitem &sitem = items[i];
-        const int line = pagination.line;
-        int item_line = line;
-        if( pane.sortby == SORTBY_CATEGORY && pagination.new_category( sitem.cat ) ) {
-            // don't put category header at bottom of page
-            if( line == linesPerPage - 1 ) {
-                break;
-            }
-            // insert category header
-            mvwprintz( window, point( ( columns - utf8_width( sitem.cat->name_header() ) - 6 ) / 2, 6 + line ),
-                       c_cyan, "[%s]", sitem.cat->name_header() );
-            item_line = line + 1;
+        const bool category_header = pane.sortby == SORTBY_CATEGORY &&
+                                     pagination.new_category( sitem.cat );
+        if( pagination.line + ( category_header ? 2 : 1 ) > linesPerPage ) {
+            break; // page end
+        }
+        if( category_header ) {
+            rml += "<div class=\"line aim-cat\">" + rml_ui::colored_rml( string_format( "[%s]",
+                    sitem.cat->name_header() ), c_cyan ) + "</div>";
         }
 
         const item &it = *sitem.items.front();
         const bool selected = active && index == static_cast<int>( i );
+        const bool other_cont = !other_pane_conts.empty() && other_pane_conts.count( &it ) == 1;
 
         nc_color thiscolor;
         if( !active ) {
@@ -446,23 +448,14 @@ void advanced_inventory::print_items( side p, bool active )
         nc_color thiscolordark = c_dark_gray;
         nc_color print_color;
 
+        std::string row_class = "line aim-row";
         if( selected ) {
-            if( !other_pane_conts.empty() && other_pane_conts.count( &it ) == 1 ) {
-                pane.other_cont = item_line;
-                thiscolor = c_white_yellow;
-            } else {
-                thiscolor = inCategoryMode && pane.sortby == SORTBY_CATEGORY ? c_white_red : hilite( c_white );
-            }
-            thiscolordark = hilite( thiscolordark );
-            if( compact ) {
-                mvwprintz( window, point( 1, 6 + item_line ), thiscolor, "  %s", spaces );
-            } else {
-                mvwprintz( window, point( 1, 6 + item_line ), thiscolor, ">>%s", spaces );
-            }
-        } else if( !other_pane_conts.empty() && other_pane_conts.count( &it ) == 1 ) {
-            pane.other_cont = item_line;
-            thiscolor = i_brown;
-            mvwprintz( window, point( 1, 6 + item_line ), thiscolor, spaces );
+            row_class += inCategoryMode && pane.sortby == SORTBY_CATEGORY ? " selected aim-catmode" :
+                         " selected";
+        }
+        if( other_cont ) {
+            // The container the other pane is looking into
+            row_class += " aim-other";
         }
 
         std::string item_name;
@@ -496,14 +489,18 @@ void advanced_inventory::print_items( side p, bool active )
             item_name = string_format( "%s %s", it.symbol(), item_name );
         }
 
-        //print item name
-        trim_and_print( window, point( compact ? 1 : 4, 6 + item_line ), max_name_length, thiscolor,
-                        item_name );
+        std::string mark;
+        if( active && sitem.autopickup ) {
+            mark = rml_ui::colored_rml( ">", magenta_background( it.color_in_inventory() ) );
+        }
 
+        std::string nums;
         //print src column
         // TODO: specify this is coming from a vehicle!
         if( pane.get_area() == AIM_ALL && !compact ) {
-            mvwprintz( window, point( src_startpos, 6 + item_line ), thiscolor, squares[sitem.area].shortname );
+            const std::string &shortname = squares[sitem.area].shortname;
+            nums += rml_ui::colored_rml( shortname, thiscolor ) +
+                    std::string( std::max( 0, 2 - utf8_width( shortname ) ) + 1, ' ' );
         }
 
         //print "amount" column
@@ -512,9 +509,11 @@ void advanced_inventory::print_items( side p, bool active )
             print_color = thiscolor;
             if( it_amt > 9999 ) {
                 it_amt = 9999;
-                print_color = selected ? hilite( c_red ) : c_red;
+                print_color = c_red;
             }
-            mvwprintz( window, point( amt_startpos, 6 + item_line ), print_color, "%4d", it_amt );
+            nums += rml_ui::colored_rml( string_format( "%4d", it_amt ), print_color );
+        } else {
+            nums += "    ";
         }
 
         //print weight column
@@ -524,7 +523,7 @@ void advanced_inventory::print_items( side p, bool active )
 
         if( it_weight >= 1000.0 ) {
             if( it_weight >= 10000.0 ) {
-                print_color = selected ? hilite( c_red ) : c_red;
+                print_color = c_red;
                 it_weight = 9999.0;
             }
             w_precision = 0;
@@ -533,29 +532,28 @@ void advanced_inventory::print_items( side p, bool active )
         } else {
             w_precision = 2;
         }
-        mvwprintz( window, point( weight_startpos, 6 + item_line ), print_color, "%5.*f", w_precision,
-                   it_weight );
+        nums += " " + rml_ui::colored_rml( string_format( "%5.*f", w_precision, it_weight ), print_color );
 
         //print volume column
         bool it_vol_truncated = false;
         double it_vol_value = 0.0;
         std::string it_vol = format_volume( sitem.volume, 5, &it_vol_truncated, &it_vol_value );
         if( it_vol_truncated && it_vol_value > 0.0 ) {
-            print_color = selected ? hilite( c_red ) : c_red;
+            print_color = c_red;
         } else {
             print_color = sitem.volume.value() > 0 ? thiscolor : thiscolordark;
         }
-        mvwprintz( window, point( vol_startpos, 6 + item_line ), print_color, it_vol );
+        nums += " " + std::string( std::max( 0, 5 - utf8_width( it_vol ) ), ' ' ) +
+                rml_ui::colored_rml( it_vol, print_color );
 
-        if( active && sitem.autopickup ) {
-            mvwprintz( window, point( 1, 6 + item_line ), magenta_background( it.color_in_inventory() ),
-                       compact ? it.tname().substr( 0, 1 ) : ">" );
-        }
+        rml += "<div class=\"" + row_class + "\" data-row=\"" + std::to_string( i ) + "\">" +
+               "<span class=\"aim-mark\">" + mark + "</span><span class=\"aim-name\">" +
+               rml_ui::markup_to_rml( item_name, thiscolor ) + "</span><span class=\"aim-nums\">" + nums +
+               "</span></div>";
 
-        if( pagination.step( i ) ) { // page end
-            break;
-        }
+        pagination.step( i );
     }
+    return rml + "</div>";
 }
 
 namespace
@@ -698,13 +696,12 @@ struct advanced_inv_sorter {
 };
 } // namespace
 
-int advanced_inventory::print_header( advanced_inventory_pane &pane, aim_location sel )
+std::string advanced_inventory::location_keys_rml( advanced_inventory_pane &pane,
+        aim_location sel )
 {
-    const catacurses::window &window = pane.window;
     int area = pane.get_area();
-    int wwidth = getmaxx( window );
-    int ofs = wwidth - 25 - 2 - 14;
-    int min_x = wwidth;
+    // Each key at its column on one of three rows, as squares[].hscreen places them
+    std::array<std::vector<std::pair<int, std::string>>, 3> rows;
     for( int i = 0; i < NUM_AIM_LOCATIONS; ++i ) {
         int data_location = screen_relative_location( static_cast<aim_location>( i ) );
         bool can_put_items = squares[data_location].canputitems( pane.get_cur_item_ptr() != nullptr ?
@@ -734,14 +731,29 @@ int advanced_inventory::print_header( advanced_inventory_pane &pane, aim_locatio
             kcolor = c_white;
         }
         const std::string key = get_location_key( static_cast<aim_location>( i ) );
-        const point p( squares[i].hscreen + point( ofs, 0 ) );
-        min_x = std::min( min_x, p.x );
-        mvwprintz( window, p, bcolor, "%c", bracket[0] );
-        wprintz( window, kcolor, "%s", in_vehicle && sel != AIM_DRAGGED ? "V" : key );
-        wprintz( window, bcolor, "%c", bracket[1] );
+        const std::string label = rml_ui::colored_rml( std::string( 1, bracket[0] ), bcolor ) +
+                                  rml_ui::colored_rml( in_vehicle && sel != AIM_DRAGGED ? "V" : key, kcolor ) +
+                                  rml_ui::colored_rml( std::string( 1, bracket[1] ), bcolor );
+        const point &pos = squares[i].hscreen;
+        rows[std::clamp( pos.y - 1, 0, 2 )].emplace_back( pos.x, "<span class=\"aim-key\" data-action=\"" +
+                squares[i].actionname + "\">" + label + "</span>" );
     }
 
-    return min_x;
+    std::string rml = "<div class=\"aim-keys\">";
+    for( std::vector<std::pair<int, std::string>> &row : rows ) {
+        std::sort( row.begin(), row.end(), []( const std::pair<int, std::string> &lhs,
+        const std::pair<int, std::string> &rhs ) {
+            return lhs.first < rhs.first;
+        } );
+        std::string line;
+        int x = row.empty() ? 0 : std::min( 22, row.front().first );
+        for( const std::pair<int, std::string> &key : row ) {
+            line += std::string( std::max( 0, key.first - x ), ' ' ) + key.second;
+            x = key.first + 3;
+        }
+        rml += "<div class=\"line\">" + line + "</div>";
+    }
+    return rml + "</div>";
 }
 
 void advanced_inventory::recalc_pane( side p )
@@ -821,7 +833,7 @@ void advanced_inventory::recalc_pane( side p )
     }
 }
 
-void advanced_inventory::redraw_pane( side p )
+std::string advanced_inventory::pane_rml( side p )
 {
     input_context ctxt( "ADVANCED_INVENTORY" );
 
@@ -833,13 +845,25 @@ void advanced_inventory::redraw_pane( side p )
 
     const bool active = p == src;
     const advanced_inv_area &square = squares[pane.get_area()];
-    catacurses::window w = pane.window;
 
-    werase( w );
-    print_items( p, active );
+    std::string rml = string_format( "<div class=\"pane aim-pane%s\" data-pane=\"%d\">",
+                                     active ? " active" : "", static_cast<int>( p ) );
 
+    // The sort order, and how many items the square holds of how many it can
+    std::string count_rml;
+    int max = square.max_size;
+    if( max > 0 ) {
+        count_rml = rml_ui::colored_rml( string_format( "%d/%d", square.get_item_count(), max ),
+                                         active ? c_white : c_dark_gray );
+    }
+    rml += "<div class=\"hbox aim-top\"><div class=\"grow\">" + rml_ui::button_rml( "SORT",
+            rml_ui::colored_rml( string_format( _( "[%s] Sort: %s" ), ctxt.get_desc( "SORT" ),
+                                 get_sortname( pane.sortby ) ), active ? c_white : c_light_gray ) ) +
+           "</div><div class=\"fixed\">" + count_rml + "</div></div>";
+
+    // Where the pane is looking, beside the keys for every location
     advanced_inv_listitem *itm = pane.get_cur_item_ptr();
-    int width = print_header( pane, itm != nullptr ? itm->area : pane.get_area() );
+    const std::string keys = location_keys_rml( pane, itm != nullptr ? itm->area : pane.get_area() );
     // only cardinals
     // not where you stand, and pane is in vehicle
     // make sure the offsets are the same as the grab point
@@ -848,62 +872,37 @@ void advanced_inventory::redraw_pane( side p )
                            square.off == squares[AIM_DRAGGED].off;
     const advanced_inv_area &sq = same_as_dragged ? squares[AIM_DRAGGED] : square;
     bool car = square.can_store_in_vehicle() && panes[p].in_vehicle() && sq.id != AIM_DRAGGED;
-    std::string name = utf8_truncate( car ? sq.veh->name : sq.name, width );
+    std::string name = car ? sq.veh->name : sq.name;
     std::string desc = pane.container ? pane.container->tname( 1, false ) : sq.desc[car];
-    // starts at offset 2, plus space between the header and the text
-    width -= 2 + 1;
-    trim_and_print( w, point( 2, 1 ), width, active ? c_green  : c_light_gray, name );
-    trim_and_print( w, point( 2, 2 ), width, active ? c_light_blue : c_dark_gray, desc );
-    trim_and_print( w, point( 2, 3 ), width, active ? c_cyan : c_dark_gray, square.flags );
+    rml += "<div class=\"hbox aim-where\"><div class=\"grow aim-where-text\">"
+           "<div class=\"line\">" + rml_ui::colored_rml( name, active ? c_green : c_light_gray ) + "</div>"
+           "<div class=\"line\">" + rml_ui::markup_to_rml( desc, active ? c_light_blue : c_dark_gray ) +
+           "</div><div class=\"line\">" + rml_ui::markup_to_rml( square.flags,
+                   active ? c_cyan : c_dark_gray ) + "</div></div>" + keys + "</div>";
 
-    if( active ) {
-        advanced_inventory_pagination pagination( linesPerPage, pane );
-        int cur_page = 0;
-        for( int i = 0; i < static_cast<int>( pane.items.size() ); i++ ) {
-            pagination.step( i );
-            if( i == pane.index ) {
-                cur_page = pagination.page;
-            }
-        }
-        const int max_page = pagination.page;
-        mvwprintz( w, point( 2, 4 ), c_light_blue, _( "[<] page %1$d of %2$d [>]" ), cur_page + 1,
-                   max_page + 1 );
+    if( filter_edit && p == dest ) {
+        // How to write the filter being typed for the other pane
+        rml += string_format( "<div class=\"aim-list pre\" style=\"height: %ddp;\">",
+                              static_cast<int>( ( linesPerPage + 2 ) * rml_ui::line_dp ) ) +
+               rml_ui::markup_to_rml( item_filter_rule_string( item_filter_type::FILTER ), c_white ) + "</div>";
+    } else {
+        rml += items_rml( p, active );
     }
 
-    if( active ) {
-        wattron( w, c_cyan );
-    }
-    // draw a darker border around the inactive pane
-    draw_border( w, active ? BORDER_COLOR : c_dark_gray );
-    mvwprintw( w, point( 3, 0 ), _( "< [%s] Sort: %s >" ), ctxt.get_desc( "SORT" ),
-               get_sortname( pane.sortby ) );
-    int max = square.max_size;
-    if( max > 0 ) {
-        int itemcount = square.get_item_count();
-        int fmtw = 7 + ( itemcount > 99 ? 3 : itemcount > 9 ? 2 : 1 ) +
-                   ( max > 99 ? 3 : max > 9 ? 2 : 1 );
-        mvwprintz( w, point( w_width / 2 - fmtw, 0 ), active ? c_white : c_dark_gray, "< %d/%d >",
-                   itemcount, max );
-    }
-
-    std::string fprefix = string_format( _( "[%s] Filter" ), ctxt.get_desc( "FILTER" ) );
+    std::string bottom;
     const std::string &filter = pane.get_filter();
-    if( !filter_edit ) {
+    if( filter_edit && active ) {
+        bottom = rml_ui::colored_rml( _( "Type to filter, Enter to keep it, Esc to undo." ), c_cyan );
+    } else {
+        std::string fprefix = string_format( _( "[%s] Filter" ), ctxt.get_desc( "FILTER" ) );
+        bottom = rml_ui::button_rml( "FILTER", rml_ui::colored_rml( filter.empty() ? fprefix :
+                                     fprefix + ": ", active ? c_white : c_light_gray ) + rml_ui::colored_rml( filter, c_white ) );
         if( !filter.empty() ) {
-            mvwprintw( w, point( 2, getmaxy( w ) - 1 ), "< %s: %s >", fprefix, filter );
-        } else {
-            mvwprintw( w, point( 2, getmaxy( w ) - 1 ), "< %s >", fprefix );
+            bottom += rml_ui::button_rml( "RESET_FILTER", rml_ui::colored_rml( string_format(
+                                              _( "[%s] Reset" ), ctxt.get_desc( "RESET_FILTER" ) ), c_white ) );
         }
     }
-    if( active ) {
-        wattroff( w, c_white );
-    }
-    if( !filter_edit && !filter.empty() ) {
-        std::string fsuffix = string_format( _( "[%s] Reset" ), ctxt.get_desc( "RESET_FILTER" ) );
-        mvwprintz( w, point( 6 + utf8_width( fprefix ), getmaxy( w ) - 1 ), c_white, filter );
-        mvwprintz( w, point( getmaxx( w ) - utf8_width( fsuffix ) - 2, getmaxy( w ) - 1 ), c_white, "%s",
-                   fsuffix );
-    }
+    return rml + "<div class=\"aim-bottom\">" + bottom + "</div></div>";
 }
 
 bool advanced_inventory::fill_lists_with_pane_items( Character &player_character,
@@ -1333,29 +1332,87 @@ input_context advanced_inventory::register_ctxt() const
     ctxt.register_action( "ITEMS_DEFAULT" );
     ctxt.register_action( "SAVE_DEFAULT" );
 
+    // Clicks pick panes, items and buttons, and the wheel moves the cursor
+    ctxt.register_action( "SELECT" );
+    ctxt.register_action( "SCROLL_UP" );
+    ctxt.register_action( "SCROLL_DOWN" );
+
     return ctxt;
 }
 
-void advanced_inventory::redraw_sidebar()
+std::string advanced_inventory::header_rml()
 {
     input_context ctxt( "ADVANCED_INVENTORY" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
 
-    werase( head );
-    werase( minimap );
-    werase( mm_border );
-    draw_border( head );
-    Messages::display_messages( head, 2, 1, w_width - 1, head_height - 2 );
-    draw_minimap();
-    right_print( head, 0, +3, c_white, string_format(
-                     _( "< [<color_yellow>%s</color>] keybindings >" ),
-                     ctxt.get_desc( "HELP_KEYBINDINGS" ) ) );
-    if( get_player_character().has_watch() ) {
-        const std::string time = to_string_time_of_day( calendar::turn );
-        mvwprintz( head, point( 2, 0 ), c_white, time );
+    std::string messages;
+    for( const std::string &line : Messages::sidebar_markup( 3 ) ) {
+        messages += "<div class=\"line\">" + rml_ui::markup_to_rml( line ) + "</div>";
     }
-    wnoutrefresh( head );
-    refresh_minimap();
+    std::string side_rml;
+    if( get_player_character().has_watch() ) {
+        side_rml += "<div>" + rml_ui::colored_rml( to_string_time_of_day( calendar::turn ),
+                    c_white ) + "</div>";
+    }
+    side_rml += rml_ui::button_rml( "HELP_KEYBINDINGS", rml_ui::markup_to_rml( string_format(
+                                        _( "[<color_yellow>%s</color>] keybindings" ), ctxt.get_desc( "HELP_KEYBINDINGS" ) ),
+                                    c_white ) );
+    return "<div class=\"hbox\"><div class=\"grow aim-messages\">" + messages +
+           "</div><div class=\"fixed aim-side\">" + side_rml + "</div>" + minimap_rml() + "</div>";
+}
+
+void advanced_inventory::update_layout()
+{
+    const int min_w_width = FULL_SCREEN_WIDTH;
+    const int max_w_width = get_option<bool>( "AIM_WIDTH" ) ? TERMX : std::max( 120,
+                            TERMX - 2 * ( panel_manager::get_manager().get_width_right() +
+                                          panel_manager::get_manager().get_width_left() ) );
+
+    w_width = std::clamp( TERMX, min_w_width, max_w_width );
+    colstart = TERMX > w_width ? ( TERMX - w_width ) / 2 : 0;
+
+    if( rml_ui::active() ) {
+        // Everything but the rows: the window's frame, the header, and the
+        // lines above and below each pane's items
+        linesPerPage = rml_ui::lines_fitting( 0.98f, 340.f );
+    } else {
+        // 2 for the borders, 5 for the header stuff
+        linesPerPage = std::max( 1, TERMY - head_height - 2 - 5 );
+    }
+}
+
+void advanced_inventory::redraw()
+{
+    if( always_recalc ) {
+        recalc = true;
+    }
+    update_layout();
+
+    ui->set_size( rml_ui::term_width( w_width ), std::string() );
+    ui->set_position( std::string(), "0" );
+    ui->set_header( header_rml() );
+    ui->set_body( "<div class=\"panes\">" + pane_rml( left ) + pane_rml( right ) + "</div>" );
+}
+
+std::string advanced_inventory::handle_click( const std::string &action )
+{
+    if( action != "SELECT" || !ui ) {
+        return action;
+    }
+    // A click makes its pane the active one
+    const int clicked_side = ui->hovered_index( "data-pane" );
+    if( clicked_side == left || clicked_side == right ) {
+        src = static_cast<side>( clicked_side );
+        dest = src == left ? right : left;
+    }
+    // and picks the item under it
+    const int row = ui->hovered_index( "data-row" );
+    if( clicked_side >= 0 && row >= 0 ) {
+        panes[src].index = row;
+        return std::string();
+    }
+    const std::string clicked = ui->resolve_click( action );
+    return clicked == action ? std::string() : clicked;
 }
 
 void advanced_inventory::change_square( const aim_location changeSquare,
@@ -1908,29 +1965,32 @@ void advanced_inventory::process_action( const std::string &input_action )
             recalc = true;
         }
     } else if( action == "FILTER" ) {
-        const std::string &filter = spane.get_filter();
-        filter_edit = true;
+        const std::string filter = spane.get_filter();
         if( ui ) {
-            spopup = std::make_unique<string_input_popup>();
-            spopup->max_length( 256 ).text( filter );
-            spopup->identifier( "item_filter" ).hist_use_uilist( false );
-            ui->mark_resize();
-        }
-
-        do {
-            if( ui ) {
+            // The window's filter field takes the typing, and the pane
+            // filters by it as it changes
+            input_context filter_ctxt( "STRING_INPUT", keyboard_mode::keychar );
+            filter_ctxt.register_action( "TEXT.QUIT" );
+            filter_ctxt.register_action( "TEXT.CONFIRM" );
+            filter_ctxt.register_action( "ANY_INPUT" );
+            filter_ctxt.set_timeout( 50 );
+            filter_edit = true;
+            ui->start_filter( filter );
+            while( true ) {
                 ui_manager::redraw();
+                const std::string filter_action = filter_ctxt.handle_input();
+                spane.set_filter( ui->filter_text() );
+                if( filter_action == "TEXT.QUIT" ) {
+                    // restore original filter
+                    spane.set_filter( filter );
+                    break;
+                } else if( filter_action == "TEXT.CONFIRM" ) {
+                    break;
+                }
             }
-            std::string new_filter = spopup->query_string( false );
-            if( spopup->canceled() ) {
-                // restore original filter
-                spane.set_filter( filter );
-            } else {
-                spane.set_filter( new_filter );
-            }
-        } while( !spopup->canceled() && !spopup->confirmed() );
-        filter_edit = false;
-        spopup = nullptr;
+            ui->hide_filter();
+            filter_edit = false;
+        }
     } else if( action == "RESET_FILTER" ) {
         spane.set_filter( "" );
     } else if( action == "TOGGLE_AUTO_PICKUP" ) {
@@ -2030,68 +2090,8 @@ void advanced_inventory::display()
 
     if( !ui ) {
         init();
-        ui = std::make_unique<ui_adaptor>();
-        ui->on_screen_resize( [&]( ui_adaptor & ui ) {
-            constexpr int min_w_height = 10;
-            const int min_w_width = FULL_SCREEN_WIDTH;
-            const int max_w_width = get_option<bool>( "AIM_WIDTH" ) ? TERMX : std::max( 120,
-                                    TERMX - 2 * ( panel_manager::get_manager().get_width_right() +
-                                                  panel_manager::get_manager().get_width_left() ) );
-
-            w_height = std::max( min_w_height, TERMY - head_height );
-            w_width = std::clamp( TERMX, min_w_width, max_w_width );
-
-            //(TERMY>w_height)?(TERMY-w_height)/2:0;
-            headstart = 0;
-            colstart = TERMX > w_width ? ( TERMX - w_width ) / 2 : 0;
-
-            head = catacurses::newwin( head_height, w_width - minimap_width, point( colstart, headstart ) );
-            mm_border = catacurses::newwin( minimap_height + 2, minimap_width + 2,
-                                            point( colstart + ( w_width - ( minimap_width + 2 ) ), headstart ) );
-            minimap = catacurses::newwin( minimap_height, minimap_width,
-                                          point( colstart + ( w_width - ( minimap_width + 1 ) ), headstart + 1 ) );
-            panes[left].window = catacurses::newwin( w_height, w_width / 2, point( colstart,
-                                 headstart + head_height ) );
-            panes[right].window = catacurses::newwin( w_height, w_width / 2, point( colstart + w_width / 2,
-                                  headstart + head_height ) );
-
-            // 2 for the borders, 5 for the header stuff
-            linesPerPage = w_height - 2 - 5;
-
-            if( filter_edit && spopup ) {
-                spopup->window( panes[src].window, point( 4, w_height - 1 ), w_width / 2 - 4 );
-            }
-
-            ui.position( point( colstart, headstart ), point( w_width, head_height + w_height ) );
-        } );
-        ui->mark_resize();
-
-        ui->on_redraw( [&]( const ui_adaptor & ) {
-            if( always_recalc ) {
-                recalc = true;
-            }
-
-            redraw_pane( advanced_inventory::side::left );
-            redraw_pane( advanced_inventory::side::right );
-            if( panes[0].other_cont > -1 && panes[0].other_cont < linesPerPage ) {
-                mvwprintz( panes[0].window, point( w_width / 2 - 1, panes[0].other_cont + 6 ), i_brown, " " );
-                mvwprintz( panes[1].window, point( 0, panes[0].other_cont + 6 ), c_brown, "▶" );
-            } else if( panes[1].other_cont > -1 && panes[1].other_cont < linesPerPage ) {
-                mvwprintz( panes[0].window, point( w_width / 2 - 1, panes[1].other_cont + 6 ), c_brown, "◀" );
-                mvwprintz( panes[1].window, point( 0, panes[1].other_cont + 6 ), i_brown, " " );
-            }
-            wnoutrefresh( panes[src].window );
-            wnoutrefresh( panes[dest].window );
-            redraw_sidebar();
-
-            if( filter_edit && spopup ) {
-                draw_item_filter_rules( panes[dest].window, 1, w_height - 2, item_filter_type::FILTER );
-                mvwprintz( panes[src].window, point( 2, getmaxy( panes[src].window ) - 1 ), c_cyan, "< " );
-                mvwprintz( panes[src].window, point( w_width / 2 - 4, getmaxy( panes[src].window ) - 1 ), c_cyan,
-                           " >" );
-                spopup->query_string( /*loop=*/false, /*draw_only=*/true );
-            }
-        } );
+        ui = std::make_unique<advanced_inv_window>( *this );
+        update_layout();
     }
 
     while( !exit ) {
@@ -2101,7 +2101,6 @@ void advanced_inventory::display()
         }
 
         if( ui ) {
-            ui->invalidate_ui();
             if( recalc ) {
                 g->invalidate_main_ui_adaptor();
             }
@@ -2112,7 +2111,18 @@ void advanced_inventory::display()
             break;
         }
 
-        process_action( ctxt.handle_input() );
+        const std::string raw_action = ctxt.handle_input();
+        std::string action = handle_click( raw_action );
+        if( raw_action == "SELECT" && action == "HELP_KEYBINDINGS" ) {
+            // A key would have shown it already, inside handle_input()
+            ctxt.display_menu();
+            continue;
+        } else if( action == "SCROLL_UP" ) {
+            action = "UP";
+        } else if( action == "SCROLL_DOWN" ) {
+            action = "DOWN";
+        }
+        process_action( action );
     }
 }
 
@@ -2340,47 +2350,51 @@ bool advanced_inventory::query_charges( aim_location destarea, const advanced_in
     return true;
 }
 
-void advanced_inventory::refresh_minimap()
-{
-    // don't update ui if processing demands
-    if( is_processing() ) {
-        return;
-    }
-    // redraw border around minimap
-    draw_border( mm_border );
-    // minor addition to border for AIM_ALL, sorta hacky
-    if( panes[src].get_area() == AIM_ALL || panes[dest].get_area() == AIM_ALL ) {
-        // NOLINTNEXTLINE(cata-use-named-point-constants)
-        mvwprintz( mm_border, point( 1, 0 ), c_light_gray, utf8_truncate( _( "All" ), minimap_width ) );
-    }
-    // refresh border, then minimap
-    wnoutrefresh( mm_border );
-    wnoutrefresh( minimap );
-}
-
-void advanced_inventory::draw_minimap()
+std::string advanced_inventory::minimap_rml()
 {
     // if player is in one of the below, invert the player cell
     static const std::array<aim_location, 3> player_locations = {
         {AIM_CENTER, AIM_INVENTORY, AIM_WORN}
     };
     static const std::array<side, NUM_PANES> sides = {{left, right}};
-    // get the center of the window
-    tripoint pc = {getmaxx( minimap ) / 2, getmaxy( minimap ) / 2, 0};
+    map &here = get_map();
     Character &player_character = get_player_character();
-    // draw the 3x3 tiles centered around player
-    get_map().draw( minimap, player_character.pos_bub() );
+    const tripoint_bub_ms pos = player_character.pos_bub();
+    const auto cell_index = []( const tripoint_rel_ms & off ) {
+        return ( std::clamp( off.y(), -1, 1 ) + 1 ) * 3 + std::clamp( off.x(), -1, 1 ) + 1;
+    };
+
+    // The 3x3 tiles centered around player, each as an item on it, its
+    // furniture or its terrain shows it
+    std::array<std::string, 9> cells;
+    for( int dy = -1; dy <= 1; ++dy ) {
+        for( int dx = -1; dx <= 1; ++dx ) {
+            const tripoint_rel_ms off( dx, dy, 0 );
+            const tripoint_bub_ms p = pos + off;
+            std::string &cell = cells[cell_index( off )];
+            map_stack items = here.i_at( p );
+            if( !items.empty() ) {
+                const item &it = *items.begin();
+                cell = rml_ui::colored_rml( it.symbol(), it.color() );
+            } else if( here.has_furn( p ) ) {
+                const furn_t &furn = here.furn( p ).obj();
+                cell = rml_ui::colored_rml( utf32_to_utf8( furn.symbol() ), furn.color() );
+            } else {
+                const ter_t &ter = here.ter( p ).obj();
+                cell = rml_ui::colored_rml( utf32_to_utf8( ter.symbol() ), ter.color() );
+            }
+        }
+    }
     for( const side s : sides ) {
         char sym = get_minimap_sym( s );
         if( sym == '\0' ) {
             continue;
         }
-        advanced_inv_area sq = squares[panes[s].get_area()];
-        tripoint pt = pc + sq.off.raw();
+        const advanced_inv_area &sq = squares[panes[s].get_area()];
         // invert the color if pointing to the player's position
         nc_color cl = sq.id == AIM_INVENTORY || sq.id == AIM_WORN ?
                       invert_color( c_light_cyan ) : c_light_cyan.blink();
-        mvwputch( minimap, pt.xy(), cl, sym );
+        cells[cell_index( sq.off )] = rml_ui::colored_rml( std::string( 1, sym ), cl );
     }
 
     // Invert player's tile color if exactly one pane points to player's tile
@@ -2395,8 +2409,25 @@ void advanced_inventory::draw_minimap()
     }
 
     if( !invert_left || !invert_right ) {
-        player_character.draw( minimap, player_character.pos_bub(), invert_left || invert_right );
+        const nc_color player_color = player_character.symbol_color();
+        cells[4] = rml_ui::colored_rml( "@", invert_left || invert_right ?
+                                        invert_color( player_color ) : player_color );
     }
+
+    std::string rml = "<div id=\"aim-minimap\">";
+    // minor addition for AIM_ALL, sorta hacky
+    if( panes[src].get_area() == AIM_ALL || panes[dest].get_area() == AIM_ALL ) {
+        rml += "<div class=\"aim-minimap-all\">" + rml_ui::colored_rml( _( "All" ), c_light_gray ) +
+               "</div>";
+    }
+    for( int row = 0; row < 3; ++row ) {
+        rml += "<div class=\"aim-minimap-row\">";
+        for( int col = 0; col < 3; ++col ) {
+            rml += "<span>" + cells[row * 3 + col] + "</span>";
+        }
+        rml += "</div>";
+    }
+    return rml + "</div>";
 }
 
 char advanced_inventory::get_minimap_sym( side p ) const
@@ -2434,8 +2465,6 @@ void advanced_inventory::swap_panes()
     std::swap( panes[left].save_state, panes[right].save_state );
     // Switch currently selected item
     std::swap( panes[left].target_item_after_recalc, panes[right].target_item_after_recalc );
-    // Window pointer must be unchanged!
-    std::swap( panes[left].window, panes[right].window );
     // Recalculation required for weight & volume
     recalc = true;
 }

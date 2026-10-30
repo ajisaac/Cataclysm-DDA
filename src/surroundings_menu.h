@@ -10,12 +10,12 @@
 #include <vector>
 #include <stddef.h>
 
-#include "cata_imgui.h"
 #include "color.h"
 #include "coordinates.h"
 #include "enums.h"
 #include "input_context.h"
 #include "map_entity_stack.h"
+#include "rml_window.h"
 #include "translations.h"
 
 class avatar;
@@ -168,26 +168,28 @@ class terfurn_tab_data : public tab_data
         void find_nearby_terfurn( const Character &you, map &m );
 };
 
-class surroundings_menu : public cataimgui::window
+class surroundings_menu : public rml_ui::window
 {
     public:
         surroundings_menu( avatar &you, map &m, std::optional<tripoint_bub_ms> &path_end, int width );
         void execute();
 
     protected:
-        void draw_controls() override;
-        cataimgui::bounds get_bounds() override;
+        void on_redraw() override;
 
     private:
-        void draw_item_tab();
-        void draw_monster_tab();
-        void draw_terfurn_tab();
+        std::string item_list_rml();
+        std::string monster_list_rml();
+        std::string terfurn_list_rml();
+        // Info about the selected entry, rebuilt only when that changes
+        const std::string &info_rml();
         void draw_examine_info();
-        void draw_category_separator( const std::string &category, std::string &last_category,
-                                      int target_col );
+        static std::string category_separator_rml( const std::string &category,
+                std::string &last_category );
         std::vector<std::unordered_set<std::string>> get_shown_hotkeys( const tab_data *tab );
-        void draw_hotkey_buttons( const tab_data *tab );
-        float get_hotkey_buttons_height( const tab_data *tab );
+        std::string hotkey_buttons_rml( const tab_data *tab );
+        // Select the entry in this row of the shown tab's list, as a click does
+        void select_row( int row );
 
         void update_path_end();
         void handle_list_input( const std::string &action );
@@ -210,9 +212,14 @@ class surroundings_menu : public cataimgui::window
         void get_filter_priority( bool high );
 
         surroundings_menu_tab_enum selected_tab = surroundings_menu_tab_enum::items;
-        surroundings_menu_tab_enum switch_tab = surroundings_menu_tab_enum::num_tabs;
         // auto scrolling when navigating by keyboard
         bool auto_scroll = false;
+        // hidden while another screen, such as looking around, is up
+        bool hide_ui = false;
+
+        // The entry the info pane was last filled for, and what it was filled with
+        const void *shown_info_entity = nullptr;
+        std::string shown_info;
 
         int max_gun_range = 0;
         bool highlight_new = false;
@@ -226,10 +233,10 @@ class surroundings_menu : public cataimgui::window
         const tripoint_rel_ms stored_view_offset;
         const int min_width;
 
-        cataimgui::scroll info_scroll = cataimgui::scroll::none;
-
-        int width;
-        int info_height;
+        int width = 0;
+        int info_height = 0;
+        // The info pane's height as last applied
+        int shown_info_height = -1;
 
         item_tab_data item_data;
         monster_tab_data monster_data;

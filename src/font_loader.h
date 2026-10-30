@@ -2,11 +2,8 @@
 #ifndef CATA_SRC_FONT_LOADER_H
 #define CATA_SRC_FONT_LOADER_H
 
-#define IMGUI_DEFINE_MATH_OPERATORS
-#include <imgui/imgui_freetype.h>
-#undef IMGUI_DEFINE_MATH_OPERATORS
-
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,27 +14,34 @@
 #include "json.h"
 #include "path_info.h"
 
+// How a font's glyphs are hinted, as the font settings file names them.
+enum class font_hinting : int {
+    automatic,
+    no_auto,
+    light,
+    none,
+    bitmap,
+};
+
 // The font-configuration values modifiable by the user.
 struct font_config {
     // Path to the font file.
     std::string path;
-    // The type of hinting to apply.
-    std::optional<ImGuiFreeTypeLoaderFlags> hinting = std::nullopt;
-    // In practice, antialiasing will be ignored when hinting is set to FontHint::Bitmap.
+    // The type of hinting to apply. Read so settings files keep working, but
+    // nothing renders with it since the ImGui fonts it was for went away.
+    std::optional<font_hinting> hinting = std::nullopt;
+    // In practice, antialiasing will be ignored when hinting is set to bitmap.
     bool antialiasing = true;
 
     font_config() = default;
 
     explicit font_config( std::string path ) : path( std::move( path ) ) {}
     font_config( std::string path,
-                 const std::optional<ImGuiFreeTypeLoaderFlags> hinting ) : path( std::move( path ) ),
+                 const std::optional<font_hinting> hinting ) : path( std::move( path ) ),
         hinting( hinting ) {}
-    font_config( std::string path, const std::optional<ImGuiFreeTypeLoaderFlags> hinting,
+    font_config( std::string path, const std::optional<font_hinting> hinting,
                  const bool antialiasing ) : path( std::move( path ) ), hinting( hinting ),
         antialiasing( antialiasing ) {}
-
-    // Returns the font flags that should be passed to an ImFontConfig.
-    unsigned int imgui_config() const;
 
     void deserialize( const JsonObject &jo );
 };

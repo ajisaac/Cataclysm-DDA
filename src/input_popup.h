@@ -91,11 +91,11 @@ class input_popup : public rml_ui::document
         bool description_monofont = false;
 };
 
-class string_input_popup_imgui : public input_popup
+class text_input_popup : public input_popup
 {
     public:
-        explicit string_input_popup_imgui( int width, const std::string &old_input = "",
-                                           const std::string &title = "" );
+        explicit text_input_popup( int width, const std::string &old_input = "",
+                                   const std::string &title = "" );
 
         std::string query();
         // tries to parse input into a tripoint_abs_omt

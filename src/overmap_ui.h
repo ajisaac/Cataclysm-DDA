@@ -11,12 +11,12 @@
 #include <tuple>
 #include <vector>
 
-#include "cata_imgui.h"
 #include "city.h"
 #include "color.h"
 #include "coordinates.h"
 #include "map_scale_constants.h"
 #include "point.h"
+#include "rml_window.h"
 #include "string_id.h"
 
 class ui_adaptor;
@@ -174,29 +174,25 @@ bool is_generated_omt( const point_abs_omt &omp );
 } // namespace overmap_ui
 #endif // CATA_SRC_OVERMAP_UI_H
 
-class overmap_sidebar : public cataimgui::window
+class overmap_sidebar : public rml_ui::window
 {
         overmap_ui::overmap_draw_data_t &draw_data;
         const input_context &ictxt;
+        static std::string sidebar_text_rml( std::string_view text, const nc_color &color );
         //uses input context to print a keybind hint
-        void draw_sidebar_text( const std::string_view &original_text, const nc_color &color );
-        void print_hint( const std::string &action, nc_color color = c_magenta );
-        void draw_tile_info();
-        void draw_mission_info();
-        void draw_settings_info();
-        void draw_quick_reference();
-        void draw_layer_info();
-        void draw_debug();
+        std::string hint_rml( const std::string &action, nc_color color = c_magenta ) const;
+        std::string tile_info_rml() const;
+        std::string mission_info_rml() const;
+        std::string settings_info_rml() const;
+        std::string quick_reference_rml() const;
+        std::string layer_info_rml() const;
+        std::string debug_rml() const;
     public:
-        int width = 0;
-        int x_pos = 0;
         overmap_sidebar( overmap_ui::overmap_draw_data_t &data, const input_context &ictxt );
 
-        void init();
-        void draw_controls() override;
+        /// If the mouse is over the sidebar, take a click there: a heading
+        /// opens or closes its section. Returns whether it was over it.
+        bool handle_click();
     protected:
-        cataimgui::bounds get_bounds() override;
-        void on_resized() override {
-            init();
-        };
+        void on_redraw() override;
 };

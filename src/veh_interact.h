@@ -20,6 +20,7 @@
 #include "mapdata.h"
 #include "memory_fast.h"
 #include "point.h"
+#include "rml_ui.h"
 #include "type_id.h"
 #include "units.h"
 #include "vpart_position.h"
@@ -44,7 +45,7 @@ enum class task_reason : int {
     LOW_LIGHT // Player cannot see enough to work (for operations that require it)
 };
 
-class ui_adaptor;
+class veh_interact_window;
 class vehicle;
 struct vehicle_part;
 
@@ -103,14 +104,6 @@ class veh_interact
         // functionally, this works as the cursor position for the top-down vehicle view
         // see vehicle::build_interact_menu for initial assignment
         point_rel_ms cursor_vp_mount = point_rel_ms::zero;
-        /* starting offset for vehicle parts description display and max offset for scrolling */
-        int start_at = 0;
-        int start_limit = 0;
-        /* starting offset for the overview and the max offset for scrolling */
-        int overview_offset = 0;
-        int overview_limit = 0;
-        /* starting offset for installation scrolling */
-        int w_msg_scroll_offset = 0;
         /* starting offset for fuels scrolling */
         int fuel_index = 0;
 
@@ -124,26 +117,21 @@ class veh_interact
         vehicle_action sel_cmd = VEHICLE_QUIT;
 
         int cpart = -1;
+        // rows of the lists, for paging through them
         int page_size = 0;
-        // height of the stats window
+        // rows in each column of stats
         const int stats_h = 8;
-        // element width defaults for 80 column display
+        // element width defaults for 80 column display, in terminal columns: text
+        // is folded to pane_w, and the vehicle view is about disp_w wide
         int disp_w = 26; // width of the left column
         int pane_w = 25; // width of the center and right columns
-        catacurses::window w_border;
-        catacurses::window w_mode;
-        catacurses::window w_msg;
-        catacurses::window w_disp;
-        catacurses::window w_parts;
-        catacurses::window w_stats;
-        catacurses::window w_stats_1;
-        catacurses::window w_stats_2;
-        catacurses::window w_stats_3;
-        catacurses::window w_list;
-        catacurses::window w_details;
-        catacurses::window w_name;
+        // rows of the vehicle view
+        int disp_h = 9;
 
-        weak_ptr_fast<ui_adaptor> ui;
+        weak_ptr_fast<veh_interact_window> ui;
+        // What the panes last showed, to scroll them when it changes
+        std::string shown_msg;
+        std::string revealed_row;
 
         std::optional<std::string> title;
         std::optional<std::string> msg;
@@ -169,8 +157,17 @@ class veh_interact
         // maximum weight_capacity of available jacking equipment (if any)
         units::mass max_jack;
 
-        shared_ptr_fast<ui_adaptor> create_or_get_ui_adaptor( map &here );
+        shared_ptr_fast<veh_interact_window> create_or_get_ui( map &here );
         void hide_ui( map &here, bool hide );
+        /**
+         * The next action: a click on a button gives the button's action, and
+         * a click anywhere else SELECT, for the caller to look under the mouse.
+         */
+        std::string handle_input();
+        /** The number in this attribute under the mouse, or -1. */
+        int hovered_index( const std::string &attribute ) const;
+        /** Scroll the list or the message pane. */
+        void scroll_pane( const std::string &id, rml_ui::scroll how );
 
         void assign_activity( map &here );
 
@@ -179,7 +176,7 @@ class veh_interact
                           const std::map<skill_id, int> &skills, time_duration time ) const;
 
         int part_at( const point_rel_ms &d );
-        void move_cursor( map &here, const point_rel_ms &d, int dstart_at = 0 );
+        void move_cursor( map &here, const point_rel_ms &d );
         task_reason cant_do( const map &here, vehicle_action mode );
         bool can_potentially_install( const vpart_info &vpart );
         /** Move index (parameter pos) according to input action:
@@ -222,22 +219,30 @@ class veh_interact
         */
         std::pair<bool, std::string> calc_lift_requirements( map &here, const vpart_info &sel_vpart_info );
 
-        void display_grid();
-        void display_veh( map &here );
-        void display_stats( map &here ) const;
-        void display_name();
-        void display_mode( const map &here );
-        void display_list( size_t pos, const std::vector<const vpart_info *> &list, int header = 0 );
-        void display_details( const vpart_info *part );
+        /** Fill the window from the current state; called on every redraw. */
+        void redraw( veh_interact_window &win, map &here );
+        void update_layout();
+        std::string veh_rml( map &here );
+        std::string stats_rml( map &here ) const;
+        std::string name_markup() const;
+        std::string mode_rml( const map &here );
+        std::string list_rml( size_t pos, const std::vector<const vpart_info *> &list );
+        std::string details_rml( const vpart_info *part ) const;
+
+        // Markup for the right of an overview row
+        using part_details = std::function<std::string( const vehicle_part &pt )>;
+        // Rows below an overview row, each the markup for its left and right
+        using part_extra_rows =
+            std::function<std::vector<std::pair<std::string, std::string>>( const vehicle_part &pt )>;
 
         struct part_option {
             part_option( const std::string &key, vehicle_part *part, bool selectable, const input_event &hotkey,
-                         std::function<void( const vehicle_part &pt, const catacurses::window &w, int y )> details ) :
+                         part_details details ) :
                 key( key ), part( part ), selectable( selectable ), hotkey( hotkey ),
                 details( std::move( details ) ) {}
 
             part_option( const std::string &key, vehicle_part *part, bool selectable, const input_event &hotkey,
-                         std::function<void( const vehicle_part &pt, const catacurses::window &w, int y )> details,
+                         part_details details,
                          std::function<void( const vehicle_part &pt )> message ) :
                 key( key ), part( part ), selectable( selectable ), hotkey( hotkey ),
                 details( std::move( details ) ),
@@ -252,17 +257,18 @@ class veh_interact
             /** Can @param action be run for this entry? */
             input_event hotkey;
 
-            /** Writes any extra details for this entry */
-            std::function<void( const vehicle_part &pt, const catacurses::window &w, int y )> details;
+            /** Any extra details for this entry, at the right of its row */
+            part_details details;
 
-            /** Number of additional rows past the title row that details writes. */
-            std::function<int( const vehicle_part &pt )> extra_rows;
+            /** Rows of details below the title row, if any. */
+            part_extra_rows extra_rows;
 
             /** Writes to message window when part is selected */
             std::function<void( const vehicle_part &pt )> message;
         };
         std::vector<part_option> overview_opts;
-        std::map<std::string, std::function<void( const catacurses::window &, int )>> overview_headers;
+        /** Each section's header, as markup for its left and right. */
+        std::map<std::string, std::pair<std::string, std::string>> overview_headers;
         using overview_enable_t = std::function<bool( const map &here, const vehicle_part &pt )>;
         using overview_action_t = std::function<void( map &here, vehicle_part &pt )>;
         overview_enable_t overview_enable;
@@ -270,7 +276,7 @@ class veh_interact
         int overview_pos = -1;
 
         void calc_overview( map &here );
-        void display_overview( const map &here );
+        std::string overview_rml( const map &here ) const;
         /**
          * Display overview of parts, optionally with interactive selection of one part
          *
@@ -281,7 +287,6 @@ class veh_interact
          */
         void overview( map &here, const overview_enable_t &enable = {},
                        const overview_action_t &action = {} );
-        void move_overview_line( int );
 
         void count_durability();
 
@@ -323,7 +328,6 @@ class veh_interact
         ter_t terrain_here;
 
         void cache_tool_availability();
-        void allocate_windows();
         void do_main_loop( map &here );
 
         void cache_tool_availability_update_lifting( const tripoint_bub_ms &world_cursor_pos );

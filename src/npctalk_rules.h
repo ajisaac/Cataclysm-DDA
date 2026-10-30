@@ -2,16 +2,15 @@
 #ifndef CATA_SRC_NPCTALK_RULES_H
 #define CATA_SRC_NPCTALK_RULES_H
 
-#include <algorithm>
+#include <functional>
 #include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
-#include "cata_imgui.h"
-#include "game_constants.h"
-#include "imgui/imgui.h"
-#include "translations.h"
+#include "input_context.h"
+#include "rml_window.h"
 
-class input_context;
 class npc;
 struct input_event;
 
@@ -22,50 +21,61 @@ class follower_rules_ui
         void draw_follower_rules_ui( npc *guy );
 };
 
-class follower_rules_ui_impl : public cataimgui::window
+class follower_rules_ui_impl : public rml_ui::window
 {
     public:
-        std::string last_action;
-        input_context *input_ptr = nullptr;
-        explicit follower_rules_ui_impl() : cataimgui::window( _( "Rules for your follower" ),
-                    ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove ) {
-        }
+        follower_rules_ui_impl();
 
         void set_npc_pointer_to( npc *new_guy );
+        void run();
+
+    protected:
+        void on_redraw() override;
 
     private:
+        // One line of the rules page. Clicking it, or confirming it while it
+        // has the cursor, activates it; a heading has no activation.
+        struct rule_row {
+            std::string rml;
+            std::function<void()> activate;
+            // The rule's Default button, if it has one
+            std::function<void()> reset;
+        };
+        // A hotkey and what pressing it does
+        using rule_hotkey = std::pair<input_event, std::function<void()>>;
+
+        // Lay out the rules page as it stands now
+        void build_rules( std::vector<rule_row> &rows, std::vector<rule_hotkey> &hotkeys );
+        std::string rules_rml( const std::vector<rule_row> &rows ) const;
+        std::string transfer_rml() const;
+        // Handle input on the import/export page; false to close the screen
+        bool transfer_input( const std::string &action );
+        // Copy one group of rules between the follower and another, or all of
+        // them for a column of -1
+        void transfer_rules( npc &role_model, int column );
+        std::vector<npc *> other_allies() const;
+
         npc *guy = nullptr;
         std::string get_parsed( std::string initial_string );
-        void print_hotkey( input_event &hotkey );
-        void rules_transfer_popup( bool &exporting_rules, bool &still_in_popup );
-        bool setup_button( int &button_num, std::string &label, bool should_color );
-        bool setup_table_button( int &button_num, std::string &label, bool should_color );
-
-        float window_width = std::clamp( float( str_width_to_pixels( EVEN_MINIMUM_TERM_WIDTH ) ),
-                                         ImGui::GetMainViewport()->Size.x / 2,
-                                         ImGui::GetMainViewport()->Size.x );
-        float window_height = std::clamp( float( str_height_to_pixels( EVEN_MINIMUM_TERM_HEIGHT ) ),
-                                          ImGui::GetMainViewport()->Size.y / 2,
-                                          ImGui::GetMainViewport()->Size.y );
+        std::string hotkey_rml( const input_event &hotkey ) const;
 
         // makes a checkbox for the rule
         template<typename T>
-        void checkbox( int rule_number, const T &this_rule, input_event &assigned_hotkey,
-                       const input_event &pressed_key, bool confirm_toggle );
+        void checkbox( const T &this_rule, const input_event &assigned_hotkey,
+                       std::vector<rule_row> &rows, std::vector<rule_hotkey> &hotkeys );
 
         // makes one radio button per option in the map
         template<typename T>
-        void radio_group( const std::string &header_id, const char *title, T *rule,
-                          std::map<T, std::string> &values, input_event &assigned_hotkey, const input_event &pressed_key );
+        void radio_group( const char *title, T *rule, std::map<T, std::string> &values,
+                          const input_event &assigned_hotkey, std::vector<rule_row> &rows,
+                          std::vector<rule_hotkey> &hotkeys );
 
-        // Prepares for a rule option with multiple valid selections. Advances and wraps through
-        // those options as the hotkey is pressed.
-        template<typename T>
-        void multi_rule_header( const std::string &id, T &rule, const std::map<T, std::string> &rule_map,
-                                bool should_advance );
-
-    protected:
-        void draw_controls() override;
+        input_context ctxt;
+        // The row with the keyboard cursor, and whether to bring it into view
+        int cursor = 0;
+        bool reveal_cursor = false;
+        bool exporting_rules = false;
+        bool in_popup = false;
 };
 
 #endif // CATA_SRC_NPCTALK_RULES_H

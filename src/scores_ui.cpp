@@ -1,6 +1,5 @@
 #include "scores_ui.h"
 
-#include <imgui/imgui.h>
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
@@ -12,7 +11,6 @@
 #include <vector>
 
 #include "achievement.h"
-#include "cata_imgui.h"
 #include "color.h"
 #include "enum_traits.h"
 #include "event_statistics.h"
@@ -22,6 +20,8 @@
 #include "localized_comparator.h"
 #include "mtype.h"
 #include "past_games_info.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "stats_tracker.h"
 #include "string_formatter.h"
 #include "string_id.h"
@@ -50,31 +50,24 @@ struct enum_traits<scores_ui_tab> {
 
 namespace
 {
-class scores_ui
-{
-        friend class scores_ui_impl;
-    public:
-        void draw_scores_ui();
-};
-
-class scores_ui_impl : public cataimgui::window
+class scores_ui_impl : public rml_ui::window
 {
     public:
-        std::string last_action;
-        explicit scores_ui_impl() : cataimgui::window( _( "Your scores" ),
-                    ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav ) {}
+        scores_ui_impl() : rml_ui::window( _( "Your scores" ) ) {}
         void init_data();
+        void run();
+
+    protected:
+        void on_redraw() override;
 
     private:
-        void draw_achievements_text( bool use_conducts = false ) const;
-        void draw_scores_text() const;
-        void draw_kills_text() const;
+        std::string achievements_rml( bool use_conducts = false ) const;
+        std::string scores_rml() const;
+        std::string kills_rml() const;
 
         scores_ui_tab selected_tab = enum_traits<scores_ui_tab>::first;
-        scores_ui_tab switch_tab = enum_traits<scores_ui_tab>::last;
-
-        size_t window_width = ImGui::GetMainViewport()->Size.x * 8 / 9;
-        size_t window_height = ImGui::GetMainViewport()->Size.y * 8 / 9;
+        // The tab the body was last filled for, to scroll a new one to its top
+        scores_ui_tab shown_tab = enum_traits<scores_ui_tab>::last;
 
         bool monster_group_collapsed = false;
         bool npc_group_collapsed = false;
@@ -88,19 +81,11 @@ class scores_ui_impl : public cataimgui::window
         int monster_kills = 0;
         int npc_kills = 0;
         int total_kills = 0;
-
-        cataimgui::scroll s = cataimgui::scroll::none;
-
-    protected:
-        void draw_controls() override;
 };
 
-void scores_ui::draw_scores_ui()
+void scores_ui_impl::run()
 {
     input_context ctxt( "SCORES_UI" );
-    scores_ui_impl p_impl;
-
-    p_impl.init_data();
 
     ctxt.register_navigate_ui_list();
     ctxt.register_leftright();
@@ -118,10 +103,35 @@ void scores_ui::draw_scores_ui()
     while( true ) {
         ui_manager::redraw_invalidated();
 
-        p_impl.last_action = ctxt.handle_input();
+        std::string action = ctxt.handle_input();
+        if( action == "SELECT" && hovered_tab() >= 0 ) {
+            selected_tab = static_cast<scores_ui_tab>( hovered_tab() );
+            continue;
+        }
+        action = resolve_click( action );
 
-        if( p_impl.last_action == "QUIT" || !p_impl.get_is_open() ) {
+        if( action == "QUIT" ) {
             break;
+        } else if( action == "TOGGLE_MONSTER_GROUP" ) {
+            monster_group_collapsed = !monster_group_collapsed;
+        } else if( action == "TOGGLE_NPC_GROUP" ) {
+            npc_group_collapsed = !npc_group_collapsed;
+        } else if( action == "UP" ) {
+            scroll_body( rml_ui::scroll::line_up );
+        } else if( action == "DOWN" ) {
+            scroll_body( rml_ui::scroll::line_down );
+        } else if( action == "NEXT_TAB" || action == "RIGHT" ) {
+            ++selected_tab;
+        } else if( action == "PREV_TAB" || action == "LEFT" ) {
+            --selected_tab;
+        } else if( action == "PAGE_UP" ) {
+            scroll_body( rml_ui::scroll::page_up );
+        } else if( action == "PAGE_DOWN" ) {
+            scroll_body( rml_ui::scroll::page_down );
+        } else if( action == "HOME" ) {
+            scroll_body( rml_ui::scroll::top );
+        } else if( action == "END" ) {
+            scroll_body( rml_ui::scroll::bottom );
         }
     }
 }
@@ -191,181 +201,117 @@ void scores_ui_impl::init_data()
     std::sort( npc_kills_data.begin(), npc_kills_data.end(), localized_compare );
 }
 
-void scores_ui_impl::draw_achievements_text( bool use_conducts ) const
+std::string scores_ui_impl::achievements_rml( bool use_conducts ) const
 {
+    const auto paragraph = []( const std::string & text ) {
+        return "<p>" + rml_ui::escape_rml( text ) + "</p>";
+    };
     if( !g->achievements().is_enabled() ) {
-        ImGui::TextWrapped( "%s", _( "Achievements and conducts are disabled for debug characters." ) );
-        return;
+        return paragraph( _( "Achievements and conducts are disabled for debug characters." ) );
     }
     if( use_conducts && conducts_text.empty() ) {
-        ImGui::TextWrapped( "%s", _( "This game has no valid conducts." ) );
-        return;
+        return paragraph( _( "This game has no valid conducts." ) );
     }
     if( !use_conducts && achievements_text.empty() ) {
-        ImGui::TextWrapped( "%s", _( "This game has no valid achievements." ) );
-        return;
+        return paragraph( _( "This game has no valid achievements." ) );
     }
+    std::string rml;
     for( const std::string &entry : use_conducts ? conducts_text : achievements_text ) {
-        cataimgui::draw_colored_text( entry );
-        ImGui::Separator();
+        rml += "<div class=\"pre\">" + rml_ui::markup_to_rml( entry ) + "</div><div class=\"sep\"></div>";
     }
-    ImGui::NewLine();
-    ImGui::TextWrapped( "%s",
-                        use_conducts
-                        ? _( "Note that only conducts that existed when you started this game and still exist now will appear here." )
-                        : _( "Note that only achievements that existed when you started this game and still exist now will appear here." )
-                      );
+    return rml + "<div class=\"gap\"></div>" + paragraph(
+               use_conducts
+               ? _( "Note that only conducts that existed when you started this game and still exist now will appear here." )
+               : _( "Note that only achievements that existed when you started this game and still exist now will appear here." ) );
 }
 
-void scores_ui_impl::draw_scores_text() const
+std::string scores_ui_impl::scores_rml() const
 {
     if( scores_text.empty() ) {
-        ImGui::TextWrapped( "%s", _( "This game has no valid scores." ) );
-        return;
+        return "<p>" + rml_ui::escape_rml( _( "This game has no valid scores." ) ) + "</p>";
     }
+    std::string rml;
     for( const std::string &entry : scores_text ) {
-        ImGui::TextWrapped( "%s", entry.c_str() );
+        rml += "<p>" + rml_ui::escape_rml( entry ) + "</p>";
     }
-    ImGui::NewLine();
-    ImGui::TextWrapped( "%s",
-                        _( "Note that only scores that existed when you started this game and still exist now will appear here." )
-                      );
+    return rml + "<div class=\"gap\"></div><p>" + rml_ui::escape_rml(
+               _( "Note that only scores that existed when you started this game and still exist now will appear here." ) )
+           + "</p>";
 }
 
-void scores_ui_impl::draw_kills_text() const
+std::string scores_ui_impl::kills_rml() const
 {
-    if( ImGui::CollapsingHeader( string_format( _( "Monster kills (%d):" ), monster_kills ).c_str(),
-                                 monster_group_collapsed ? ImGuiTreeNodeFlags_None : ImGuiTreeNodeFlags_DefaultOpen ) ) {
+    // A row of the kill list: the count and the symbol in the monospace font, as on the map
+    const auto kill_row = []( int count, const std::string & symbol, const nc_color & color,
+    const std::string & name ) {
+        return "<div class=\"pre\"><span class=\"mono\">" + rml_ui::colored_rml( string_format( "%5d ",
+                count ), c_light_gray ) + rml_ui::colored_rml( symbol, color ) + "</span>" +
+               rml_ui::colored_rml( " " + name, c_light_gray ) + "</div>";
+    };
+    // Clicking a heading opens or closes its group
+    const auto heading = []( const std::string & action, const std::string & text, bool collapsed ) {
+        return "<div class=\"section-head\" data-action=\"" + action + "\">" +
+               std::string( collapsed ? "+ " : "- " ) + rml_ui::escape_rml( text ) + "</div>";
+    };
+
+    std::string rml = heading( "TOGGLE_MONSTER_GROUP", string_format( _( "Monster kills (%d):" ),
+                               monster_kills ), monster_group_collapsed );
+    if( !monster_group_collapsed ) {
         if( monster_kills == 0 ) {
-            ImGui::TextWrapped( "%s", _( "You haven't killed any monsters yet!" ) );
+            rml += "<p>" + rml_ui::escape_rml( _( "You haven't killed any monsters yet!" ) ) + "</p>";
         } else {
             for( const auto &entry : monster_kills_data ) {
-                const int num_kills = std::get<0>( entry );
-                const std::string &symbol = std::get<1>( entry );
-                nc_color color = std::get<2>( entry );
-                const std::string &name = std::get<3>( entry );
-
-                cataimgui::PushMonoFont();
-                ImGui::TextColored( c_light_gray, "%5d ", num_kills );
-                ImGui::SameLine( 0, 0 );
-                ImGui::TextColored( color, "%s", symbol.c_str() );
-                ImGui::PopFont();
-                ImGui::SameLine( 0, 0 );
-                ImGui::TextColored( c_light_gray, " %s", name.c_str() );
+                rml += kill_row( std::get<0>( entry ), std::get<1>( entry ), std::get<2>( entry ),
+                                 std::get<3>( entry ) );
             }
         }
     }
-    if( ImGui::CollapsingHeader( string_format( _( "NPC kills (%d):" ), npc_kills ).c_str(),
-                                 npc_group_collapsed ? ImGuiTreeNodeFlags_None : ImGuiTreeNodeFlags_DefaultOpen ) ) {
+    rml += heading( "TOGGLE_NPC_GROUP", string_format( _( "NPC kills (%d):" ), npc_kills ),
+                    npc_group_collapsed );
+    if( !npc_group_collapsed ) {
         if( npc_kills == 0 ) {
-            ImGui::TextWrapped( "%s", _( "You haven't killed any NPCs yet!" ) );
+            rml += "<p>" + rml_ui::escape_rml( _( "You haven't killed any NPCs yet!" ) ) + "</p>";
         } else {
             for( const std::string &npc_name : npc_kills_data ) {
-                cataimgui::PushMonoFont();
-                ImGui::TextColored( c_light_gray, "%5d ", 1 );
-                ImGui::SameLine( 0, 0 );
-                ImGui::TextColored( c_magenta, "%s", "@" );
-                ImGui::PopFont();
-                ImGui::SameLine( 0, 0 );
-                ImGui::TextColored( c_light_gray, " %s", npc_name.c_str() );
+                rml += kill_row( 1, "@", c_magenta, npc_name );
             }
         }
     }
+    return rml;
 }
 
-void scores_ui_impl::draw_controls()
+void scores_ui_impl::on_redraw()
 {
-    ImGui::SetWindowSize( ImVec2( window_width, window_height ), ImGuiCond_Once );
+    set_size( "89%", "89%" );
+    set_tabs( { _( "ACHIEVEMENTS" ), _( "CONDUCTS" ), _( "SCORES" ), _( "KILLS" ) },
+              static_cast<size_t>( selected_tab ) );
 
-    if( last_action == "QUIT" ) {
-        return;
-    } else if( last_action == "TOGGLE_MONSTER_GROUP" ) {
-        monster_group_collapsed = !monster_group_collapsed;
-    } else if( last_action == "TOGGLE_NPC_GROUP" ) {
-        npc_group_collapsed = !npc_group_collapsed;
-    } else if( last_action == "UP" ) {
-        s = cataimgui::scroll::line_up;
-    } else if( last_action == "DOWN" ) {
-        s = cataimgui::scroll::line_down;
-    } else if( last_action == "NEXT_TAB" || last_action == "RIGHT" ) {
-        s = cataimgui::scroll::begin;
-        switch_tab = selected_tab;
-        ++switch_tab;
-    } else if( last_action == "PREV_TAB" || last_action == "LEFT" ) {
-        s = cataimgui::scroll::begin;
-        switch_tab = selected_tab;
-        --switch_tab;
-    } else if( last_action == "PAGE_UP" ) {
-        s = cataimgui::scroll::page_up;
-    } else if( last_action == "PAGE_DOWN" ) {
-        s = cataimgui::scroll::page_down;
-    } else if( last_action == "HOME" ) {
-        s = cataimgui::scroll::begin;
-    } else if( last_action == "END" ) {
-        s = cataimgui::scroll::end;
+    switch( selected_tab ) {
+        case scores_ui_tab::achievements:
+            set_body( achievements_rml() );
+            break;
+        case scores_ui_tab::conducts:
+            set_body( achievements_rml( true ) );
+            break;
+        case scores_ui_tab::scores:
+            set_body( scores_rml() );
+            break;
+        case scores_ui_tab::kills:
+            set_body( kills_rml() );
+            break;
+        case scores_ui_tab::num_tabs:
+            break;
     }
-
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
-
-    if( ImGui::BeginTabBar( "##TAB_BAR" ) ) {
-        flags = ImGuiTabItemFlags_None;
-        if( switch_tab == scores_ui_tab::achievements ) {
-            flags = ImGuiTabItemFlags_SetSelected;
-            switch_tab = enum_traits<scores_ui_tab>::last;
-        }
-        if( ImGui::BeginTabItem( _( "ACHIEVEMENTS" ), nullptr, flags ) ) {
-            selected_tab = scores_ui_tab::achievements;
-            ImGui::EndTabItem();
-        }
-        flags = ImGuiTabItemFlags_None;
-        if( switch_tab == scores_ui_tab::conducts ) {
-            flags = ImGuiTabItemFlags_SetSelected;
-            switch_tab = enum_traits<scores_ui_tab>::last;
-        }
-        if( ImGui::BeginTabItem( _( "CONDUCTS" ), nullptr, flags ) ) {
-            selected_tab = scores_ui_tab::conducts;
-            ImGui::EndTabItem();
-        }
-        flags = ImGuiTabItemFlags_None;
-        if( switch_tab == scores_ui_tab::scores ) {
-            flags = ImGuiTabItemFlags_SetSelected;
-            switch_tab = enum_traits<scores_ui_tab>::last;
-        }
-        if( ImGui::BeginTabItem( _( "SCORES" ), nullptr, flags ) ) {
-            selected_tab = scores_ui_tab::scores;
-            ImGui::EndTabItem();
-        }
-        flags = ImGuiTabItemFlags_None;
-        if( switch_tab == scores_ui_tab::kills ) {
-            flags = ImGuiTabItemFlags_SetSelected;
-            switch_tab = enum_traits<scores_ui_tab>::last;
-        }
-        if( ImGui::BeginTabItem( _( "KILLS" ), nullptr, flags ) ) {
-            selected_tab = scores_ui_tab::kills;
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+    if( shown_tab != selected_tab ) {
+        shown_tab = selected_tab;
+        scroll_body( rml_ui::scroll::top );
     }
-
-    if( selected_tab == scores_ui_tab::achievements ) {
-        draw_achievements_text();
-    }
-    if( selected_tab == scores_ui_tab::conducts ) {
-        draw_achievements_text( true );
-    }
-    if( selected_tab == scores_ui_tab::scores ) {
-        draw_scores_text();
-    }
-    if( selected_tab == scores_ui_tab::kills ) {
-        draw_kills_text();
-    }
-
-    cataimgui::set_scroll( s );
 }
 } // namespace
 
 void show_scores_ui()
 {
-    scores_ui new_instance;
-    new_instance.draw_scores_ui();
+    scores_ui_impl ui;
+    ui.init_data();
+    ui.run();
 }

@@ -36,7 +36,6 @@
 #include "gamemode.h"
 #include "get_version.h"
 #include "help.h"
-#include "imgui_demo.h"
 #include "localized_comparator.h"
 #include "mapbuffer.h"
 #include "mapsharing.h"
@@ -381,8 +380,7 @@ void main_menu::init_strings()
     vSettingsSubItems.emplace_back( pgettext( "Main Menu|Settings", "A<u|U>topickup" ) );
     vSettingsSubItems.emplace_back( pgettext( "Main Menu|Settings", "Sa<f|F>emode" ) );
     vSettingsSubItems.emplace_back( pgettext( "Main Menu|Settings", "Colo<r|R>s" ) );
-    vSettingsSubItems.emplace_back( pgettext( "Main Menu|Settings", "ImGui <S|s>tyles" ) );
-    vSettingsSubItems.emplace_back( pgettext( "Main Menu|Settings", "<I|i>mGui Demo Screen" ) );
+    vSettingsSubItems.emplace_back( pgettext( "Main Menu|Settings", "UI <S|s>tyles" ) );
 
     vSettingsHotkeys.clear();
     for( const std::string &item : vSettingsSubItems ) {
@@ -698,9 +696,6 @@ bool main_menu::opening_screen()
                     } else if( sel2 == 5 ) {
                         style_picker picker;
                         picker.show();
-                    } else if( sel2 == 6 ) { /// ImGui demo
-                        imgui_demo_ui demo;
-                        demo.run();
                     }
                     break;
                 case main_menu_opts::WORLD:

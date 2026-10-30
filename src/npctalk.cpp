@@ -127,6 +127,7 @@
 #include "recipe_groups.h"
 #include "requirements.h"
 #include "ret_val.h"
+#include "rml_window.h"
 #include "rng.h"
 #include "simple_pathfinding.h"
 #include "skill.h"
@@ -1242,7 +1243,7 @@ void game::chat( const std::optional<tripoint_bub_ms> &p )
             break;
         case NPC_CHAT_SENTENCE: {
             std::string popupdesc = _( "Enter a sentence to yell" );
-            string_input_popup_imgui popup( 80 );
+            text_input_popup popup( 80 );
             popup.set_label( _( "Yell a sentence" ) );
             popup.set_description( popupdesc );
             popup.set_identifier( "sentence" );
@@ -1253,7 +1254,7 @@ void game::chat( const std::optional<tripoint_bub_ms> &p )
         case NPC_CHAT_EMOTE: {
             std::string popupdesc =
                 _( "What do you want to emote?  (This will have no in-game effect!)" );
-            string_input_popup_imgui popup( 80 );
+            text_input_popup popup( 80 );
             popup.set_label( _( "Emote" ) );
             popup.set_description( popupdesc );
             popup.set_identifier( "sentence" );
@@ -2977,12 +2978,10 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
 {
     d_win.add_history_separator();
 
-    ui_adaptor ui;
-    const auto resize_cb = [&]( ui_adaptor & ui ) {
-        d_win.resize( ui );
-    };
-    ui.on_screen_resize( resize_cb );
-    resize_cb( ui );
+    // Shown for as long as this topic is up
+    const std::unique_ptr<rml_ui::window> view = d_win.open( [this, &d_win]() {
+        return speaker_name( d_win );
+    } );
 
     // Construct full line
     std::string challenge = dynamic_line( topic );
@@ -3065,10 +3064,6 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
         d_win.set_responses( response_lines );
     };
     generate_response_lines();
-
-    ui.on_redraw( [&]( const ui_adaptor & ) {
-        d_win.draw( speaker_name( d_win ) );
-    } );
 
     size_t response_ind = response_hotkeys.size();
     bool okay;
@@ -6111,7 +6106,7 @@ talk_effect_fun_t::func f_set_string_var( const JsonObject &jo, std::string_view
                                     d ).translated() : "";
             std::string str_temp = input_params.value().default_text ?
                                    input_params.value().default_text->evaluate( d ).translated() : "";
-            string_input_popup_imgui popup( input_params.value().width + label.size(), str_temp );
+            text_input_popup popup( input_params.value().width + label.size(), str_temp );
             popup.set_label( input_params.value().title ? input_params.value().title->evaluate(
                                  d ).translated() : "" );
             popup.set_description( input_params.value().description ?

@@ -1,0 +1,62 @@
+<rml>
+<head>
+    <title>Crafting</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* Category tabs, with subcategory tabs below; see crafting_ui_impl
+           in src/crafting_gui.cpp. */
+        .tabs
+        {
+            display: flex;
+            flex-wrap: wrap;
+            margin-bottom: 4dp;
+        }
+        .tabs.sub .tab
+        {
+            padding: 2dp 8dp;
+            font-size: 14dp;
+        }
+        .tab.disabled
+        {
+            color: #5a6272;
+            background-color: #151922;
+        }
+        /* Text that does something when clicked, or confirmed while info-nav
+           has it focused. */
+        .link
+        {
+            border-radius: 2dp;
+        }
+        .link:hover
+        {
+            background-color: #232b3a;
+        }
+        .link.focused
+        {
+            background-color: #3a3f6a;
+        }
+        #recipe-list .item
+        {
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

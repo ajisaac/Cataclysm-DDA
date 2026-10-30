@@ -1,0 +1,26 @@
+<rml>
+<head>
+    <title>Window</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+</head>
+<body>
+    <!-- Filled in by rml_ui::window in src/rml_window.cpp, and the screens
+         built on it. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

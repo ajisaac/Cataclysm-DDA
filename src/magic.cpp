@@ -13,7 +13,6 @@
 #include "avatar.h"
 #include "bodypart.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "cata_utility.h"
 #include "catacharset.h"
 #include "character.h"
@@ -33,7 +32,6 @@
 #include "flexbuffer_json.h"
 #include "game_constants.h"
 #include "generic_factory.h"
-#include "imgui/imgui.h"
 #include "input_context.h"
 #include "input_enums.h"
 #include "inventory.h"
@@ -63,7 +61,6 @@
 #include "rml_markup.h"
 #include "string_formatter.h"
 #include "talker.h"
-#include "text.h"
 #include "text_snippets.h"
 #include "translations.h"
 #include "uilist.h"
@@ -3276,19 +3273,18 @@ spell &known_magic::select_spell( Character &guy )
         // 3. By spell name
         return strcmp( left->name().c_str(), right->name().c_str() ) < 0;
     } );
-    // set the height of the spell ui
-    const float min_y_pix = EVEN_MINIMUM_TERM_HEIGHT * ImGui::GetTextLineHeight();
-    float spell_menu_height = std::max( std::min( ( ( known_spells_sorted.size() + 3 ) *
-                                        ImGui::GetTextLineHeightWithSpacing() ), ImGui::GetMainViewport()->Size.y * 9 / 10 ),
-                                        float( ( ImGui::GetMainViewport()->Size.y < min_y_pix * 1.50 ) ? min_y_pix : min_y_pix * 1.50 ) );
+    // set the height of the spell ui, in terminal cells
+    const float min_height = EVEN_MINIMUM_TERM_HEIGHT;
+    const float spell_menu_height = std::max( std::min( known_spells_sorted.size() + 3.0f,
+                                    TERMY * 9 / 10.0f ), TERMY < min_height * 1.5f ? min_height : min_height * 1.5f );
 
     uilist spell_menu;
     spell_menu.desired_bounds = {
         -1.0,
-            -1.0,
-            std::clamp( float( EVEN_MINIMUM_TERM_WIDTH * ImGui::CalcTextSize( "X" ).x ), ImGui::GetMainViewport()->Size.x * 3 / 8, ImGui::GetMainViewport()->Size.x ),
-            spell_menu_height
-        };
+        -1.0,
+        std::clamp( float( EVEN_MINIMUM_TERM_WIDTH ), TERMX * 3 / 8.0f, float( TERMX ) ),
+        spell_menu_height
+    };
 
     spell_menu.title = _( "Choose a Supernatural Power" );
     spell_menu.input_category = "SPELL_MENU";

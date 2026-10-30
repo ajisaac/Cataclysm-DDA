@@ -678,7 +678,7 @@ void Messages::dialog::show( message_log_rml &doc ) const
         w_x = left_panel_width;
         w_width = TERMX - left_panel_width - right_panel_width;
     }
-    const float scale = rml_ui::imgui_px_scale();
+    const float scale = rml_ui::display_buffer_scale();
     const window_dimensions dim = get_window_dimensions( point( w_x, 0 ), point( w_width, TERMY ) );
     doc.place( string_format( "left: %.0fpx; top: %.0fpx; width: %.0fpx; height: %.0fpx;",
                               dim.window_pos_pixel.x * scale, dim.window_pos_pixel.y * scale,

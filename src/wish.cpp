@@ -18,7 +18,6 @@
 #include "bionics.h"
 #include "bodypart.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "cata_scope_helpers.h"
 #include "cata_utility.h"
 #include "character.h"
@@ -32,7 +31,6 @@
 #include "flag.h"
 #include "game.h"
 #include "game_constants.h"
-#include "imgui/imgui.h"
 #include "input.h"
 #include "input_context.h"
 #include "input_enums.h"
@@ -73,7 +71,7 @@ static const efftype_id effect_pet( "pet" );
 
 static const mongroup_id GROUP_ZOMBIE( "GROUP_ZOMBIE" );
 
-// The markup counterpart of cataimgui::TextKeybinding(): "[key] description",
+// "[key] description", as rml_ui::keybinding_markup() has it,
 // in the active hotkey color while that option is on.
 static std::string keybinding_markup( const input_context &ctxt, const char *action,
                                       const char *description, bool active )
@@ -988,7 +986,7 @@ class wish_item_callback: public uilist_callback
                     // Otherwise, edit the existing list of user-defined instance flags
                     edit_flags = flags;
                 }
-                string_input_popup_imgui popup( 34, edit_flags, _( "Flags:" ) );
+                text_input_popup popup( 34, edit_flags, _( "Flags:" ) );
                 popup.set_description( _( "UPPERCASE, no quotes, separate with spaces" ) );
                 popup.set_max_input_length( 100 );
                 const std::string &rval = popup.query();

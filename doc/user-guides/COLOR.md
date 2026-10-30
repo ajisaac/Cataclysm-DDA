@@ -174,78 +174,13 @@ The game provides a nice built-in color manager with several pre-defined color t
 
 
 ## GUI colors
-The UI *menus* do not (always) adhere to the base color customization, and can be customized separately. The currently used style is saved in `config/imgui_style.json`. The file is only semi permanent as it is overwritten when you select a different style ingame. To save a custom style permanently, create a `custom_styles` subfolder in the `config` folder and put a copy of the style in it. The default config is:
-```jsonc
+The UI *windows and menus* follow the base colors for game text, but their own frames, backgrounds and highlights come from RCSS stylesheets in `data/raw/rmlui/`. A theme overrides them: pick one from the main menu under Settings -> UI Styles, which copies it to `config/rmlui_theme.rcss`. The file is only semi permanent as it is overwritten when you select a different theme ingame. To keep a theme of your own, create a `custom_themes` subfolder in the `config` folder and put it there; it is then listed alongside the built-in ones from `data/raw/rmlui/themes/`.
+
+A theme is RCSS, RmlUi's dialect of CSS, attached after each window's own styles, so its rules win where they match as specifically. `data/raw/rmlui/themes/high_contrast.rcss` is a short example that recolors the panels, selections and buttons:
+```css
+#window, #menu, #popup, #panel, #text-panel, #sub, .panel
 {
-  "inherit_base_colors": false,
-  "colors": {
-  }
+    background-color: #000000;
+    border-color: #ffffff;
 }
 ```
-Changing  `inherit_base_colors` to `true` would make the imgui menus follow the base colors theme with some reasonable defaults.
-
-It is, however, also possible to tweak the specific element colors with higher fidelity and not be restricted to the 8-color pallete by specifying the respective elements and colors in the `colors` object. Like so:
-```jsonc
-{
-  "inherit_base_colors": false,
-  "colors": {
-    "ImGuiCol_Text"                   : [1.00, 1.00, 1.00, 1.00],
-    "ImGuiCol_TextDisabled"           : [0.50, 0.50, 0.50, 1.00],
-    "ImGuiCol_WindowBg"               : [0.06, 0.06, 0.06, 0.94],
-    "ImGuiCol_ChildBg"                : [0.00, 0.00, 0.00, 0.00],
-    "ImGuiCol_PopupBg"                : [0.08, 0.08, 0.08, 0.94],
-    "ImGuiCol_Border"                 : [0.43, 0.43, 0.50, 0.50],
-    "ImGuiCol_BorderShadow"           : [0.00, 0.00, 0.00, 0.00],
-    "ImGuiCol_FrameBg"                : [0.16, 0.29, 0.48, 0.54],
-    "ImGuiCol_FrameBgHovered"         : [0.26, 0.59, 0.98, 0.40],
-    "ImGuiCol_FrameBgActive"          : [0.26, 0.59, 0.98, 0.67],
-    "ImGuiCol_TitleBg"                : [0.04, 0.04, 0.04, 1.00],
-    "ImGuiCol_TitleBgActive"          : [0.16, 0.29, 0.48, 1.00],
-    "ImGuiCol_TitleBgCollapsed"       : [0.00, 0.00, 0.00, 0.51],
-    "ImGuiCol_MenuBarBg"              : [0.14, 0.14, 0.14, 1.00],
-    "ImGuiCol_ScrollbarBg"            : [0.02, 0.02, 0.02, 0.53],
-    "ImGuiCol_ScrollbarGrab"          : [0.31, 0.31, 0.31, 1.00],
-    "ImGuiCol_ScrollbarGrabHovered"   : [0.41, 0.41, 0.41, 1.00],
-    "ImGuiCol_ScrollbarGrabActive"    : [0.51, 0.51, 0.51, 1.00],
-    "ImGuiCol_CheckMark"              : [0.26, 0.59, 0.98, 1.00],
-    "ImGuiCol_SliderGrab"             : [0.24, 0.52, 0.88, 1.00],
-    "ImGuiCol_SliderGrabActive"       : [0.26, 0.59, 0.98, 1.00],
-    "ImGuiCol_Button"                 : [0.26, 0.59, 0.98, 0.40],
-    "ImGuiCol_ButtonHovered"          : [0.26, 0.59, 0.98, 1.00],
-    "ImGuiCol_ButtonActive"           : [0.06, 0.53, 0.98, 1.00],
-    "ImGuiCol_Header"                 : [0.26, 0.59, 0.98, 0.31],
-    "ImGuiCol_HeaderHovered"          : [0.26, 0.59, 0.98, 0.80],
-    "ImGuiCol_HeaderActive"           : [0.26, 0.59, 0.98, 1.00],
-    "ImGuiCol_Separator"              : [0.43, 0.43, 0.50, 0.50],
-    "ImGuiCol_SeparatorHovered"       : [0.10, 0.40, 0.75, 0.78],
-    "ImGuiCol_SeparatorActive"        : [0.10, 0.40, 0.75, 1.00],
-    "ImGuiCol_ResizeGrip"             : [0.26, 0.59, 0.98, 0.20],
-    "ImGuiCol_ResizeGripHovered"      : [0.26, 0.59, 0.98, 0.67],
-    "ImGuiCol_ResizeGripActive"       : [0.26, 0.59, 0.98, 0.95],
-    "ImGuiCol_Tab"                    : [0.18, 0.35, 0.58, 0.86],
-    "ImGuiCol_TabHovered"             : [0.26, 0.59, 0.98, 0.80],
-    "ImGuiCol_TabActive"              : [0.20, 0.41, 0.68, 1.00],
-    "ImGuiCol_TabUnfocused"           : [0.07, 0.10, 0.15, 0.97],
-    "ImGuiCol_TabUnfocusedActive"     : [0.14, 0.26, 0.42, 1.00],
-    "ImGuiCol_PlotLines"              : [0.61, 0.61, 0.61, 1.00],
-    "ImGuiCol_PlotLinesHovered"       : [1.00, 0.43, 0.35, 1.00],
-    "ImGuiCol_PlotHistogram"          : [0.90, 0.70, 0.00, 1.00],
-    "ImGuiCol_PlotHistogramHovered"   : [1.00, 0.60, 0.00, 1.00],
-    "ImGuiCol_TableHeaderBg"          : [0.19, 0.19, 0.20, 1.00],
-    "ImGuiCol_TableBorderStrong"      : [0.31, 0.31, 0.35, 1.00],
-    "ImGuiCol_TableBorderLight"       : [0.23, 0.23, 0.25, 1.00],
-    "ImGuiCol_TableRowBg"             : [0.00, 0.00, 0.00, 0.00],
-    "ImGuiCol_TableRowBgAlt"          : [1.00, 1.00, 1.00, 0.06],
-    "ImGuiCol_TextSelectedBg"         : [0.26, 0.59, 0.98, 0.35],
-    "ImGuiCol_DragDropTarget"         : [1.00, 1.00, 0.00, 0.90],
-    "ImGuiCol_NavHighlight"           : [0.26, 0.59, 0.98, 1.00],
-    "ImGuiCol_NavWindowingHighlight"  : [1.00, 1.00, 1.00, 0.70],
-    "ImGuiCol_NavWindowingDimBg"      : [0.80, 0.80, 0.80, 0.20],
-    "ImGuiCol_ModalWindowDimBg"       : [0.80, 0.80, 0.80, 0.35]
-  }
-}
-```
-The keys in the mapping are the ones provided by ImGui library, and it should be "obvious" or perhaps "intuitive" what those do (which is to say, there is no explicit documentation at the moment). Values are `[red, green, blue, opacity]` quadruplets with values between `0.0` and `1.0` inclusive. However `[red, green, blue]` triplets are also accepted, and in those cases opacity is assumed to be `1.0` (i.e. fully non-transparent).  
-The values in the above snippet are those of the default ImGui theme that the game uses, so copy-pasting that into your own `config/imgui_style.json` should yield no visual difference from the empty config. They can be used as a reference.
-
-You can play around with specific values in the imgui playground (accessible from the game main menu -> imgui Demo Screen -> Configuration -> Style -> Colors). You can then easily "Export" the chosen colors to use in `imgui_style.json` config.

@@ -12,7 +12,6 @@
 
 #include "avatar.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "character.h"
 #include "coordinates.h"
 #include "debug.h"

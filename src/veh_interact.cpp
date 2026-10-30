@@ -11,7 +11,6 @@
 #include <numeric>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <string>
 #include <utility>
 
@@ -54,6 +53,8 @@
 #include "proficiency.h"
 #include "requirements.h"
 #include "ret_val.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "skill.h"
 #include "string_formatter.h"
 #include "tileray.h"
@@ -314,6 +315,8 @@ veh_interact::veh_interact( map &here, vehicle &veh, const point_rel_ms &p )
     main_context.register_action( "CONFIRM" );
     main_context.register_action( "HELP_KEYBINDINGS" );
     main_context.register_action( "FILTER" );
+    // Clicks on the actions, the lists and the close button
+    main_context.register_action( "SELECT" );
     main_context.register_action( "ANY_INPUT" );
 
     count_durability();
@@ -324,53 +327,27 @@ veh_interact::veh_interact( map &here, vehicle &veh, const point_rel_ms &p )
 
 veh_interact::~veh_interact() = default;
 
-void veh_interact::allocate_windows()
+/// The height of a row of the vehicle view, in dp; see veh_interact.rml.
+static constexpr float view_line_dp = 18.f;
+
+void veh_interact::update_layout()
 {
-    // grid window
-    const point grid( point::south_east );
+    // Widths stay in terminal columns, which text is folded to; the window
+    // takes the whole screen, as the terminal one did
     const int grid_w = TERMX - 2; // exterior borders take 2
-    const int grid_h = TERMY - 2; // exterior borders take 2
-
-    const int mode_h  = 1;
-    const int name_h  = 1;
-
-    page_size = grid_h - ( mode_h + stats_h + name_h ) - 2;
-
-    const int pane_y = grid.y + mode_h + 1;
-
     pane_w = ( grid_w / 3 ) - 1;
+    disp_w = std::max( 9, grid_w - ( pane_w * 2 ) - 2 );
 
-    disp_w = grid_w - ( pane_w * 2 ) - 2;
-    const int disp_h = page_size * 0.45;
-    const int parts_h = page_size - disp_h;
-    const int parts_y = pane_y + disp_h;
-
-    const int name_y = pane_y + page_size + 1;
-    const int stats_y = name_y + name_h;
-
-    const int list_x = grid.x + disp_w + 1;
-    const int msg_x  = list_x + pane_w + 1;
-
-    const int details_y = name_y;
-    const int details_x = list_x;
-
-    const int details_h = 7;
-    const int details_w = grid.x + grid_w - details_x;
-
-    // make the windows
-    w_border = catacurses::newwin( TERMY, TERMX, point::zero );
-    w_mode  = catacurses::newwin( mode_h,    grid_w, grid );
-    w_msg   = catacurses::newwin( page_size, pane_w, point( msg_x, pane_y ) );
-    w_disp  = catacurses::newwin( disp_h,    disp_w, point( grid.x, pane_y ) );
-    w_parts = catacurses::newwin( parts_h,   disp_w, point( grid.x, parts_y ) );
-    w_list  = catacurses::newwin( page_size, pane_w, point( list_x, pane_y ) );
-    w_name  = catacurses::newwin( name_h,    grid_w, point( grid.x, name_y ) );
-    w_details = catacurses::newwin( details_h, details_w, point( details_x, details_y ) );
-    w_stats_1 = catacurses::newwin( stats_h, disp_w - 2, point( grid.x + 1, stats_y ) );
-    w_stats_2 = catacurses::newwin( stats_h, pane_w - 2, point( grid.x + disp_w + 2, stats_y ) );
-    w_stats_3 = catacurses::newwin( stats_h, pane_w - 2, point( grid.x + disp_w + pane_w + 3,
-                                    stats_y ) );
-
+    if( rml_ui::active() ) {
+        // Everything but the panes: the title and the actions, the stats, padding
+        page_size = rml_ui::lines_fitting( 0.98f, 140.f + rml_ui::line_dp * stats_h );
+    } else {
+        page_size = TERMY - 2 - ( 1 + stats_h + 1 ) - 2;
+    }
+    page_size = std::max( page_size, 4 );
+    // The view takes a little under half of the panes' height, in its own rows,
+    // an odd number so the cursor sits in the middle
+    disp_h = std::max( 5, static_cast<int>( page_size * 0.45f * rml_ui::line_dp / view_line_dp ) ) | 1;
 }
 
 bool veh_interact::format_reqs( std::string &msg, const requirement_data &reqs,
@@ -398,12 +375,12 @@ bool veh_interact::format_reqs( std::string &msg, const requirement_data &reqs,
         msg += string_format( "> %1$s%2$s</color>", status_color( true ), _( "NONE" ) ) + "\n";
     }
 
-    auto comps = reqs.get_folded_components_list( getmaxx( w_msg ) - 2, c_white, inv,
+    auto comps = reqs.get_folded_components_list( pane_w - 2, c_white, inv,
                  is_crafting_component );
     for( const std::string &line : comps ) {
         msg += line + "\n";
     }
-    auto tools = reqs.get_folded_tools_list( getmaxx( w_msg ) - 2, c_white, inv );
+    auto tools = reqs.get_folded_tools_list( pane_w - 2, c_white, inv );
     for( const std::string &line : tools ) {
         msg += line + "\n";
     }
@@ -423,91 +400,138 @@ struct veh_interact::remove_info_t {
     size_t tab = 0;
 };
 
-shared_ptr_fast<ui_adaptor> veh_interact::create_or_get_ui_adaptor( map &here )
+/**
+ * The vehicle interaction window, from data/raw/rmlui/veh_interact.rml.
+ * veh_interact fills it on every redraw; see veh_interact::redraw().
+ */
+class veh_interact_window : public rml_ui::window
 {
-    shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
+    public:
+        explicit veh_interact_window( const std::function<void( veh_interact_window & )> &update ) :
+            rml_ui::window( std::string(), "veh_interact.rml" ), update( update ) {
+            set_body_scrolls( false );
+        }
+
+        void scroll_pane( const std::string &id, rml_ui::scroll how ) {
+            scroll( id, how );
+        }
+        void reveal( const std::string &id ) {
+            scroll_into_view( id );
+        }
+        void set_hidden( bool hidden ) {
+            set_class( "window", "hidden", hidden );
+        }
+
+    protected:
+        void on_redraw() override {
+            update( *this );
+        }
+
+    private:
+        std::function<void( veh_interact_window & )> update;
+};
+
+shared_ptr_fast<veh_interact_window> veh_interact::create_or_get_ui( map &here )
+{
+    shared_ptr_fast<veh_interact_window> current_ui = ui.lock();
     if( !current_ui ) {
-        ui = current_ui = make_shared_fast<ui_adaptor>();
-        current_ui->on_screen_resize( [this]( ui_adaptor & current_ui ) {
-            if( ui_hidden ) {
-                current_ui.position( point::zero, point::zero );
-                return;
-            }
-            allocate_windows();
-            current_ui.position_from_window( catacurses::stdscr );
-        } );
-        current_ui->mark_resize();
-        current_ui->on_redraw( [&here, this]( const ui_adaptor & ) {
-            if( ui_hidden ) {
-                return;
-            }
-            display_grid();
-            display_name();
-            display_stats( here );
-            display_veh( here );
-
-            werase( w_parts );
-            veh->print_part_list( w_parts, 0, getmaxy( w_parts ) - 1, getmaxx( w_parts ), cpart,
-                                  highlight_part,
-                                  true, false );
-            wnoutrefresh( w_parts );
-
-            werase( w_msg );
-            if( !msg.has_value() ) {
-                veh->print_vparts_descs( w_msg, getmaxy( w_msg ), getmaxx( w_msg ), cpart, start_at, start_limit );
-            } else {
-                const int height = catacurses::getmaxy( w_msg );
-                const int width = catacurses::getmaxx( w_msg ) - 2;
-
-                // the following contraption is splitting buffer into separate lines for scrolling
-                // since earlier code relies on msg already being folded
-                std::vector<std::string> buffer;
-                std::istringstream msg_stream( msg.value() );
-                while( !msg_stream.eof() ) {
-                    std::string line;
-                    getline( msg_stream, line );
-                    if( utf8_width( line ) <= width ) {
-                        buffer.emplace_back( line );
-                    } else {
-                        std::vector<std::string> folded = foldstring( line, width );
-                        std::copy( folded.begin(), folded.end(), std::back_inserter( buffer ) );
-                    }
-                }
-
-                const int pages = static_cast<int>( buffer.size() / ( height - 2 ) );
-                w_msg_scroll_offset = clamp( w_msg_scroll_offset, 0, pages );
-                for( int line = 0; line < height; ++line ) {
-                    const int idx = w_msg_scroll_offset * ( height - 1 ) + line;
-                    if( static_cast<size_t>( idx ) >= buffer.size() ) {
-                        break;
-                    }
-                    nc_color dummy = c_unset;
-                    print_colored_text( w_msg, point( 1, line ), dummy, c_unset, buffer[idx] );
-                }
-            }
-            wnoutrefresh( w_msg );
-
-            if( install_info ) {
-                display_list( install_info->pos, install_info->tab_vparts, 2 );
-                display_details( sel_vpart_info );
-            } else if( remove_info ) {
-                display_details( sel_vpart_info );
-                display_overview( here );
-            } else {
-                display_overview( here );
-            }
-            display_mode( here );
-        } );
+        update_layout();
+        ui = current_ui = make_shared_fast<veh_interact_window>(
+                              std::function<void( veh_interact_window & )>( [&here, this]( veh_interact_window & win ) {
+            redraw( win, here );
+        } ) );
     }
     return current_ui;
 }
 
-void veh_interact::hide_ui( map &here, const bool hide )
+void veh_interact::redraw( veh_interact_window &win, map &here )
 {
-    if( hide != ui_hidden ) {
-        ui_hidden = hide;
-        create_or_get_ui_adaptor( here )->mark_resize();
+    win.set_hidden( ui_hidden );
+    if( ui_hidden ) {
+        return;
     }
+    update_layout();
+
+    win.set_title( name_markup() );
+    win.set_header( mode_rml( here ) );
+
+    // Drawing the vehicle finds the part at the cursor
+    const std::string vehicle_rml = veh_rml( here );
+    std::string parts;
+    for( const std::pair<std::string, std::string> &line : veh->part_list_markup( cpart,
+            highlight_part, true, false ) ) {
+        parts += "<div class=\"hbox\"><div class=\"grow\">" + rml_ui::markup_to_rml( line.first ) +
+                 "</div><div class=\"fixed\">" + rml_ui::markup_to_rml( line.second ) + "</div></div>";
+    }
+    const std::string message = msg.has_value() ? msg.value() : veh->vparts_descs_markup( cpart,
+                                pane_w - 4 );
+
+    std::string list;
+    std::string details;
+    if( install_info ) {
+        list = list_rml( install_info->pos, install_info->tab_vparts );
+        details = details_rml( sel_vpart_info );
+    } else if( remove_info ) {
+        list = overview_rml( here );
+        details = details_rml( sel_vpart_info );
+    } else {
+        list = overview_rml( here );
+    }
+
+    win.show( "body",
+              "<div id=\"vi-main\"><div id=\"vi-left\">" +
+              string_format( "<div id=\"vi-veh\" style=\"height: %ddp;\">",
+                             static_cast<int>( disp_h * view_line_dp ) ) + vehicle_rml +
+              "</div><div id=\"vi-parts\">" + parts + "</div></div><div id=\"vi-list\">" + list +
+              "</div><div id=\"vi-msg\">" + rml_ui::markup_to_rml( message ) +
+              "</div></div><div id=\"vi-bottom\">" + stats_rml( here ) + details + "</div>" );
+
+    // A new message starts at its top, and the selected row stays in view
+    if( message != shown_msg ) {
+        shown_msg = message;
+        win.scroll_pane( "vi-msg", rml_ui::scroll::top );
+    }
+    std::string row;
+    if( install_info ) {
+        row = "vi-li-" + std::to_string( install_info->pos );
+    } else if( overview_pos >= 0 ) {
+        row = "vi-ov-" + std::to_string( overview_pos );
+    }
+    if( row != revealed_row ) {
+        revealed_row = row;
+        if( !row.empty() ) {
+            win.reveal( row );
+        }
+    }
+}
+
+std::string veh_interact::handle_input()
+{
+    const std::string action = main_context.handle_input();
+    shared_ptr_fast<veh_interact_window> current_ui = ui.lock();
+    if( action == "SELECT" && current_ui ) {
+        return current_ui->resolve_click( action );
+    }
+    return action;
+}
+
+int veh_interact::hovered_index( const std::string &attribute ) const
+{
+    shared_ptr_fast<veh_interact_window> current_ui = ui.lock();
+    return current_ui ? current_ui->hovered_index( attribute ) : -1;
+}
+
+void veh_interact::scroll_pane( const std::string &id, rml_ui::scroll how )
+{
+    if( shared_ptr_fast<veh_interact_window> current_ui = ui.lock() ) {
+        current_ui->scroll_pane( id, how );
+    }
+}
+
+void veh_interact::hide_ui( map &, const bool hide )
+{
+    // The window hides itself on its next redraw
+    ui_hidden = hide;
 }
 
 void veh_interact::do_main_loop( map &here )
@@ -522,13 +546,12 @@ void veh_interact::do_main_loop( map &here )
         owner_fac = g->faction_manager_ptr->get( faction_no_faction );
     }
 
-    shared_ptr_fast<ui_adaptor> current_ui = create_or_get_ui_adaptor( here );
+    shared_ptr_fast<veh_interact_window> current_ui = create_or_get_ui( here );
 
     while( !finish ) {
         calc_overview( here );
         ui_manager::redraw();
-        const int description_scroll_lines = catacurses::getmaxy( w_parts ) - 4;
-        const std::string action = main_context.handle_input();
+        const std::string action = handle_input();
         msg.reset();
         if( const std::optional<tripoint_rel_ms> vec = main_context.get_direction_rel_ms( action ) ) {
             move_cursor( here, vec->xy() );
@@ -601,17 +624,17 @@ void veh_interact::do_main_loop( map &here )
         } else if( action == "FUEL_LIST_UP" ) {
             move_fuel_cursor( here, -1 );
         } else if( action == "OVERVIEW_DOWN" ) {
-            move_overview_line( 1 );
+            scroll_pane( "vi-list", rml_ui::scroll::line_down );
         } else if( action == "OVERVIEW_UP" ) {
-            move_overview_line( -1 );
+            scroll_pane( "vi-list", rml_ui::scroll::line_up );
         } else if( action == "DESC_LIST_DOWN" ) {
-            move_cursor( here, point_rel_ms::zero, 1 );
+            scroll_pane( "vi-msg", rml_ui::scroll::line_down );
         } else if( action == "DESC_LIST_UP" ) {
-            move_cursor( here, point_rel_ms::zero, -1 );
+            scroll_pane( "vi-msg", rml_ui::scroll::line_up );
         } else if( action == "PAGE_DOWN" ) {
-            move_cursor( here, point_rel_ms::zero, description_scroll_lines );
+            scroll_pane( "vi-msg", rml_ui::scroll::page_down );
         } else if( action == "PAGE_UP" ) {
-            move_cursor( here, point_rel_ms::zero, -description_scroll_lines );
+            scroll_pane( "vi-msg", rml_ui::scroll::page_up );
         }
         if( sel_cmd != VEHICLE_QUIT ) {
             finish = true;
@@ -922,7 +945,7 @@ bool veh_interact::update_part_requirements( map &here )
                 colorize( can_mount.str(), c_red ) + "\n";
     }
 
-    sel_vpart_info->format_description( nmsg, c_light_gray, getmaxx( w_msg ) - 4 );
+    sel_vpart_info->format_description( nmsg, c_light_gray, pane_w - 4 );
 
     msg = colorize( nmsg, c_light_gray );
     return ok || player_character.has_trait( trait_DEBUG_HS );
@@ -983,7 +1006,7 @@ void veh_interact::do_install( map &here )
         }
     }
 
-    shared_ptr_fast<ui_adaptor> current_ui = create_or_get_ui_adaptor( here );
+    shared_ptr_fast<veh_interact_window> current_ui = create_or_get_ui( here );
 
     int &pos = install_info->pos = 0;
     size_t &tab = install_info->tab = 0;
@@ -1003,10 +1026,21 @@ void veh_interact::do_install( map &here )
         const bool can_install = update_part_requirements( here );
         ui_manager::redraw();
 
-        const std::string action = main_context.handle_input();
+        std::string action = handle_input();
         msg.reset();
+        if( action == "SELECT" ) {
+            // A click picks a part, and a click on the picked one installs it
+            const int row = hovered_index( "data-li" );
+            if( row < 0 || row >= static_cast<int>( tab_vparts.size() ) ) {
+                continue;
+            } else if( row != pos ) {
+                pos = row;
+                continue;
+            }
+            action = "CONFIRM";
+        }
         if( action == "FILTER" ) {
-            string_input_popup_imgui popup( 34 );
+            text_input_popup popup( 34 );
             popup.set_text( _( "Search for part" ) );
             popup.set_description( _( "Filter" ) );
             popup.set_max_input_length( 100 );
@@ -1065,9 +1099,9 @@ void veh_interact::do_install( map &here )
             pos = 0;
             tab++;
         } else if( action == "DESC_LIST_DOWN" ) {
-            w_msg_scroll_offset++;
+            scroll_pane( "vi-msg", rml_ui::scroll::line_down );
         } else if( action == "DESC_LIST_UP" ) {
-            w_msg_scroll_offset--;
+            scroll_pane( "vi-msg", rml_ui::scroll::line_up );
         } else {
             move_in_list( pos, action, tab_vparts.size(), 2 );
             pos = std::max( pos, 0 ); // move_in_list sets pos to -1 when moving up in empty list
@@ -1138,7 +1172,7 @@ void veh_interact::do_repair( map &here )
     restore_on_out_of_scope prev_title( title );
     title = _( "Choose a part here to repair:" );
 
-    shared_ptr_fast<ui_adaptor> current_ui = create_or_get_ui_adaptor( here );
+    shared_ptr_fast<veh_interact_window> current_ui = create_or_get_ui( here );
 
     int pos = 0;
 
@@ -1195,7 +1229,7 @@ void veh_interact::do_repair( map &here )
         }
 
         const nc_color desc_color = pt.is_broken() ? c_dark_gray : c_light_gray;
-        vp.format_description( nmsg, desc_color, getmaxx( w_msg ) - 4 );
+        vp.format_description( nmsg, desc_color, pane_w - 4 );
 
         msg = colorize( nmsg, c_light_gray );
 
@@ -1203,7 +1237,7 @@ void veh_interact::do_repair( map &here )
 
         ui_manager::redraw();
 
-        const std::string action = main_context.handle_input();
+        const std::string action = handle_input();
         msg.reset();
         if( ( action == "REPAIR" || action == "CONFIRM" ) && ok ) {
             // Modifying a vehicle with rotors will make in not flightworthy (until we've got a better model)
@@ -1343,55 +1377,39 @@ void veh_interact::calc_overview( map &here )
     overview_headers.clear();
 
     units::power epower = veh->net_battery_charge_rate( here, /* include_reactors = */ true );
-    overview_headers["1_ENGINE"] = [this, &here]( const catacurses::window & w, int y ) {
-        trim_and_print( w, point( 1, y ), getmaxx( w ) - 2, c_light_gray,
-                        string_format( _( "Engines: %sSafe %4d kW</color> %sMax %4d kW</color>" ),
-                                       health_color( true ), units::to_kilowatt( veh->total_power( here, true, true ) ),
-                                       health_color( false ), units::to_kilowatt( veh->total_power( here ) ) ) );
-        right_print( w, y, 1, c_light_gray, _( "Fuel     Use" ) );
+    const auto header = []( const std::string & left, const std::string & right ) {
+        return std::make_pair( colorize( left, c_light_gray ), colorize( right, c_light_gray ) );
     };
-    overview_headers["2_TANK"] = []( const catacurses::window & w, int y ) {
-        trim_and_print( w, point( 1, y ), getmaxx( w ) - 2, c_light_gray, _( "Tanks" ) );
-        right_print( w, y, 1, c_light_gray, _( "Contents     Qty" ) );
-    };
-    overview_headers["3_BATTERY"] = [epower]( const catacurses::window & w, int y ) {
-        std::string batt;
-        if( epower < 10_kW || epower > 10_kW ) {
-            batt = string_format( _( "Batteries: %s%+4d W</color>" ),
-                                  health_color( epower >= 0_W ), units::to_watt( epower ) );
-        } else {
-            batt = string_format( _( "Batteries: %s%+4.1f kW</color>" ),
-                                  health_color( epower >= 0_W ), units::to_watt( epower ) / 1000.0 );
-        }
-        trim_and_print( w, point( 1, y ), getmaxx( w ) - 2, c_light_gray, batt );
-        right_print( w, y, 1, c_light_gray, _( "Capacity  Status" ) );
-    };
-    overview_headers["4_REACTOR"] = [this]( const catacurses::window & w, int y ) {
-        units::power reactor_epower = veh->max_reactor_epower();
-        std::string reactor;
-        if( reactor_epower == 0_W ) {
-            reactor = _( "Reactors" );
-        } else if( reactor_epower < 10_kW ) {
-            reactor = string_format( _( "Reactors: Up to %s%+4d W</color>" ),
-                                     health_color( reactor_epower > 0_W ), units::to_watt( reactor_epower ) );
-        } else {
-            reactor = string_format( _( "Reactors: Up to %s%+4.1f kW</color>" ),
-                                     health_color( reactor_epower > 0_W ), units::to_watt( reactor_epower ) / 1000.0 );
-        }
-        trim_and_print( w, point( 1, y ), getmaxx( w ) - 2, c_light_gray, reactor );
-        right_print( w, y, 1, c_light_gray, _( "Contents     Qty" ) );
-    };
-    overview_headers["5_TURRET"] = []( const catacurses::window & w, int y ) {
-        trim_and_print( w, point( 1, y ), getmaxx( w ) - 2, c_light_gray, _( "Turrets" ) );
-        right_print( w, y, 1, c_light_gray, _( "Ammo     Qty" ) );
-    };
-    overview_headers["6_SEAT"] = []( const catacurses::window & w, int y ) {
-        trim_and_print( w, point( 1, y ), getmaxx( w ) - 2, c_light_gray, _( "Seats" ) );
-        right_print( w, y, 1, c_light_gray, _( "Who" ) );
-    };
-    overview_headers["7_WHEELS"] = []( const catacurses::window & w, int y ) {
-        trim_and_print( w, point( 1, y ), getmaxx( w ) - 2, c_light_gray, _( "Wheels" ) );
-    };
+    overview_headers["1_ENGINE"] = header(
+                                       string_format( _( "Engines: %sSafe %4d kW</color> %sMax %4d kW</color>" ),
+                                               health_color( true ), units::to_kilowatt( veh->total_power( here, true, true ) ),
+                                               health_color( false ), units::to_kilowatt( veh->total_power( here ) ) ),
+                                       _( "Fuel     Use" ) );
+    overview_headers["2_TANK"] = header( _( "Tanks" ), _( "Contents     Qty" ) );
+    std::string batt;
+    if( epower < 10_kW || epower > 10_kW ) {
+        batt = string_format( _( "Batteries: %s%+4d W</color>" ),
+                              health_color( epower >= 0_W ), units::to_watt( epower ) );
+    } else {
+        batt = string_format( _( "Batteries: %s%+4.1f kW</color>" ),
+                              health_color( epower >= 0_W ), units::to_watt( epower ) / 1000.0 );
+    }
+    overview_headers["3_BATTERY"] = header( batt, _( "Capacity  Status" ) );
+    units::power reactor_epower = veh->max_reactor_epower();
+    std::string reactor;
+    if( reactor_epower == 0_W ) {
+        reactor = _( "Reactors" );
+    } else if( reactor_epower < 10_kW ) {
+        reactor = string_format( _( "Reactors: Up to %s%+4d W</color>" ),
+                                 health_color( reactor_epower > 0_W ), units::to_watt( reactor_epower ) );
+    } else {
+        reactor = string_format( _( "Reactors: Up to %s%+4.1f kW</color>" ),
+                                 health_color( reactor_epower > 0_W ), units::to_watt( reactor_epower ) / 1000.0 );
+    }
+    overview_headers["4_REACTOR"] = header( reactor, _( "Contents     Qty" ) );
+    overview_headers["5_TURRET"] = header( _( "Turrets" ), _( "Ammo     Qty" ) );
+    overview_headers["6_SEAT"] = header( _( "Seats" ), _( "Who" ) );
+    overview_headers["7_WHEELS"] = header( _( "Wheels" ), std::string() );
 
     input_event hotkey = main_context.first_unassigned_hotkey( hotkeys );
     bool selectable;
@@ -1403,14 +1421,13 @@ void veh_interact::calc_overview( map &here )
 
         if( vpr.part().is_engine() ) {
             // if tank contains something then display the contents in milliliters
-            auto details = []( const vehicle_part & pt, const catacurses::window & w, int y ) {
-                right_print(
-                    w, y, 1, item::find_type( pt.ammo_current() )->color,
-                    string_format(
-                        "%s     <color_light_gray>%s</color>",
-                        !pt.fuel_current().is_null() ? item::nname( pt.fuel_current() ) : "",
-                        //~ translation should not exceed 3 console cells
-                        right_justify( pt.enabled ? _( "Yes" ) : _( "No" ), 3 ) ) );
+            auto details = []( const vehicle_part & pt ) {
+                return colorize( string_format(
+                                     "%s     <color_light_gray>%s</color>",
+                                     !pt.fuel_current().is_null() ? item::nname( pt.fuel_current() ) : "",
+                                     //~ translation should not exceed 3 console cells
+                                     right_justify( pt.enabled ? _( "Yes" ) : _( "No" ), 3 ) ),
+                                 item::find_type( pt.ammo_current() )->color );
             };
 
             // display engine faults (if any)
@@ -1430,7 +1447,7 @@ void veh_interact::calc_overview( map &here )
 
         if( vpr.part().is_tank() || ( vpr.part().is_fuel_store() &&
                                       !( vpr.part().is_turret() || vpr.part().is_battery() || vpr.part().is_reactor() ) ) ) {
-            auto tank_details = []( const vehicle_part & pt, const catacurses::window & w, int y ) {
+            auto tank_details = []( const vehicle_part & pt ) {
                 if( !pt.ammo_current().is_null() ) {
                     std::string specials;
                     // vehicle parts can only have one pocket, and we are showing a liquid,
@@ -1446,37 +1463,30 @@ void veh_interact::calc_overview( map &here )
                         specials += _( " (rotten)" );
                     }
                     const itype *pt_ammo_cur = item::find_type( pt.ammo_current() );
-                    int offset = 1;
                     std::string fmtstring = "%s %s  %s";
                     if( pt.is_leaking() ) {
                         fmtstring = str_cat( "%s %s ", leak_marker, "%s", leak_marker );
-                        offset = 0;
                     }
-                    right_print( w, y, offset, pt_ammo_cur->color,
-                                 string_format( fmtstring, specials, pt_ammo_cur->nname( 1 ),
-                                                pt_ammo_cur->item_measure_prefix( pt.ammo_remaining() ) ) );
-                } else {
-                    if( pt.is_leaking() ) {
-                        std::string outputstr = str_cat( leak_marker, "      ", leak_marker );
-                        right_print( w, y, 0, c_light_gray, outputstr );
-                    }
+                    return colorize( string_format( fmtstring, specials, pt_ammo_cur->nname( 1 ),
+                                                    pt_ammo_cur->item_measure_prefix( pt.ammo_remaining() ) ), pt_ammo_cur->color );
+                } else if( pt.is_leaking() ) {
+                    return colorize( str_cat( leak_marker, "      ", leak_marker ), c_light_gray );
                 }
+                return std::string();
             };
-            auto no_tank_details = []( const vehicle_part & pt, const catacurses::window & w, int y ) {
+            auto no_tank_details = []( const vehicle_part & pt ) {
                 if( !pt.ammo_current().is_null() ) {
                     const itype *pt_ammo_cur = item::find_type( pt.ammo_current() );
                     double vol_L = to_liter( pt.ammo_remaining( ) * 250_ml /
                                              pt_ammo_cur->stack_size );
-                    int offset = 1;
                     std::string fmtstring = "%s  %5.1fL";
                     if( pt.is_leaking() ) {
                         fmtstring = str_cat( "%s  ", leak_marker, "%5.1fL", leak_marker );
-                        offset = 0;
                     }
-                    right_print( w, y, offset, pt_ammo_cur->color,
-                                 string_format( fmtstring, item::nname( pt.ammo_current() ),
-                                                round_up( vol_L, 1 ) ) );
+                    return colorize( string_format( fmtstring, item::nname( pt.ammo_current() ),
+                                                    round_up( vol_L, 1 ) ), pt_ammo_cur->color );
                 }
+                return std::string();
             };
 
             selectable = is_selectable( vpr.part() );
@@ -1494,17 +1504,15 @@ void veh_interact::calc_overview( map &here )
 
         if( vpr.part().is_battery() ) {
             // always display total battery capacity and percentage charge
-            auto details = []( const vehicle_part & pt, const catacurses::window & w, int y ) {
+            auto details = []( const vehicle_part & pt ) {
                 int pct = ( static_cast<double>( pt.ammo_remaining( ) ) / pt.ammo_capacity(
                                 ammo_battery ) ) * 100;
-                int offset = 1;
                 std::string fmtstring = "%i    %3i%%";
                 if( pt.is_leaking() ) {
                     fmtstring = str_cat( "%i   ", leak_marker, "%3i%%", leak_marker );
-                    offset = 0;
                 }
-                right_print( w, y, offset, item::find_type( pt.ammo_current() )->color,
-                             string_format( fmtstring, pt.ammo_capacity( ammo_battery ), pct ) );
+                return colorize( string_format( fmtstring, pt.ammo_capacity( ammo_battery ), pct ),
+                                 item::find_type( pt.ammo_current() )->color );
             };
             selectable = is_selectable( vpr.part() );
             overview_opts.emplace_back( "3_BATTERY", &vpr.part(), selectable,
@@ -1512,17 +1520,16 @@ void veh_interact::calc_overview( map &here )
         }
 
         if( vpr.part().is_reactor() || vpr.part().is_turret() ) {
-            auto details_ammo = []( const vehicle_part & pt, const catacurses::window & w, int y ) {
+            auto details_ammo = []( const vehicle_part & pt ) {
                 if( pt.ammo_remaining( ) ) {
-                    int offset = 1;
                     std::string fmtstring = "%s   %5i";
                     if( pt.is_leaking() ) {
                         fmtstring = str_cat( "%s  ", leak_marker, "%5i", leak_marker );
-                        offset = 0;
                     }
-                    right_print( w, y, offset, item::find_type( pt.ammo_current() )->color,
-                                 string_format( fmtstring, item::nname( pt.ammo_current() ), pt.ammo_remaining( ) ) );
+                    return colorize( string_format( fmtstring, item::nname( pt.ammo_current() ),
+                                                    pt.ammo_remaining( ) ), item::find_type( pt.ammo_current() )->color );
                 }
+                return std::string();
             };
             selectable = is_selectable( vpr.part() );
             if( vpr.part().is_reactor() ) {
@@ -1532,13 +1539,14 @@ void veh_interact::calc_overview( map &here )
             }
             if( vpr.part().is_turret() ) {
                 if( vpr.part().get_base().uses_firing_requirements() ) {
-                    auto multimag_details = [veh = this->veh]( const vehicle_part & pt,
-                    const catacurses::window & w, int y ) {
+                    // The pockets go on rows of their own, below the turret's
+                    auto multimag_details = []( const vehicle_part & ) {
+                        return std::string();
+                    };
+                    auto multimag_extra_rows = [veh = this->veh]( const vehicle_part & pt ) {
                         const turret_data td = veh->turret_query( const_cast<vehicle_part &>( pt ) );
-                        const std::vector<multimag_display_pocket> dps = td.multimag_display_state();
-                        int row = y + 1;
-                        for( const multimag_display_pocket &dp : dps ) {
-                            const std::string &label = dp.pocket_id;
+                        std::vector<std::pair<std::string, std::string>> rows;
+                        for( const multimag_display_pocket &dp : td.multimag_display_state() ) {
                             std::string ammo_text;
                             nc_color ammo_clr = c_light_gray;
                             if( !dp.ammo_itype.is_null() ) {
@@ -1552,18 +1560,11 @@ void veh_interact::calc_overview( map &here )
                                                      ? c_red : c_light_gray;
                             const std::string source_tag = dp.vehicle_bound ?
                                                            colorize( "[v] ", c_cyan ) : "    ";
-                            trim_and_print( w, point( 8, row ), getmaxx( w ) - 14, row_clr, "%s",
-                                            label );
-                            right_print( w, row, 1, ammo_clr,
-                                         string_format( "%s%s   %5i", source_tag,
-                                                        colorize( ammo_text, ammo_clr ),
-                                                        dp.effective_qty ) );
-                            row++;
+                            rows.emplace_back( colorize( dp.pocket_id, row_clr ),
+                                               colorize( string_format( "%s%s   %5i", source_tag,
+                                                       colorize( ammo_text, ammo_clr ), dp.effective_qty ), ammo_clr ) );
                         }
-                    };
-                    auto multimag_extra_rows = [veh = this->veh]( const vehicle_part & pt ) {
-                        const turret_data td = veh->turret_query( const_cast<vehicle_part &>( pt ) );
-                        return static_cast<int>( td.multimag_display_state().size() );
+                        return rows;
                     };
                     overview_opts.emplace_back( "5_TURRET", &vpr.part(), selectable,
                                                 selectable ? next_hotkey( hotkey ) : input_event(),
@@ -1578,11 +1579,12 @@ void veh_interact::calc_overview( map &here )
         }
 
         if( vpr.part().is_seat() ) {
-            auto details = []( const vehicle_part & pt, const catacurses::window & w, int y ) {
+            auto details = []( const vehicle_part & pt ) {
                 const npc *who = pt.crew();
                 if( who ) {
-                    right_print( w, y, 1, pt.passenger_id == who->getID() ? c_green : c_light_gray, who->get_name() );
+                    return colorize( who->get_name(), pt.passenger_id == who->getID() ? c_green : c_light_gray );
                 }
+                return std::string();
             };
             selectable = is_selectable( vpr.part() );
             overview_opts.emplace_back( "6_SEAT", &vpr.part(), selectable, selectable ? next_hotkey(
@@ -1590,7 +1592,9 @@ void veh_interact::calc_overview( map &here )
         }
         if( vpr.part().is_wheel() ) {
             selectable = is_selectable( vpr.part() );
-            auto dummy_lambda = []( const vehicle_part &, const catacurses::window &, int ) {};
+            auto dummy_lambda = []( const vehicle_part & ) {
+                return std::string();
+            };
             overview_opts.emplace_back( "7_WHEELS", &vpr.part(), selectable, selectable ? next_hotkey(
                                             hotkey ) : input_event(), dummy_lambda );
         }
@@ -1605,25 +1609,23 @@ void veh_interact::calc_overview( map &here )
 
 }
 
-void veh_interact::display_overview( const map &here )
+std::string veh_interact::overview_rml( const map &here ) const
 {
-    werase( w_list );
+    std::string rml;
     std::string last;
-    int y = 0;
-    if( overview_offset ) {
-        trim_and_print( w_list, point( 1, y ), getmaxx( w_list ) - 1,
-                        c_yellow, _( "'{' to scroll up" ) );
-        y++;
-    }
-    for( int idx = overview_offset; idx != static_cast<int>( overview_opts.size() ); ++idx ) {
-        const vehicle_part &pt = *overview_opts[idx].part;
+    for( int idx = 0; idx != static_cast<int>( overview_opts.size() ); ++idx ) {
+        const part_option &opt = overview_opts[idx];
+        const vehicle_part &pt = *opt.part;
 
         // if this is a new section print a header row
-        if( last != overview_opts[idx].key ) {
-            y += last.empty() ? 0 : 1;
-            overview_headers[overview_opts[idx].key]( w_list, y );
-            y += 2;
-            last = overview_opts[idx].key;
+        if( last != opt.key ) {
+            const auto header = overview_headers.find( opt.key );
+            if( header != overview_headers.end() ) {
+                rml += "<div class=\"line vi-ov-head\"><span class=\"vi-ov-name\">" +
+                       rml_ui::markup_to_rml( header->second.first ) + "</span><span class=\"vi-ov-detail\">" +
+                       rml_ui::markup_to_rml( header->second.second ) + "</span></div>";
+            }
+            last = opt.key;
         }
 
         bool highlighted = false;
@@ -1634,29 +1636,23 @@ void veh_interact::display_overview( const map &here )
             highlighted = true;
         }
 
-        // print part name
-        nc_color col = overview_opts[idx].selectable ? c_white : c_dark_gray;
-        trim_and_print( w_list, point( 1, y ), getmaxx( w_list ) - 1,
-                        highlighted ? hilite( col ) : col,
-                        "<color_dark_gray>%s </color>%s",
-                        right_justify( overview_opts[idx].hotkey.short_description(), 2 ), pt.name() );
-
-        // print extra columns (if any)
-        overview_opts[idx].details( pt, w_list, y );
-        const int rows_used = 1 + ( overview_opts[idx].extra_rows
-                                    ? overview_opts[idx].extra_rows( pt ) : 0 );
-        y += rows_used;
-        if( y < ( getmaxy( w_list ) - 1 ) ) {
-            overview_limit = overview_offset;
-        } else {
-            overview_limit = idx;
-            trim_and_print( w_list, point( 1, y ), getmaxx( w_list ) - 1,
-                            c_yellow, _( "'}' to scroll down" ) );
-            break;
+        // the part's name, then any extra columns
+        const nc_color col = opt.selectable ? c_white : c_dark_gray;
+        rml += string_format( "<div id=\"vi-ov-%d\" class=\"item line vi-ov%s\" data-ov=\"%d\">", idx,
+                              highlighted ? " selected" : "", idx ) +
+               "<span class=\"vi-ov-name\">" + rml_ui::markup_to_rml( string_format(
+                           "<color_dark_gray>%s </color>%s", right_justify( opt.hotkey.short_description(), 2 ),
+                           pt.name() ), col ) + "</span><span class=\"vi-ov-detail\">" +
+               rml_ui::markup_to_rml( opt.details ? opt.details( pt ) : std::string() ) + "</span></div>";
+        if( opt.extra_rows ) {
+            for( const std::pair<std::string, std::string> &extra : opt.extra_rows( pt ) ) {
+                rml += "<div class=\"line vi-ov-extra\"><span class=\"vi-ov-name\">" +
+                       rml_ui::markup_to_rml( extra.first ) + "</span><span class=\"vi-ov-detail\">" +
+                       rml_ui::markup_to_rml( extra.second ) + "</span></div>";
+            }
         }
     }
-
-    wnoutrefresh( w_list );
+    return rml;
 }
 
 void veh_interact::overview( map &here,
@@ -1670,7 +1666,7 @@ void veh_interact::overview( map &here,
 
     restore_on_out_of_scope prev_overview_pos( overview_pos );
 
-    shared_ptr_fast<ui_adaptor> current_ui = create_or_get_ui_adaptor( here );
+    shared_ptr_fast<veh_interact_window> current_ui = create_or_get_ui( here );
 
     while( true ) {
         calc_overview( here );
@@ -1707,10 +1703,16 @@ void veh_interact::overview( map &here,
 
         ui_manager::redraw();
 
-        const std::string input = main_context.handle_input();
+        const std::string input = handle_input();
         msg.reset();
+        const int clicked = input == "SELECT" ? hovered_index( "data-ov" ) : -1;
         if( input == "CONFIRM" && overview_opts[overview_pos].selectable && overview_action ) {
             overview_action( here, *overview_opts[overview_pos].part );
+            break;
+
+        } else if( clicked >= 0 && clicked < static_cast<int>( overview_opts.size() ) &&
+                   overview_opts[clicked].selectable && overview_action ) {
+            overview_action( here, *overview_opts[clicked].part );
             break;
 
         } else if( input == "QUIT" ) {
@@ -1718,14 +1720,12 @@ void veh_interact::overview( map &here,
 
         } else if( input == "UP" ) {
             do {
-                move_overview_line( -1 );
                 if( --overview_pos < 0 ) {
                     overview_pos = overview_opts.size() - 1;
                 }
             } while( !overview_opts[overview_pos].selectable );
         } else if( input == "DOWN" ) {
             do {
-                move_overview_line( 1 );
                 if( ++overview_pos >= static_cast<int>( overview_opts.size() ) ) {
                     overview_pos = 0;
                 }
@@ -1745,13 +1745,6 @@ void veh_interact::overview( map &here,
             }
         }
     }
-}
-
-void veh_interact::move_overview_line( int amount )
-{
-    overview_offset += amount;
-    overview_offset = std::max( 0, overview_offset );
-    overview_offset = std::min( overview_limit, overview_offset );
 }
 
 vehicle_part *veh_interact::get_most_damaged_part() const
@@ -1832,7 +1825,7 @@ bool veh_interact::can_remove_part( map &here, int idx, const Character &you )
         ok = false;
     }
     const nc_color desc_color = sel_vehicle_part->is_broken() ? c_dark_gray : c_light_gray;
-    sel_vehicle_part->info().format_description( nmsg, desc_color, getmaxx( w_msg ) - 4 );
+    sel_vehicle_part->info().format_description( nmsg, desc_color, pane_w - 4 );
 
     msg = colorize( nmsg, c_light_gray );
     return ok || get_avatar().has_trait( trait_DEBUG_HS );
@@ -1864,7 +1857,7 @@ void veh_interact::do_remove( map &here )
     }
     msg.reset();
 
-    shared_ptr_fast<ui_adaptor> current_ui = create_or_get_ui_adaptor( here );
+    shared_ptr_fast<veh_interact_window> current_ui = create_or_get_ui( here );
 
     restore_on_out_of_scope prev_overview_enable( overview_enable );
 
@@ -1885,7 +1878,7 @@ void veh_interact::do_remove( map &here )
         ui_manager::redraw();
 
         //read input
-        const std::string action = main_context.handle_input();
+        const std::string action = handle_input();
         msg.reset();
         if( can_remove && ( action == "REMOVE" || action == "CONFIRM" ) ) {
             switch( reason ) {
@@ -2033,7 +2026,7 @@ void veh_interact::do_assign_crew( map &here )
 
 void veh_interact::do_rename()
 {
-    string_input_popup_imgui popup( 34, veh->name, _( "Enter new vechicle name:" ) );
+    text_input_popup popup( 34, veh->name, _( "Enter new vechicle name:" ) );
     std::string name = popup.query();
     if( !name.empty() ) {
         veh->name = name;
@@ -2053,8 +2046,8 @@ void veh_interact::do_relabel( const map &here )
     }
 
     const vpart_position vp( *veh, cpart );
-    string_input_popup_imgui popup( 34, vp.get_label().value_or( "" ),
-                                    _( "New label:" ) );
+    text_input_popup popup( 34, vp.get_label().value_or( "" ),
+                            _( "New label:" ) );
     std::string text = popup.query();
     if( !popup.cancelled() ) {
         vp.set_label( text );
@@ -2077,7 +2070,7 @@ std::pair<bool, std::string> veh_interact::calc_lift_requirements( map &here, co
         if( terrain_here.has_flag( ter_furn_flag::TFLAG_LIQUID ) ) {
             const auto wrap_badter = foldstring(
                                          _( "<color_red>Unsuitable terrain</color> for working on part that requires jacking." ),
-                                         getmaxx( w_msg ) - 4 );
+                                         pane_w - 4 );
             nmsg += "> " + wrap_badter[0] + "\n";
             for( size_t i = 1; i < wrap_badter.size(); i++ ) {
                 nmsg += "  " + wrap_badter[i] + "\n";
@@ -2157,7 +2150,7 @@ int veh_interact::part_at( const point_rel_ms &d )
 
 /**
  * Checks to see if you can potentially install this part at current position.
- * Affects coloring in display_list() and is also used to
+ * Affects coloring in list_rml() and is also used to
  * sort can_mount so potentially installable parts come first.
  */
 bool veh_interact::can_potentially_install( const vpart_info &vpart )
@@ -2183,16 +2176,10 @@ bool veh_interact::can_potentially_install( const vpart_info &vpart )
 /**
  * Moves the cursor on the vehicle editing window.
  * @param d How far to move the cursor.
- * @param dstart_at How far to change the start position for vehicle part descriptions
  */
-void veh_interact::move_cursor( map &here, const point_rel_ms &d, int dstart_at )
+void veh_interact::move_cursor( map &here, const point_rel_ms &d )
 {
     cursor_vp_mount += d.rotate( 3 );
-    if( d != point_rel_ms::zero ) {
-        start_limit = 0;
-    } else {
-        start_at += dstart_at;
-    }
 
     // Update the current active component index to the new position.
     cpart = part_at( point_rel_ms::zero );
@@ -2249,89 +2236,63 @@ void veh_interact::move_cursor( map &here, const point_rel_ms &d, int dstart_at 
     cache_tool_availability_update_lifting( vehp );
 }
 
-void veh_interact::display_grid()
-{
-    // border window
-    draw_border( w_border );
-
-    wattron( w_border, BORDER_COLOR );
-
-    // match grid lines
-    const int y_mode = getmaxy( w_mode ) + 1;
-    // |-
-    mvwaddch( w_border, point( 0, y_mode ), LINE_XXXO );
-    // -|
-    mvwaddch( w_border, point( TERMX - 1, y_mode ), LINE_XOXX );
-    const int y_list = getbegy( w_list ) + getmaxy( w_list );
-    // |-
-    mvwaddch( w_border, point( 0, y_list ), LINE_XXXO );
-    // -|
-    mvwaddch( w_border, point( TERMX - 1, y_list ), LINE_XOXX );
-
-    const int grid_w = getmaxx( w_border ) - 2;
-
-    // Two lines dividing the three middle sections.
-    mvwvline( w_border, point( getmaxx( w_disp ) + 1,                     getmaxy( w_mode ) + 2 ),
-              LINE_XOXO, page_size );
-    mvwvline( w_border, point( getmaxx( w_disp ) + 2 + getmaxx( w_list ), getmaxy( w_mode ) + 2 ),
-              LINE_XOXO, page_size );
-    // Two lines dividing the vertical menu sections.
-    mvwhline( w_border, point( 1,             getmaxy( w_mode ) + 1 ), LINE_OXOX, grid_w );
-    mvwhline( w_border, point( 1, getmaxy( w_mode ) + 2 + page_size ), LINE_OXOX, grid_w );
-    // Fix up the line intersections.
-    mvwaddch( w_border, point( getmaxx( w_disp ) + 1, getmaxy( w_mode ) + 1 ), LINE_OXXX );
-    // _|_
-    mvwaddch( w_border, point( getmaxx( w_disp ) + 1, getmaxy( w_mode ) + 2 + page_size ), LINE_XXOX );
-    mvwaddch( w_border, point( getmaxx( w_disp ) + 2 + getmaxx( w_list ), getmaxy( w_mode ) + 1 ),
-              LINE_OXXX );
-    // _|_
-    mvwaddch( w_border, point( getmaxx( w_disp ) + 2 + getmaxx( w_list ),
-                               getmaxy( w_mode ) + 2 + page_size ),
-              LINE_XXOX );
-
-    wattroff( w_border, BORDER_COLOR );
-
-    wnoutrefresh( w_border );
-}
-
 /**
- * Draws the viewport with the vehicle.
+ * The viewport with the vehicle, as rows of a fixed-width font.
  */
-void veh_interact::display_veh( map &here )
+std::string veh_interact::veh_rml( map &here )
 {
-    werase( w_disp );
-    const point h_size = point( getmaxx( w_disp ), getmaxy( w_disp ) ) / 2;
+    struct cell {
+        std::string glyph = " ";
+        nc_color color = c_black;
+    };
+    const int width = disp_w;
+    const int height = disp_h;
+    std::vector<std::vector<cell>> grid( height, std::vector<cell>( width ) );
+    const point h_size = point( width, height ) / 2;
+    const auto put = [&]( const point & p, const nc_color & color, const std::string & glyph ) {
+        if( p.x >= 0 && p.y >= 0 && p.x < width && p.y < height ) {
+            grid[p.y][p.x] = { glyph, color };
+        }
+    };
 
+    std::string rml;
     if( debug_mode ) {
         // show CoM, pivot in debug mode
 
         const point_rel_ms &pivot = veh->pivot_point( here );
         const point_rel_ms &com = veh->local_center_of_mass( here );
 
-        mvwprintz( w_disp, point::zero, c_green, "CoM   %d,%d", com.x(), com.y() );
-        // NOLINTNEXTLINE(cata-use-named-point-constants)
-        mvwprintz( w_disp, point( 0, 1 ), c_red,   "Pivot %d,%d", pivot.x(), pivot.y() );
+        rml += "<div>" + rml_ui::colored_rml( string_format( "CoM   %d,%d", com.x(), com.y() ),
+                                              c_green ) + "</div><div>" + rml_ui::colored_rml( string_format( "Pivot %d,%d", pivot.x(),
+                                                      pivot.y() ), c_red ) + "</div>";
 
         const point_rel_ms com_s = ( com + cursor_vp_mount ).rotate( 3 ) + h_size;
         const point_rel_ms pivot_s = ( pivot + cursor_vp_mount ).rotate( 3 ) + h_size;
 
-        mvwhline( w_disp, point( 0, com_s.y() ), c_green, LINE_OXOX, std::min( getmaxx( w_disp ),
-                  com_s.x() + 1 ) );
-        mvwvline( w_disp, point( com_s.x(), 0 ), c_green, LINE_XOXO, std::min( getmaxy( w_disp ),
-                  com_s.y() + 1 ) );
-
-        mvwhline( w_disp, point( std::max( 0, pivot_s.x() ), pivot_s.y() ), c_red, LINE_OXOX,
-                  getmaxx( w_disp ) - std::max( 0, pivot_s.x() ) + 1 );
-        mvwvline( w_disp, point( pivot_s.x(), std::max( 0, pivot_s.y() ) ), c_red, LINE_XOXO,
-                  getmaxy( w_disp ) - std::max( 0, pivot_s.y() ) + 1 );
+        for( int x = 0; x <= std::min( width - 1, com_s.x() ); ++x ) {
+            put( point( x, com_s.y() ), c_green, "─" );
+        }
+        for( int y = 0; y <= std::min( height - 1, com_s.y() ); ++y ) {
+            put( point( com_s.x(), y ), c_green, "│" );
+        }
+        for( int x = std::max( 0, pivot_s.x() ); x < width; ++x ) {
+            put( point( x, pivot_s.y() ), c_red, "─" );
+        }
+        for( int y = std::max( 0, pivot_s.y() ); y < height; ++y ) {
+            put( point( pivot_s.x(), y ), c_red, "│" );
+        }
     }
 
     // Draw guidelines to make current selection point more visible.
-    mvwvline( w_disp, point( h_size.x, 0 ), c_dark_gray, LINE_XOXO, getmaxy( w_disp ) );
-    mvwhline( w_disp, point( 0, h_size.y ), c_dark_gray, LINE_OXOX, getmaxx( w_disp ) );
+    for( int y = 0; y < height; ++y ) {
+        put( point( h_size.x, y ), c_dark_gray, "│" );
+    }
+    for( int x = 0; x < width; ++x ) {
+        put( point( x, h_size.y ), c_dark_gray, "─" );
+    }
 
     nc_color col_at_cursor = c_black;
-    int sym_at_cursor = ' ';
+    char32_t sym_at_cursor = ' ';
     //Iterate over structural parts so we only hit each square once
     for( const int structural_part_idx : veh->all_parts_at_location( vpart_location_structure ) ) {
         const vehicle_part &vp = veh->part( structural_part_idx );
@@ -2339,15 +2300,14 @@ void veh_interact::display_veh( map &here )
         const point_rel_ms q = ( vp.mount + cursor_vp_mount ).rotate( 3 );
 
         if( q != point_rel_ms::zero ) { // cursor is not on this part
-            mvwputch( w_disp, h_size + q.raw(), vd.color, vd.symbol_curses );
+            put( h_size + q.raw(), vd.color, utf32_to_utf8( vd.symbol ) );
             continue;
         }
         cpart = structural_part_idx;
         col_at_cursor = vd.color;
-        sym_at_cursor = vd.symbol_curses;
+        sym_at_cursor = vd.symbol;
     }
 
-    const point pt_disp( getmaxx( w_disp ) / 2, getmaxy( w_disp ) / 2 );
     const tripoint_bub_ms pos_at_cursor = veh->pos_bub( here ) + veh->coord_translate(
             -cursor_vp_mount );
     const optional_vpart_position ovp = here.veh_at( pos_at_cursor );
@@ -2355,8 +2315,24 @@ void veh_interact::display_veh( map &here )
     if( here.impassable_ter_furn( pos_at_cursor ) || ( ovp && &ovp->vehicle() != veh ) ) {
         col_at_cursor = red_background( col_at_cursor );
     }
-    mvwputch( w_disp, pt_disp, col_at_cursor, sym_at_cursor );
-    wnoutrefresh( w_disp );
+    put( h_size, col_at_cursor, utf32_to_utf8( sym_at_cursor ) );
+
+    // Each row, with runs of one color in one span
+    for( const std::vector<cell> &row : grid ) {
+        rml += "<div class=\"vi-row\">";
+        std::string run;
+        nc_color run_color = c_black;
+        for( const cell &c : row ) {
+            if( !run.empty() && c.color != run_color ) {
+                rml += rml_ui::colored_rml( run, run_color );
+                run.clear();
+            }
+            run_color = c.color;
+            run += c.glyph;
+        }
+        rml += rml_ui::colored_rml( run, run_color ) + "</div>";
+    }
+    return rml;
 }
 
 static std::string wheel_state_description( map &here, const vehicle &veh )
@@ -2409,22 +2385,16 @@ static std::string wheel_state_description( map &here, const vehicle &veh )
 /**
  * Displays the vehicle's stats at the bottom of the window.
  */
-void veh_interact::display_stats( map &here ) const
+std::string veh_interact::stats_rml( map &here ) const
 {
-    werase( w_stats_1 );
-    werase( w_stats_2 );
-    werase( w_stats_3 );
-
-    on_out_of_scope refresh_windows( [&]() {
-        wnoutrefresh( w_stats_1 );
-        wnoutrefresh( w_stats_2 );
-        wnoutrefresh( w_stats_3 );
-    } );
-
-    // 3 * stats_h
-    const int slots = 24;
-    std::array<const catacurses::window *, slots> win;
-    std::array<int, slots> row;
+    // 3 * stats_h lines, in three columns
+    constexpr int slots = 24;
+    std::array<std::string, slots> slot;
+    const auto line = [&slot]( int i, const std::string & text ) {
+        if( i >= 0 && i < slots ) {
+            slot[i] = colorize( text, c_light_gray );
+        }
+    };
 
     units::volume total_cargo = 0_ml;
     units::volume free_cargo = 0_ml;
@@ -2432,22 +2402,6 @@ void veh_interact::display_stats( map &here ) const
         const vehicle_stack vs = vpr.items();
         total_cargo += vs.max_volume();
         free_cargo += vs.free_volume();
-    }
-
-    for( int i = 0; i < slots; i++ ) {
-        if( i < stats_h ) {
-            // First column
-            win[i] = &w_stats_1;
-            row[i] = i;
-        } else if( i < ( 2 * stats_h ) ) {
-            // Second column
-            win[i] = &w_stats_2;
-            row[i] = i - stats_h;
-        } else {
-            // Third column
-            win[i] = &w_stats_3;
-            row[i] = i - 2 * stats_h;
-        }
     }
 
     bool is_boat = !veh->floating.empty();
@@ -2460,76 +2414,68 @@ void veh_interact::display_stats( map &here ) const
 
     int i = 0;
     if( is_aircraft ) {
-        fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                        _( "Air Safe/Top speed: <color_light_green>%3s</color>/<color_light_red>%3s</color> %s" ),
-                        vel_to_str( veh->safe_rotor_velocity( here, false ) ),
-                        vel_to_str( veh->max_rotor_velocity( here, false ) ),
-                        velocity_units( VU_VEHICLE ) );
-        i += 1;
-        fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                        _( "Air acceleration: <color_light_blue>%3s</color> %s/s" ),
-                        vel_to_str( veh->rotor_acceleration( here, false ) ),
-                        velocity_units( VU_VEHICLE ) );
-        i += 1;
+        line( i++, string_format(
+                  _( "Air Safe/Top speed: <color_light_green>%3s</color>/<color_light_red>%3s</color> %s" ),
+                  vel_to_str( veh->safe_rotor_velocity( here, false ) ),
+                  vel_to_str( veh->max_rotor_velocity( here, false ) ),
+                  velocity_units( VU_VEHICLE ) ) );
+        line( i++, string_format( _( "Air acceleration: <color_light_blue>%3s</color> %s/s" ),
+                                  vel_to_str( veh->rotor_acceleration( here, false ) ),
+                                  velocity_units( VU_VEHICLE ) ) );
     } else {
         if( is_ground ) {
-            fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                            _( "Safe/Top speed: <color_light_green>%3s</color>/<color_light_red>%3s</color> %s" ),
-                            vel_to_str( veh->safe_ground_velocity( here, false ) ),
-                            vel_to_str( veh->max_ground_velocity( here, false ) ),
-                            velocity_units( VU_VEHICLE ) );
-            i += 1;
+            line( i++, string_format(
+                      _( "Safe/Top speed: <color_light_green>%3s</color>/<color_light_red>%3s</color> %s" ),
+                      vel_to_str( veh->safe_ground_velocity( here, false ) ),
+                      vel_to_str( veh->max_ground_velocity( here, false ) ),
+                      velocity_units( VU_VEHICLE ) ) );
             // TODO: extract accelerations units to its own function
-            fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                            //~ /t means per turn
-                            _( "Acceleration: <color_light_blue>%3s</color> %s/s" ),
-                            vel_to_str( veh->ground_acceleration( here, false ) ),
-                            velocity_units( VU_VEHICLE ) );
-            i += 1;
+            line( i++, string_format(
+                      //~ /t means per turn
+                      _( "Acceleration: <color_light_blue>%3s</color> %s/s" ),
+                      vel_to_str( veh->ground_acceleration( here, false ) ),
+                      velocity_units( VU_VEHICLE ) ) );
         } else {
             i += 2;
         }
         if( is_boat ) {
-            fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                            _( "Water Safe/Top speed: <color_light_green>%3s</color>/<color_light_red>%3s</color> %s" ),
-                            vel_to_str( veh->safe_water_velocity( here, false ) ),
-                            vel_to_str( veh->max_water_velocity( here, false ) ),
-                            velocity_units( VU_VEHICLE ) );
-            i += 1;
+            line( i++, string_format(
+                      _( "Water Safe/Top speed: <color_light_green>%3s</color>/<color_light_red>%3s</color> %s" ),
+                      vel_to_str( veh->safe_water_velocity( here, false ) ),
+                      vel_to_str( veh->max_water_velocity( here, false ) ),
+                      velocity_units( VU_VEHICLE ) ) );
             // TODO: extract accelerations units to its own function
-            fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                            //~ /t means per turn
-                            _( "Water acceleration: <color_light_blue>%3s</color> %s/s" ),
-                            vel_to_str( veh->water_acceleration( here, false ) ),
-                            velocity_units( VU_VEHICLE ) );
-            i += 1;
+            line( i++, string_format(
+                      //~ /t means per turn
+                      _( "Water acceleration: <color_light_blue>%3s</color> %s/s" ),
+                      vel_to_str( veh->water_acceleration( here, false ) ),
+                      velocity_units( VU_VEHICLE ) ) );
         } else {
             i += 2;
         }
     }
-    fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                    _( "Mass: <color_light_blue>%5.0f</color> %s" ),
-                    convert_weight( veh->total_mass( here ) ), weight_units() );
-    i += 1;
-    fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                    disp_w > 35 ? _( "Cargo volume: <color_light_blue>%s</color> / <color_light_blue>%s</color> %s" ) :
-                    _( "Cargo: <color_light_blue>%s</color> / <color_light_blue>%s</color> %s" ),
-                    format_volume( total_cargo - free_cargo ),
-                    format_volume( total_cargo ), volume_units_abbr() );
-    i += 1;
+    line( i++, string_format( _( "Mass: <color_light_blue>%5.0f</color> %s" ),
+                              convert_weight( veh->total_mass( here ) ), weight_units() ) );
+    line( i++, string_format(
+              disp_w > 35 ? _( "Cargo volume: <color_light_blue>%s</color> / <color_light_blue>%s</color> %s" ) :
+              _( "Cargo: <color_light_blue>%s</color> / <color_light_blue>%s</color> %s" ),
+              format_volume( total_cargo - free_cargo ),
+              format_volume( total_cargo ), volume_units_abbr() ) );
     // Write the overall damage
-    mvwprintz( *win[i], point( 0, row[i] ), c_light_gray, _( "Status: " ) );
-    fold_and_print( *win[i], point( utf8_width( _( "Status: " ) ), row[i] ), getmaxx( *win[i] ),
-                    total_durability_color, total_durability_text );
-    i += 1;
+    line( i++, _( "Status: " ) + colorize( total_durability_text, total_durability_color ) );
+    line( i++, wheel_state_description( here, *veh ) );
 
-    fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                    wheel_state_description( here, *veh ) );
-    i += 1;
+    const auto column = [&slot]( int first ) {
+        std::string rml = "<div class=\"vi-stats-col\">";
+        for( int j = first; j < first + 8 && j < slots; ++j ) {
+            rml += "<div class=\"line\">" + rml_ui::markup_to_rml( slot[j] ) + "</div>";
+        }
+        return rml + "</div>";
+    };
 
     if( install_info || remove_info ) {
-        // don't draw the second and third columns which would be overwritten by w_details
-        return;
+        // the details take the place of the second and third columns
+        return "<div id=\"vi-stats\">" + column( 0 ) + "</div>";
     }
 
     // advance to next column if necessary
@@ -2537,11 +2483,9 @@ void veh_interact::display_stats( map &here ) const
 
     //This lambda handles printing parts in the "Most damaged" and "Needs repair" cases
     //for the veh_interact ui
-    const auto print_part = [&]( const std::string & str, int slot, vehicle_part * pt ) {
-        mvwprintz( *win[slot], point( 0, row[slot] ), c_light_gray, str );
-        int iw = utf8_width( str ) + 1;
-        return fold_and_print( *win[slot], point( iw, row[slot] ), getmaxx( *win[slot] ), c_light_gray,
-                               pt->name() );
+    const auto print_part = [&]( const std::string & str, int at, vehicle_part * pt ) {
+        line( at, str + " " + pt->name() );
+        return 1;
     };
 
     vehicle_part *mostDamagedPart = get_most_damaged_part();
@@ -2565,79 +2509,54 @@ void veh_interact::display_stats( map &here ) const
         i += 1;
     }
 
-    fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                    _( "Air drag:       <color_light_blue>%5.2f</color>" ),
-                    veh->coeff_air_drag() );
-    i += 1;
+    line( i++, string_format( _( "Air drag:       <color_light_blue>%5.2f</color>" ),
+                              veh->coeff_air_drag() ) );
 
     if( is_boat ) {
-        fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                        _( "Water drag:     <color_light_blue>%5.2f</color>" ),
-                        veh->coeff_water_drag( here ) );
+        line( i, string_format( _( "Water drag:     <color_light_blue>%5.2f</color>" ),
+                                veh->coeff_water_drag( here ) ) );
     }
     i += 1;
 
     if( is_ground ) {
         if( debug_mode ) {
-            fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                            _( "Contact area:   <color_light_blue>%d</color>" ),
-                            veh->wheel_area() );
-            i += 1;
-            fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                            _( "Total wheel traction:   <color_light_blue>%5.2f</color>" ),
-                            here.vehicle_wheel_traction( *veh ) );
-            i += 1;
+            line( i++, string_format( _( "Contact area:   <color_light_blue>%d</color>" ),
+                                      veh->wheel_area() ) );
+            line( i++, string_format( _( "Total wheel traction:   <color_light_blue>%5.2f</color>" ),
+                                      here.vehicle_wheel_traction( *veh ) ) );
         }
-        fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                        _( "Rolling drag:   <color_light_blue>%5.2f</color>" ),
-                        veh->coeff_rolling_drag( here ) );
+        line( i, string_format( _( "Rolling drag:   <color_light_blue>%5.2f</color>" ),
+                                veh->coeff_rolling_drag( here ) ) );
     }
     i += 1;
 
-    fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                    _( "Static drag:    <color_light_blue>%5d</color>" ),
-                    units::to_watt( veh->static_drag( false ) ) );
-    i += 1;
+    line( i++, string_format( _( "Static drag:    <color_light_blue>%5d</color>" ),
+                              units::to_watt( veh->static_drag( false ) ) ) );
 
-    fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                    _( "Offroad:        <color_light_blue>%4d</color>%%" ),
-                    static_cast<int>( veh->k_traction( here, veh->wheel_area() *
-                                      veh->average_offroad_rating() ) * 100 ) );
-    i += 1;
+    line( i++, string_format( _( "Offroad:        <color_light_blue>%4d</color>%%" ),
+                              static_cast<int>( veh->k_traction( here, veh->wheel_area() *
+                                                veh->average_offroad_rating() ) * 100 ) ) );
 
     if( is_boat ) {
-
         const double water_clearance = veh->water_hull_height( here ) - veh->water_draft( here );
         const char *draft_string = water_clearance > 0 ?
                                    _( "Draft/Clearance:<color_light_blue>%4.2f</color>m/<color_light_blue>%4.2f</color>m" ) :
                                    _( "Draft/Clearance:<color_light_blue>%4.2f</color>m/<color_light_red>%4.2f</color>m" ) ;
-
-        fold_and_print( *win[i], point( 0, row[i] ), getmaxx( *win[i] ), c_light_gray,
-                        draft_string,
-                        veh->water_draft( here ), water_clearance );
-        i += 1;
+        line( i++, string_format( draft_string, veh->water_draft( here ), water_clearance ) );
     }
 
-    // advance to next column if necessary
-    i = std::max( i, 2 * stats_h );
-
-    // Print fuel percentage & type name only if it fits in the window, 10 is width of "E...F 100%"
-    veh->print_fuel_indicators( here, *win[i], point( 0, row[i] ), fuel_index, true,
-                                ( getmaxx( *win[i] ) > 10 ),
-                                ( getmaxx( *win[i] ) > 10 ) );
-
+    // The fuel gauges take the third column
+    return "<div id=\"vi-stats\">" + column( 0 ) + column( stats_h ) +
+           "<div class=\"vi-stats-col vi-fuel\">" +
+           rml_ui::markup_to_rml( veh->print_fuel_indicators( here, fuel_index ), c_light_gray ) +
+           "</div></div>";
 }
 
-void veh_interact::display_name()
+std::string veh_interact::name_markup() const
 {
-    werase( w_name );
-    // NOLINTNEXTLINE(cata-use-named-point-constants)
-    mvwprintz( w_name, point( 1, 0 ), c_light_gray, _( "Name: " ) );
-
-    mvwprintz( w_name, point( 1 + utf8_width( _( "Name: " ) ), 0 ),
-               !veh->is_owned_by( get_player_character(), true ) ? c_light_red : c_light_green,
-               string_format( _( "%s (%s)" ), veh->name, veh->get_owner_name() ) );
-    wnoutrefresh( w_name );
+    return colorize( _( "Name: " ), c_light_gray ) +
+           colorize( string_format( _( "%s (%s)" ), veh->name, veh->get_owner_name() ),
+                     !veh->is_owned_by( get_player_character(), true ) ? c_light_red : c_light_green );
 }
 
 static std::string veh_act_desc( const input_context &ctxt, const std::string &id,
@@ -2661,180 +2580,107 @@ static std::string veh_act_desc( const input_context &ctxt, const std::string &i
 }
 
 /**
- * Prints the list of usable commands, and highlights the hotkeys used to activate them.
+ * The list of usable commands, each a button, with the hotkeys used to activate them.
  */
-void veh_interact::display_mode( const map &here )
+std::string veh_interact::mode_rml( const map &here )
 {
-    werase( w_mode );
-
     if( title.has_value() ) {
-        nc_color title_col = c_light_gray;
-        // NOLINTNEXTLINE(cata-use-named-point-constants)
-        print_colored_text( w_mode, point( 1, 0 ), title_col, title_col, title.value() );
-    } else {
-        constexpr size_t action_cnt = 12;
-        const std::array<std::string, action_cnt> actions = { {
-                veh_act_desc( main_context, "INSTALL",
-                              pgettext( "veh_interact", "install" ),
-                              cant_do( here,  VEHICLE_INSTALL ) ),
-                veh_act_desc( main_context, "REPAIR",
-                              pgettext( "veh_interact", "repair" ),
-                              cant_do( here, VEHICLE_REPAIR ) ),
-                veh_act_desc( main_context, "MEND",
-                              pgettext( "veh_interact", "mend" ),
-                              cant_do( here, VEHICLE_MEND_FAULTS ) ),
-                veh_act_desc( main_context, "REFILL",
-                              pgettext( "veh_interact", "refill" ),
-                              cant_do( here,  VEHICLE_REFILL ) ),
-                veh_act_desc( main_context, "REMOVE",
-                              pgettext( "veh_interact", "remove" ),
-                              cant_do( here,  VEHICLE_REMOVE ) ),
-                veh_act_desc( main_context, "SIPHON",
-                              pgettext( "veh_interact", "siphon" ),
-                              cant_do( here,  VEHICLE_SIPHON ) ),
-                veh_act_desc( main_context, "UNLOAD",
-                              pgettext( "veh_interact", "unload" ),
-                              cant_do( here, VEHICLE_UNLOAD ) ),
-                veh_act_desc( main_context, "ASSIGN_CREW",
-                              pgettext( "veh_interact", "crew" ),
-                              cant_do( here, VEHICLE_ASSIGN_CREW ) ),
-                veh_act_desc( main_context, "CHANGE_SHAPE",
-                              pgettext( "veh_interact", "shape" ),
-                              cant_do( here, VEHICLE_SHAPE ) ),
-                veh_act_desc( main_context, "RENAME",
-                              pgettext( "veh_interact", "rename" ),
-                              task_reason::CAN_DO ),
-                veh_act_desc( main_context, "RELABEL",
-                              pgettext( "veh_interact", "label" ),
-                              cant_do( here,  VEHICLE_RELABEL ) ),
-                veh_act_desc( main_context, "QUIT",
-                              pgettext( "veh_interact", "back" ),
-                              task_reason::CAN_DO ),
-            }
-        };
-
-        std::array < int, action_cnt + 1 > pos;
-        pos[0] = 0;
-        for( size_t i = 0; i < action_cnt; i++ ) {
-            pos[i + 1] = pos[i] + utf8_width( actions[i], true );
-        }
-        const int space = std::max<int>( getmaxx( w_mode ) - pos.back(), action_cnt + 1 );
-        for( size_t i = 0; i < action_cnt; i++ ) {
-            nc_color dummy = c_white;
-            print_colored_text( w_mode, point( pos[i] + space * ( i + 1 ) / ( action_cnt + 1 ), 0 ),
-                                dummy, c_white, actions[i] );
-        }
+        return "<div class=\"vi-mode\">" + rml_ui::markup_to_rml( title.value(), c_light_gray ) +
+               "</div>";
     }
-    wnoutrefresh( w_mode );
+    const std::array<std::pair<std::string, std::string>, 12> actions = { {
+            { "INSTALL", veh_act_desc( main_context, "INSTALL", pgettext( "veh_interact", "install" ), cant_do( here, VEHICLE_INSTALL ) ) },
+            { "REPAIR", veh_act_desc( main_context, "REPAIR", pgettext( "veh_interact", "repair" ), cant_do( here, VEHICLE_REPAIR ) ) },
+            { "MEND", veh_act_desc( main_context, "MEND", pgettext( "veh_interact", "mend" ), cant_do( here, VEHICLE_MEND_FAULTS ) ) },
+            { "REFILL", veh_act_desc( main_context, "REFILL", pgettext( "veh_interact", "refill" ), cant_do( here, VEHICLE_REFILL ) ) },
+            { "REMOVE", veh_act_desc( main_context, "REMOVE", pgettext( "veh_interact", "remove" ), cant_do( here, VEHICLE_REMOVE ) ) },
+            { "SIPHON", veh_act_desc( main_context, "SIPHON", pgettext( "veh_interact", "siphon" ), cant_do( here, VEHICLE_SIPHON ) ) },
+            { "UNLOAD", veh_act_desc( main_context, "UNLOAD", pgettext( "veh_interact", "unload" ), cant_do( here, VEHICLE_UNLOAD ) ) },
+            { "ASSIGN_CREW", veh_act_desc( main_context, "ASSIGN_CREW", pgettext( "veh_interact", "crew" ), cant_do( here, VEHICLE_ASSIGN_CREW ) ) },
+            { "CHANGE_SHAPE", veh_act_desc( main_context, "CHANGE_SHAPE", pgettext( "veh_interact", "shape" ), cant_do( here, VEHICLE_SHAPE ) ) },
+            { "RENAME", veh_act_desc( main_context, "RENAME", pgettext( "veh_interact", "rename" ), task_reason::CAN_DO ) },
+            { "RELABEL", veh_act_desc( main_context, "RELABEL", pgettext( "veh_interact", "label" ), cant_do( here, VEHICLE_RELABEL ) ) },
+            { "QUIT", veh_act_desc( main_context, "QUIT", pgettext( "veh_interact", "back" ), task_reason::CAN_DO ) },
+        }
+    };
+    std::string rml = "<div class=\"vi-mode\">";
+    for( const std::pair<std::string, std::string> &action : actions ) {
+        rml += rml_ui::button_rml( action.first, rml_ui::markup_to_rml( action.second, c_white ) );
+    }
+    return rml + "</div>";
 }
 
 /**
- * Draws the list of parts that can be mounted in the selected square. Used
- * when installing new parts.
+ * The list of parts that can be mounted in the selected square, below the
+ * category tabs. Used when installing new parts.
  * @param pos The current cursor position in the list.
  * @param list The list to display parts from.
- * @param header Number of lines occupied by the list header
  */
-void veh_interact::display_list( size_t pos, const std::vector<const vpart_info *> &list,
-                                 const int header )
+std::string veh_interact::list_rml( size_t pos, const std::vector<const vpart_info *> &list )
 {
-    werase( w_list );
-    int lines_per_page = page_size - header;
-    size_t page = pos / lines_per_page;
-    for( size_t i = page * lines_per_page; i < ( page + 1 ) * lines_per_page && i < list.size(); i++ ) {
+    std::string rml;
+    if( install_info ) {
+        const std::vector<vpart_category> &tab_list = install_info->tab_list;
+        rml += "<div class=\"vi-tabs\">";
+        for( size_t i = 0; i < tab_list.size(); i++ ) {
+            const bool active = install_info->tab == i; // current tab is active
+            rml += std::string( "<span class=\"vi-tab" ) + ( active ? " active" : "" ) + "\">" +
+                   rml_ui::escape_rml( active ? tab_list[i].name() : tab_list[i].short_name() ) + "</span>";
+        }
+        rml += "</div>";
+    }
+    for( size_t i = 0; i < list.size(); i++ ) {
         const vpart_info &info = *list[i];
         const vpart_variant &vv = info.variants.at( info.variant_default );
-        int y = i - page * lines_per_page + header;
-        mvwputch( w_list, point( 1, y ), info.color, vv.get_symbol_curses( 0_degrees, false ) );
-        nc_color col = can_potentially_install( info ) ? c_white : c_dark_gray;
-        trim_and_print( w_list, point( 3, y ), getmaxx( w_list ) - 3, pos == i ? hilite( col ) : col,
-                        info.name() );
+        const nc_color col = can_potentially_install( info ) ? c_white : c_dark_gray;
+        rml += string_format( "<div id=\"vi-li-%d\" class=\"item line vi-li%s\" data-li=\"%d\">",
+                              static_cast<int>( i ), pos == i ? " selected" : "", static_cast<int>( i ) ) +
+               "<span class=\"vi-sym\">" + rml_ui::colored_rml( utf32_to_utf8( vv.get_symbol( 0_degrees,
+                       false ) ), info.color ) + "</span>" + rml_ui::colored_rml( info.name(), col ) + "</div>";
     }
-
-    if( install_info ) {
-        auto &tab_list = install_info->tab_list;
-        size_t &tab = install_info->tab;
-        // draw tab menu
-        int tab_x = 0;
-        for( size_t i = 0; i < tab_list.size(); i++ ) {
-            bool active = tab == i; // current tab is active
-            std::string tab_name = active ? tab_list[i].name() : tab_list[i].short_name();
-            tab_x += active; // add a space before selected tab
-            draw_subtab( w_list, tab_x, tab_name, active, false );
-            // one space padding and add a space after selected tab
-            tab_x += 1 + utf8_width( tab_name ) + active;
-        }
-    }
-    wnoutrefresh( w_list );
+    return rml;
 }
 
 /**
  * Used when installing parts.
- * Opens up w_details containing info for part currently selected in w_list.
+ * The info for the part currently selected in the list, in two columns.
  */
-void veh_interact::display_details( const vpart_info *part )
+std::string veh_interact::details_rml( const vpart_info *part ) const
 {
-    const int details_w = getmaxx( w_details );
-
-    werase( w_details );
-
-    draw_border( w_details );
-
     if( part == nullptr ) {
-        wnoutrefresh( w_details );
-        return;
+        return std::string();
     }
-    // displays data in two columns
-    int column_width = details_w / 2;
-    int col_1 = 2;
-    int col_2 = col_1 + column_width;
-    int line = 0;
-    bool small_mode = column_width < 20;
-
-    // TODO: show mod part comes from
-    // line 0: part name
-    fold_and_print( w_details, point( col_1, line ), details_w, c_light_green, part->name() );
+    // lines 1 to 5, each a pair of columns
+    std::array<std::pair<std::string, std::string>, 5> lines;
 
     // line 1: (column 1) durability   (column 2) damage mod
-    fold_and_print( w_details, point( col_1, line + 1 ), column_width, c_white,
-                    "%s: <color_light_gray>%d</color>",
-                    small_mode ? _( "Dur" ) : _( "Durability" ),
-                    part->durability );
-    fold_and_print( w_details, point( col_2, line + 1 ), column_width, c_white,
-                    "%s: <color_light_gray>%d%%</color>",
-                    small_mode ? _( "Dmg" ) : _( "Damage" ),
-                    part->dmg_mod );
+    lines[0].first = string_format( "%s: <color_light_gray>%d</color>", _( "Durability" ),
+                                    part->durability );
+    lines[0].second = string_format( "%s: <color_light_gray>%d%%</color>", _( "Damage" ),
+                                     part->dmg_mod );
 
     // line 2: (column 1) weight   (column 2) folded volume (if applicable)
-    fold_and_print( w_details, point( col_1, line + 2 ), column_width, c_white,
-                    "%s: <color_light_gray>%.1f%s</color>",
-                    small_mode ? _( "Wgt" ) : _( "Weight" ),
-                    convert_weight( item::find_type( part->base_item )->weight ),
-                    weight_units() );
+    lines[1].first = string_format( "%s: <color_light_gray>%.1f%s</color>", _( "Weight" ),
+                                    convert_weight( item::find_type( part->base_item )->weight ), weight_units() );
     if( part->folded_volume ) {
-        fold_and_print( w_details, point( col_2, line + 2 ), column_width, c_white,
-                        "%s: <color_light_gray>%s %s</color>",
-                        small_mode ? _( "FoldVol" ) : _( "Folded Volume" ),
-                        format_volume( part->folded_volume.value() ),
-                        volume_units_abbr() );
+        lines[1].second = string_format( "%s: <color_light_gray>%s %s</color>", _( "Folded Volume" ),
+                                         format_volume( part->folded_volume.value() ), volume_units_abbr() );
     }
 
     // line 3: (column 1) size, bonus, wheel diameter (if applicable)    (column 2) epower, wheel width (if applicable)
     if( part->size > 0_ml && part->has_flag( VPFLAG_CARGO ) ) {
-        fold_and_print( w_details, point( col_1, line + 3 ), column_width, c_white,
-                        "%s: <color_light_gray>%s %s</color>",
-                        small_mode ? _( "Cap" ) : _( "Capacity" ),
-                        format_volume( part->size ), volume_units_abbr() );
+        lines[2].first = string_format( "%s: <color_light_gray>%s %s</color>", _( "Capacity" ),
+                                        format_volume( part->size ), volume_units_abbr() );
     }
 
     if( part->bonus > 0 ) {
         std::string label;
         if( part->has_flag( VPFLAG_SEATBELT ) ) {
-            label = small_mode ? _( "Str" ) : _( "Strength" );
+            label = _( "Strength" );
         } else if( part->has_flag( "HORN" ) ) {
             label = _( "Noise" );
         } else if( part->has_flag( "MUFFLER" ) ) {
-            label = small_mode ? _( "NoisRed" ) : _( "Noise Reduction" );
+            label = _( "Noise Reduction" );
         } else if( part->has_flag( VPFLAG_EXTENDS_VISION ) ) {
             label = _( "Range" );
         } else if( part->has_flag( VPFLAG_LIGHT ) || part->has_flag( VPFLAG_CONE_LIGHT ) ||
@@ -2846,47 +2692,35 @@ void veh_interact::display_details( const vpart_info *part )
         }
 
         if( !label.empty() ) {
-            fold_and_print( w_details, point( col_1, line + 3 ), column_width, c_white,
-                            "%s: <color_light_gray>%d</color>", label,
-                            part->bonus );
+            lines[2].first = string_format( "%s: <color_light_gray>%d</color>", label, part->bonus );
         }
     }
 
     if( part->has_flag( VPFLAG_WHEEL ) ) {
         // Note: there is no guarantee that whl is non-empty!
         const cata::value_ptr<islot_wheel> &whl = item::find_type( part->base_item )->wheel;
-        fold_and_print( w_details, point( col_1, line + 3 ), column_width, c_white,
-                        "%s: <color_light_gray>%d\"</color>",
-                        small_mode ? _( "Dia" ) : _( "Wheel Diameter" ),
-                        whl ? whl->diameter : 0 );
-        fold_and_print( w_details, point( col_2, line + 3 ), column_width, c_white,
-                        "%s: <color_light_gray>%d\"</color>",
-                        small_mode ? _( "Wdt" ) : _( "Wheel Width" ),
-                        whl ? whl->width : 0 );
+        lines[2].first = string_format( "%s: <color_light_gray>%d\"</color>", _( "Wheel Diameter" ),
+                                        whl ? whl->diameter : 0 );
+        lines[2].second = string_format( "%s: <color_light_gray>%d\"</color>", _( "Wheel Width" ),
+                                         whl ? whl->width : 0 );
     }
 
     if( part->epower != 0_W ) {
-        fold_and_print( w_details, point( col_2, line + 3 ), column_width, c_white,
-                        "%s: <color_light_gray>%+4d</color>",
-                        small_mode ? _( "Epwr" ) : _( "Electric Power" ),
-                        units::to_watt( part->epower ) );
+        lines[2].second = string_format( "%s: <color_light_gray>%+4d</color>", _( "Electric Power" ),
+                                         units::to_watt( part->epower ) );
     }
 
-    // line 4 [horizontal]: fuel_type (if applicable)
-    // line 4 [vertical/hybrid]: (column 1) fuel_type (if applicable)    (column 2) power (if applicable)
-    // line 5 [horizontal]: power (if applicable)
+    // line 4: (column 1) fuel_type (if applicable)    (column 2) drain (if applicable)
     if( !part->fuel_type.is_null() ) {
-        fold_and_print( w_details, point( col_1, line + 4 ), column_width,
-                        c_white, _( "Charge: <color_light_gray>%s</color>" ),
-                        item::nname( part->fuel_type ) );
+        lines[3].first = string_format( _( "Charge: <color_light_gray>%s</color>" ),
+                                        item::nname( part->fuel_type ) );
     }
     int part_consumption = units::to_watt( part->energy_consumption );
     if( part_consumption != 0 ) {
-        fold_and_print( w_details, point( col_2, line + 4 ), column_width, c_white,
-                        _( "Drain: <color_light_gray>%+8d</color>" ), -part_consumption );
+        lines[3].second = string_format( _( "Drain: <color_light_gray>%+8d</color>" ), -part_consumption );
     }
 
-    // line 5 [vertical/hybrid] flags
+    // line 5: (column 1) flags    (column 2) battery capacity or power (if applicable)
     std::vector<std::string> flags = { { "OPAQUE", "OPENABLE", "BOARDABLE" } };
     std::vector<std::string> flag_labels = { { _( "opaque" ), _( "openable" ), _( "boardable" ) } };
     std::string label;
@@ -2895,25 +2729,29 @@ void veh_interact::display_details( const vpart_info *part )
             label += ( label.empty() ? "" : " " ) + flag_labels[i];
         }
     }
-    // 6 [horizontal]: (column 1) flags    (column 2) battery capacity (if applicable)
-    fold_and_print( w_details, point( col_1, line + 5 ), details_w, c_yellow, label );
+    lines[4].first = colorize( label, c_yellow );
 
     if( part->fuel_type == itype_battery && !part->has_flag( VPFLAG_ENGINE ) &&
         !part->has_flag( VPFLAG_ALTERNATOR ) ) {
         const cata::value_ptr<islot_magazine> &battery = item::find_type( part->base_item )->magazine;
-        fold_and_print( w_details, point( col_2, line + 5 ), column_width, c_white,
-                        "%s: <color_light_gray>%8d</color>",
-                        small_mode ? _( "BatCap" ) : _( "Battery Capacity" ),
-                        battery->capacity );
+        lines[4].second = string_format( "%s: <color_light_gray>%8d</color>", _( "Battery Capacity" ),
+                                         battery->capacity );
     } else {
         units::power part_power = part->power;
         if( part_power != 0_W ) {
-            fold_and_print( w_details, point( col_2, line + 5 ), column_width, c_white,
-                            _( "Power: <color_light_gray>%+8d</color>" ), units::to_watt( part_power ) );
+            lines[4].second = string_format( _( "Power: <color_light_gray>%+8d</color>" ),
+                                             units::to_watt( part_power ) );
         }
     }
 
-    wnoutrefresh( w_details );
+    // TODO: show mod part comes from
+    std::string rml = "<div id=\"vi-details\"><div>" + rml_ui::colored_rml( part->name(),
+                      c_light_green ) + "</div>";
+    for( const std::pair<std::string, std::string> &pair : lines ) {
+        rml += "<div class=\"hbox\"><div class=\"grow\">" + rml_ui::markup_to_rml( pair.first, c_white ) +
+               "</div><div class=\"grow\">" + rml_ui::markup_to_rml( pair.second, c_white ) + "</div></div>";
+    }
+    return rml + "</div>";
 }
 
 void veh_interact::count_durability()

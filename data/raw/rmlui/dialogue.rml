@@ -1,0 +1,81 @@
+<rml>
+<head>
+    <title>Dialogue</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* Conversations with NPCs, and terminals; see dialogue_window in
+           src/dialogue_win.cpp. */
+        #header
+        {
+            font-family: cata-mono;
+        }
+        #dlg-history
+        {
+            flex: 1 1 0;
+            min-height: 0;
+            overflow-y: auto;
+            padding-right: 6dp;
+        }
+        .dlg-line
+        {
+            white-space: pre-wrap;
+        }
+        .dlg-gap
+        {
+            height: 8dp;
+        }
+        #dlg-prompt
+        {
+            flex: 0 0 auto;
+            margin-top: 6dp;
+            padding-top: 6dp;
+            border-top: 1dp #39465c;
+        }
+        /* The responses, and the actions beside them. */
+        #dlg-bottom
+        {
+            flex: 0 0 40%;
+            display: flex;
+            flex-direction: row;
+            min-height: 0;
+            margin-top: 4dp;
+        }
+        #dlg-responses
+        {
+            flex: 1 1 0;
+            min-width: 0;
+            overflow-y: auto;
+        }
+        .dlg-resp
+        {
+            margin-bottom: 2dp;
+        }
+        #dlg-actions
+        {
+            flex: 0 0 auto;
+            width: 40%;
+            margin-left: 12dp;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by dialogue_window in src/dialogue_win.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

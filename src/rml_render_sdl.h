@@ -12,9 +12,9 @@
  * RmlUi render interface implemented on top of SDL_Renderer.
  *
  * Upstream RmlUi dropped its SDL_Renderer backend (Backends/ now ships only
- * GL2/GL3/VK/GPU/DX12), but the game draws everything through SDL_Renderer --
- * see cata_imgui.cpp, which uses ImGui_ImplSDLRenderer3. So this is the
- * missing adapter rather than a reimplementation of something upstream has.
+ * GL2/GL3/VK/GPU/DX12), but the game draws everything through SDL_Renderer.
+ * So this is the missing adapter rather than a reimplementation of something
+ * upstream has.
  *
  * Geometry is handed to SDL_RenderGeometryRaw. RmlUi vertex colours are
  * premultiplied alpha (Rml::Vertex::colour is ColourbPremultiplied), so draws
@@ -25,6 +25,12 @@ class rml_sdl_render_interface : public Rml::RenderInterface
 {
     public:
         explicit rml_sdl_render_interface( SDL_Renderer *renderer );
+
+        /// Draw with this renderer from now on; textures from the old one
+        /// should already have been released.
+        void set_renderer( SDL_Renderer *new_renderer ) {
+            renderer = new_renderer;
+        }
 
         Rml::CompiledGeometryHandle CompileGeometry( Rml::Span<const Rml::Vertex> vertices,
                 Rml::Span<const int> indices ) override;

@@ -725,7 +725,7 @@ class zone_manager
 };
 
 /**
-* TO-DO: update to ImGui
+* TO-DO: update to RmlUi
 */
 class zone_manager_ui
 {

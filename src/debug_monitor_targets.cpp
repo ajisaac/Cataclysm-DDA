@@ -281,10 +281,10 @@ const std::vector<monitor_target_entry> &all_monitor_targets()
             }
         },
         {
-            "ImGui FPS", "", nullptr,
+            "UI FPS", "", nullptr,
             []( std::string_view )
             {
-                return snap::imgui_fps();
+                return snap::ui_fps();
             }
         },
         {

@@ -88,110 +88,7 @@ target_link_libraries(
         ghc-filesystem
         )
 
-# ImGUI
-if (USE_SDL3)
-    set(_imgui_backend_sources
-        imgui/imgui_impl_sdl3.cpp
-        imgui/imgui_impl_sdl3.h
-        imgui/imgui_impl_sdlrenderer3.cpp
-        imgui/imgui_impl_sdlrenderer3.h
-        )
-else ()
-    set(_imgui_backend_sources
-        imgui/imgui_impl_sdl2.cpp
-        imgui/imgui_impl_sdl2.h
-        imgui/imgui_impl_sdlrenderer2.cpp
-        imgui/imgui_impl_sdlrenderer2.h
-        )
-endif ()
-set(_imgui_freetype_sources "")
-set(_imgui_freetype_libraries "")
-if (NOT ANDROID)
-    find_package(Freetype REQUIRED)
-    set(_imgui_freetype_sources
-        imgui/imgui_freetype.cpp
-        imgui/imgui_freetype.h
-        )
-    set(_imgui_freetype_libraries Freetype::Freetype)
-endif ()
-add_library(
-        imgui
-        STATIC
-        imgui/imconfig.h
-        imgui/imgui.cpp
-        imgui/imgui.h
-        imgui/imgui_demo.cpp
-        imgui/imgui_draw.cpp
-        ${_imgui_freetype_sources}
-        ${_imgui_backend_sources}
-        imgui/imgui_internal.h
-        imgui/imgui_stdlib.cpp
-        imgui/imgui_stdlib.h
-        imgui/imgui_tables.cpp
-        imgui/imgui_widgets.cpp
-        imgui/imstb_rectpack.h
-        imgui/imstb_textedit.h
-        imgui/imstb_truetype.h
-        )
-
-target_include_directories(
-        imgui
-        SYSTEM
-        PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        )
-
-if (NOT USE_SDL3)
-    target_include_directories(
-            imgui
-            SYSTEM
-            PRIVATE
-            ${SDL2_INCLUDE_DIR}/..
-            )
-endif ()
-
-target_compile_options(
-        imgui
-        PRIVATE
-        -w
-        )
-
-if (USE_SDL3)
-    if (ANDROID)
-        target_link_libraries(imgui PUBLIC SDL3::SDL3)
-    elseif (NOT DYNAMIC_LINKING)
-        target_link_libraries(imgui PUBLIC
-            $<IF:$<TARGET_EXISTS:SDL3::SDL3-static>,SDL3::SDL3-static,SDL3::SDL3>
-            ${_imgui_freetype_libraries}
-        )
-    else()
-        target_link_libraries(imgui PUBLIC
-            SDL3::SDL3
-            ${_imgui_freetype_libraries}
-        )
-    endif ()
-else ()
-    if (NOT DYNAMIC_LINKING)
-        target_link_libraries(imgui PUBLIC
-            SDL2::SDL2-static
-            ${_imgui_freetype_libraries}
-        )
-    else()
-        target_link_libraries(imgui PUBLIC
-            SDL2::SDL2
-            ${_imgui_freetype_libraries}
-        )
-    endif ()
-endif ()
-
-
-target_link_libraries(
-        third-party
-        INTERFACE
-        imgui
-        )
-
-# RmlUi -- the HTML/CSS UI library the game's UI is moving to. Required.
+# RmlUi -- the HTML/CSS UI library the game's UI is drawn with. Required.
 # Fetched at configure time rather than vendored, which would drop thousands
 # of files into the tree.
 include(FetchContent)
@@ -206,14 +103,13 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(rmlui)
 # CATA_WARNINGS (-Werror -Wold-style-cast -Wsuggest-override ...) lands in
 # CMAKE_CXX_FLAGS, so it is inherited by anything FetchContent adds as a
-# subdirectory. RmlUi does not build clean under it. Same treatment the
-# vendored imgui gets above.
+# subdirectory. RmlUi does not build clean under it, so its warnings are off.
 foreach (_rmlui_target rmlui_core rmlui_debugger rmlui_lua)
     if (TARGET ${_rmlui_target})
         target_compile_options(${_rmlui_target} PRIVATE -w)
         # RmlUi's own headers are included by our code, which is still built
         # with CATA_WARNINGS, so they need -isystem the way the vendored
-        # imgui/fmt/flatbuffers headers above do.
+        # fmt/flatbuffers headers above do.
         get_target_property(_rmlui_inc ${_rmlui_target} INTERFACE_INCLUDE_DIRECTORIES)
         if (_rmlui_inc)
             set_property(TARGET ${_rmlui_target} APPEND PROPERTY

@@ -5,10 +5,10 @@
 #include <string>
 #include <vector>
 
-#include "cata_imgui.h"
 #include "coordinates.h"
 #include "input_context.h"
 #include "output.h"
+#include "rml_window.h"
 
 enum class description_target : int {
     creature = 0,
@@ -18,9 +18,10 @@ enum class description_target : int {
     num_targets
 };
 
-void draw_extended_description( const std::vector<std::string> &description, cataimgui::scroll &s );
+/// An extended description as RML: each entry a paragraph, and "--" a separator.
+std::string extended_description_rml( const std::vector<std::string> &description );
 
-class extended_description_window : public cataimgui::window
+class extended_description_window : public rml_ui::window
 {
     public:
         explicit extended_description_window( tripoint_bub_ms &p );
@@ -28,27 +29,21 @@ class extended_description_window : public cataimgui::window
         void show();
 
     protected:
-        void draw_controls() override;
-        cataimgui::bounds get_bounds() override;
+        void on_redraw() override;
 
     private:
-        void draw_creature_tab();
-        void draw_furniture_tab();
-        void draw_terrain_tab();
-        void draw_vehicle_tab();
+        std::string tab_rml() const;
 
         input_context ctxt;
         description_target cur_target = description_target::terrain;
-        description_target switch_target = description_target::terrain;
+        // The tab the body was last filled for, to scroll a new one to its top
+        description_target shown_target = description_target::num_targets;
         tripoint_bub_ms p;
-        cataimgui::bounds bounds{ 0.0f, 0.0f, static_cast<float>( str_width_to_pixels( TERMX ) ), static_cast<float>( str_height_to_pixels( TERMY ) ) };
 
         std::vector<std::string> creature_description;
         std::vector<std::string> furniture_description;
         std::vector<std::string> terrain_description;
         std::vector<std::string> veh_app_description;
-
-        cataimgui::scroll info_scroll = cataimgui::scroll::none;
 };
 
 #endif // CATA_SRC_UI_EXTENDED_DESCRIPTION_H

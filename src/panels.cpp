@@ -13,7 +13,6 @@
 
 #include "avatar.h"
 #include "cached_options.h"
-#include "cata_imgui.h"  // IWYU pragma: keep
 #include "cata_utility.h"
 #include "catacharset.h"
 #include "color.h"
@@ -25,7 +24,6 @@
 #include "game.h"
 #include "game_constants.h"
 #include "game_ui.h"
-#include "imgui/imgui.h"
 #include "input_context.h"
 #include "json.h"
 #include "map.h"
@@ -417,9 +415,9 @@ void sidebar_hud::finish()
         it = it->second.placed ? std::next( it ) : panels.erase( it );
     }
 
-    // Console cells are in display buffer pixels, which is shown at the same
-    // whole multiple of its size as ImGui is
-    const float scale = rml_ui::imgui_px_scale();
+    // Console cells are in display buffer pixels, which is shown at a whole
+    // multiple of its size
+    const float scale = rml_ui::display_buffer_scale();
     const window_dimensions cell = get_window_dimensions( point::zero, point( 1, 1 ) );
     const float cell_w = cell.window_size_pixel.x * scale;
     const float cell_h = cell.window_size_pixel.y * scale;

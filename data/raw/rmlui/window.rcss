@@ -1,0 +1,436 @@
+/*
+ * The frame of an rml_ui::window (src/rml_window.h), and the classes screens
+ * build their content from. Link it after common.rcss.
+ */
+
+#root
+{
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+.hidden
+{
+    display: none;
+}
+
+/* The frame. Its size comes from rml_ui::window::set_size(), as an inline
+   style. */
+#window
+{
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    max-width: 98%;
+    max-height: 98%;
+    padding: 10dp 14dp;
+    background-color: #141821f5;
+    border: 1dp #39465c;
+    border-radius: 8dp;
+}
+#titlebar
+{
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    margin-bottom: 8dp;
+}
+#title
+{
+    flex: 1 1 auto;
+    font-size: 18dp;
+    color: #ffffff;
+}
+#close
+{
+    flex: 0 0 auto;
+    padding: 0 7dp;
+    border-radius: 4dp;
+    color: #8d96a6;
+}
+#close:hover
+{
+    color: #ffffff;
+    background-color: #6a2b2b;
+}
+#tabs
+{
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    margin-bottom: 8dp;
+    border-bottom: 1dp #39465c;
+}
+.tab
+{
+    padding: 4dp 10dp;
+    margin-right: 4dp;
+    border-radius: 4dp 4dp 0 0;
+    background-color: #1b2130;
+    color: #b7b2a4;
+}
+.tab:hover
+{
+    background-color: #232b3a;
+}
+.tab.active
+{
+    background-color: #2b3a52;
+    color: #ffffff;
+}
+#header
+{
+    flex: 0 0 auto;
+    margin-bottom: 6dp;
+}
+#body
+{
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+/* For panes that scroll on their own; see set_body_scrolls(). */
+#body.fill
+{
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+#filter-row
+{
+    flex: 0 0 auto;
+    margin-top: 6dp;
+}
+#footer
+{
+    flex: 0 0 auto;
+    margin-top: 6dp;
+    padding-top: 6dp;
+    border-top: 1dp #39465c;
+}
+
+/* Text */
+.pre
+{
+    white-space: pre-wrap;
+}
+.nowrap
+{
+    white-space: nowrap;
+}
+.mono
+{
+    font-family: cata-mono;
+}
+.muted
+{
+    color: #8d96a6;
+}
+.right
+{
+    text-align: right;
+}
+.center
+{
+    text-align: center;
+}
+.big
+{
+    font-size: 20dp;
+}
+h1
+{
+    font-size: 22dp;
+    color: #ffffff;
+    margin: 4dp 0 8dp 0;
+}
+h2
+{
+    font-size: 17dp;
+    color: #ffffff;
+    margin: 8dp 0 4dp 0;
+}
+h3
+{
+    color: #d8d2c0;
+    margin: 6dp 0 2dp 0;
+}
+p
+{
+    margin-bottom: 6dp;
+}
+/* A horizontal rule. */
+.sep
+{
+    display: block;
+    height: 0;
+    margin: 6dp 0;
+    border-top: 1dp #39465c;
+}
+.gap
+{
+    display: block;
+    height: 10dp;
+}
+
+/* Layout */
+.hbox
+{
+    display: flex;
+    flex-direction: row;
+}
+.vbox
+{
+    display: flex;
+    flex-direction: column;
+}
+.wrap
+{
+    flex-wrap: wrap;
+}
+.grow
+{
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+}
+.fixed
+{
+    flex: 0 0 auto;
+}
+.scroll
+{
+    overflow-y: auto;
+    min-height: 0;
+}
+.spaced > *
+{
+    margin-right: 12dp;
+}
+/* Side by side, each scrolling on its own. In a window with a scrolling
+   body, give .panes a height. */
+.panes
+{
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.pane
+{
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 8dp;
+}
+.pane.narrow
+{
+    flex: 0 0 auto;
+}
+.pane + .pane
+{
+    border-left: 1dp #39465c;
+}
+
+/* One row of text, of a fixed height that src/rml_window.h (line_dp) also
+   has, for lists that build only the rows that fit. */
+.line
+{
+    height: 22dp;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+/* A label and its value, side by side. */
+.kv
+{
+    display: flex;
+}
+.kv .k
+{
+    flex: 0 0 auto;
+    width: 10em;
+    color: #ffffff;
+}
+.kv .v
+{
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+/* Rows that hover, select and click. */
+.item
+{
+    display: block;
+    padding: 1dp 6dp;
+    border-radius: 3dp;
+}
+.item:hover
+{
+    background-color: #232b3a;
+}
+.item.selected
+{
+    background-color: #2b3a52;
+}
+.item.disabled
+{
+    color: #6d7b92;
+}
+tr.item:hover td
+{
+    background-color: #232b3a;
+}
+tr.item.selected td
+{
+    background-color: #2b3a52;
+}
+
+/* Collapsible sections: a heading with data-action toggles its body. */
+.section-head
+{
+    display: block;
+    padding: 3dp 6dp;
+    margin-top: 4dp;
+    border-radius: 3dp;
+    background-color: #1b2130;
+    color: #ffffff;
+}
+.section-head:hover
+{
+    background-color: #232b3a;
+}
+
+/* Buttons: anything with data-action; see rml_ui::window::resolve_click(). */
+.button
+{
+    display: inline-block;
+    padding: 2dp 8dp;
+    margin: 0 4dp 3dp 0;
+    background-color: #1f2736;
+    border: 1dp #39465c;
+    border-radius: 4dp;
+}
+.button:hover
+{
+    background-color: #2b3a52;
+}
+.button.on
+{
+    background-color: #2b3a52;
+    color: #ffffff;
+}
+.button.good
+{
+    background-color: #24502c;
+}
+.button.disabled
+{
+    color: #6d7b92;
+    background-color: #171b24;
+}
+
+/* A checkbox drawn as a box, filled while .on; make whatever holds it
+   clickable. */
+.check, .radio
+{
+    display: inline-block;
+    width: 12dp;
+    height: 12dp;
+    margin-right: 6dp;
+    border: 1dp #5a7aa8;
+    border-radius: 2dp;
+}
+.radio
+{
+    border-radius: 6dp;
+}
+.check.on, .radio.on
+{
+    background-color: #5a7aa8;
+}
+/* A hotkey in a column of its own, before what it does. */
+.hotkey
+{
+    display: inline-block;
+    width: 2.5em;
+    font-family: cata-mono;
+}
+
+/* Tables */
+colgroup
+{
+    display: table-column-group;
+}
+col
+{
+    display: table-column;
+}
+table.grid
+{
+    width: 100%;
+}
+table.grid td, table.grid th
+{
+    padding: 1dp 10dp 1dp 0;
+    text-align: left;
+    vertical-align: top;
+}
+table.grid th
+{
+    color: #d8d2c0;
+    border-bottom: 1dp #39465c;
+}
+table.grid td.num, table.grid th.num
+{
+    text-align: right;
+}
+table.grid.bordered
+{
+    margin: 4dp 0;
+}
+table.grid.bordered td, table.grid.bordered th
+{
+    padding: 1dp 6dp;
+    border: 1dp #39465c;
+}
+
+/* A bar filled to a fraction, by an inline width and a bg- palette class. */
+.bar
+{
+    display: block;
+    height: 8dp;
+    margin: 4dp 0;
+    background-color: #232b3a;
+    border-radius: 2dp;
+}
+.bar .fill
+{
+    display: block;
+    height: 100%;
+    border-radius: 2dp;
+}
+
+/* Text fields */
+input.text
+{
+    display: block;
+    padding: 4dp 8dp;
+    background-color: #0d1017;
+    border: 1dp #5a7aa8;
+    border-radius: 4dp;
+    color: #ffffff;
+    caret-color: #ffffff;
+}
+input.text:disabled
+{
+    border-color: #39465c;
+    color: #b7b2a4;
+}
+input.text selection
+{
+    background-color: #2b3a52;
+    color: #ffffff;
+}

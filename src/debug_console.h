@@ -15,9 +15,7 @@
 #include <variant>
 #include <vector>
 
-#include <imgui/imgui.h>
-
-#include "cata_imgui.h"
+#include "rml_im.h"
 #include "coordinates.h"
 #include "debug.h"
 #include "debug_capture.h"
@@ -32,6 +30,9 @@ class character_id;
 
 namespace debug_menu
 {
+// The console draws immediate-mode style, on RmlUi
+namespace im = rml_ui::im;
+
 enum class debug_menu_index : int;
 
 class debug_console;
@@ -304,9 +305,9 @@ void framed_section( const char *id, const char *label,
 template<typename... Args>
 inline void label_value( const char *label, const char *fmt, Args &&... args )
 {
-    ImGui::TextDisabled( "%s:", label );
-    ImGui::SameLine( 0, 4.0f );
-    ImGui::Text( fmt, std::forward<Args>( args )... );
+    im::TextDisabled( "%s:", label );
+    im::SameLine( 0, 4.0f );
+    im::Text( fmt, std::forward<Args>( args )... );
 }
 
 // SliderInt that invokes `set` only when the user actually moves it.
@@ -315,8 +316,8 @@ inline void stat_slider( const char *label, int lo, int hi,
                          Getter get, Setter set, float w = 180.0f )
 {
     int v = get();
-    ImGui::SetNextItemWidth( w );
-    if( ImGui::SliderInt( label, &v, lo, hi ) ) {
+    im::SetNextItemWidth( w );
+    if( im::SliderInt( label, &v, lo, hi ) ) {
         set( v );
     }
 }
@@ -326,7 +327,7 @@ float fit_table_height( int n_rows, float cap_h );
 
 // Auto-sized column: width tracks the wider of its header text and its visible
 // cells, so neither clips. Use for columns with a visible header.
-void fit_col( const char *label, ImGuiTableColumnFlags extra_flags = 0 );
+void fit_col( const char *label, im::flags extra_flags = 0 );
 
 struct slider_row {
     std::string label;
@@ -355,8 +356,8 @@ void add_monitor_button( const char *id, const std::string &label,
                          monitor_mode mode = monitor_mode::on_change );
 
 // Stable distinct color per category index via golden-angle hue spread.
-// Saturation/value tuned so text stays readable on the default ImGui dark theme.
-ImVec4 category_color( int cat );
+// Saturation/value tuned so text stays readable on the dark window background.
+im::vec4 category_color( int cat );
 
 // Score how well `needle` matches `haystack`. Higher = better, 0 = no match.
 // Case-insensitive subsequence match with bonuses for consecutive runs and
@@ -374,7 +375,7 @@ struct tab_registry_view_entry {
 std::vector<tab_registry_view_entry> tab_registry_snapshot();
 
 
-class debug_console : public cataimgui::window
+class debug_console : public rml_ui::im::window
 {
     public:
         debug_console();
@@ -421,7 +422,7 @@ class debug_console : public cataimgui::window
 
         // Eval handoff. request_eval() snapshots the expression; outer
         // execute() runs it between frames so parser debugmsg popups
-        // don't corrupt the ImGui frame. consume_eval_result() returns
+        // don't interrupt a redraw. consume_eval_result() returns
         // the latest result or nullopt if none since last consume.
         void request_eval( const std::string &expr );
         struct eval_result_view {
@@ -436,9 +437,7 @@ class debug_console : public cataimgui::window
         bool eoc_trace_visible() const;
 
     protected:
-        void draw_controls() override;
-        void draw() override;
-        cataimgui::bounds get_bounds() override;
+        void draw_im() override;
 
     private:
         // Indices into tab_registry() (in debug_console.cpp). The registry
@@ -460,7 +459,7 @@ class debug_console : public cataimgui::window
         tab_items_view *items_view_ = nullptr;
 
         // Deferred operations -- queued by buttons during draw, drained one
-        // per outer-loop iteration so each runs outside the ImGui frame.
+        // per outer-loop iteration so each runs outside a redraw.
         // FIFO over action triggers and EOC fires interleaves them by
         // enqueue order; the queue is bounded at 256.
         struct deferred_action {
@@ -498,10 +497,9 @@ class debug_console : public cataimgui::window
         // header has no visibility into the debug_action_entry table.
         pimpl<omnibox_state> omni_;
 
-        // Window bounds tracked per-frame from ImGui's window pos/size;
-        // w/h are stored as viewport fractions so the layout scales when
-        // the game window is resized between sessions, while x/y stay
-        // absolute.
+        // Window bounds, kept between sessions: x/y are context pixels, or
+        // -1 to center, and w/h are fractions of the screen so the layout
+        // scales when the game window is resized between sessions.
         float persisted_x = -1.f;
         float persisted_y = -1.f;
         float persisted_w = 0.8f;

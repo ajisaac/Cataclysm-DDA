@@ -1,0 +1,57 @@
+<rml>
+<head>
+    <title>Loading</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <style>
+        /* The splash is sized in code to fit above the text; see
+           loading_screen in src/loading_ui.cpp. */
+        body
+        {
+            background-color: #000000;
+        }
+        #root
+        {
+            box-sizing: border-box;
+            width: 100%;
+            height: 100%;
+            padding: 1% 2%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #splash-area
+        {
+            flex: 1 1 auto;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #tip
+        {
+            flex: 0 0 auto;
+            text-align: center;
+            white-space: pre-wrap;
+        }
+        #tip.large
+        {
+            font-size: 24dp;
+        }
+        #message
+        {
+            flex: 0 0 auto;
+            margin-top: 6dp;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div id="splash-area">
+            <img id="splash"/>
+        </div>
+        <div id="tip"></div>
+        <div id="message"></div>
+    </div>
+</body>
+</rml>

@@ -279,7 +279,7 @@ ignorable_options::query_ignorable_result ignorable_options::query_ignorable()
 
 loot_options::query_loot_result loot_options::query_loot()
 {
-    string_input_popup_imgui input_popup( 55, mark );
+    text_input_popup input_popup( 55, mark );
     input_popup.set_label( _( "Filter:" ) );
     input_popup.set_description( item_filter_rule_string( item_filter_type::FILTER ) + "\n\n",
                                  c_white, /*monofont=*/ true );
@@ -681,7 +681,7 @@ const
 
 std::optional<std::string> zone_manager::query_name( const std::string &default_name ) const
 {
-    string_input_popup_imgui popup( 55, default_name );
+    text_input_popup popup( 55, default_name );
     popup.set_label( _( "Zone name:" ) );
     std::string text = popup.query();
     if( popup.cancelled() ) {

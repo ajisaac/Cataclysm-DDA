@@ -1,7 +1,5 @@
 #include "ui_extended_description.h"
 
-#include <imgui/imgui.h>
-
 #include "cata_utility.h"
 #include "character.h"
 #include "color.h"
@@ -10,8 +8,8 @@
 #include "map.h"
 #include "mapdata.h"
 #include "point.h"
+#include "rml_markup.h"
 #include "string_formatter.h"
-#include "text.h"
 #include "translations.h"
 #include "type_id.h"
 #include "ui_manager.h"
@@ -50,48 +48,33 @@ static const Creature *seen_critter( const tripoint_bub_ms &p )
     return nullptr;
 }
 
-static void draw_sign_text( const tripoint_bub_ms &p )
+// The text on a sign or a wall here, after a separator, or nothing
+static std::string writing_rml( const std::string &text, const char *const readable_fmt,
+                                const char *const unreadable )
 {
-    std::string signage = get_map().get_signage( p );
-    if( !signage.empty() ) {
-        ImGui::Separator();
-        cataimgui::draw_colored_text( get_player_character().has_trait( trait_ILLITERATE ) ?
-                                      // NOLINTNEXTLINE(cata-text-style): the question mark does not end a sentence
-                                      _( "Sign: ???" ) : string_format( _( "Sign: %s" ), signage ) );
+    if( text.empty() ) {
+        return std::string();
     }
+    return "<div class=\"sep\"></div><div class=\"pre\">" + rml_ui::markup_to_rml(
+               get_player_character().has_trait( trait_ILLITERATE ) ? std::string( unreadable ) :
+               string_format( readable_fmt, text ) ) + "</div>";
 }
 
-static void draw_graffiti_text( const tripoint_bub_ms &p )
+std::string extended_description_rml( const std::vector<std::string> &description )
 {
-    std::string graffiti = get_map().graffiti_at( p );
-    if( !graffiti.empty() ) {
-        ImGui::Separator();
-        cataimgui::draw_colored_text( get_player_character().has_trait( trait_ILLITERATE ) ?
-                                      // NOLINTNEXTLINE(cata-text-style): the question mark does not end a sentence
-                                      _( "Inscription: ???" ) : string_format( _( "Inscription: %s" ), graffiti ) );
-    }
-}
-
-void draw_extended_description( const std::vector<std::string> &description, cataimgui::scroll &s )
-{
-    cataimgui::set_scroll( s );
-
+    std::string rml;
     for( const std::string &s : description ) {
         if( s == "--" ) {
-            ImGui::Separator();
+            rml += "<div class=\"sep\"></div>";
         } else {
-            for( const std::string &line : string_split( s, '\n' ) ) {
-                cataimgui::TextColoredParagraph( c_light_gray, line );
-                ImGui::NewLine();
-            }
+            rml += "<div class=\"pre\">" + rml_ui::markup_to_rml( s, c_light_gray ) + "</div>";
         }
     }
+    return rml;
 }
 
 extended_description_window::extended_description_window( tripoint_bub_ms &p ) :
-    cataimgui::window( "ext_desc",
-                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                       ImGuiWindowFlags_NoNavInputs ),
+    rml_ui::window( std::string() ),
     p( p )
 {
     const map &here = get_map();
@@ -110,6 +93,8 @@ extended_description_window::extended_description_window( tripoint_bub_ms &p ) :
     ctxt.register_action( "DOWN" );
     ctxt.register_action( "PAGE_UP" );
     ctxt.register_action( "PAGE_DOWN" );
+    // For the tabs and the close button
+    ctxt.register_action( "SELECT" );
     ctxt.set_timeout( 10 );
 
     const Creature *critter = seen_critter( p );
@@ -131,108 +116,56 @@ extended_description_window::extended_description_window( tripoint_bub_ms &p ) :
     }
 
     if( critter ) {
-        switch_target = description_target::creature;
-    } else if( here.has_furn( p ) ) {
-        switch_target = description_target::furniture;
-    } else if( here.veh_at( p ) ) {
-        switch_target = description_target::vehicle;
-    }
-
-
-}
-
-void extended_description_window::draw_controls()
-{
-    if( ImGui::BeginTabBar( "description tabs" ) ) {
-        draw_creature_tab();
-        draw_furniture_tab();
-        draw_terrain_tab();
-        draw_vehicle_tab();
-        ImGui::EndTabBar();
-    }
-}
-
-void extended_description_window::draw_creature_tab()
-{
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
-    if( switch_target == description_target::creature ) {
-        flags = ImGuiTabItemFlags_SetSelected;
-        switch_target = description_target::num_targets;
-    }
-    std::string title = string_format( _( "[%s] Creature" ), ctxt.get_desc( "CREATURE" ) );
-    if( ImGui::BeginTabItem( title.c_str(), nullptr, flags ) ) {
         cur_target = description_target::creature;
-        if( !creature_description.empty() ) {
-            draw_extended_description( creature_description, info_scroll );
-        } else {
-            cataimgui::draw_colored_text( _( "You do not see any creature here." ), c_light_gray );
-        }
-        ImGui::EndTabItem();
-    }
-}
-
-void extended_description_window::draw_furniture_tab()
-{
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
-    if( switch_target == description_target::furniture ) {
-        flags = ImGuiTabItemFlags_SetSelected;
-        switch_target = description_target::num_targets;
-    }
-    std::string title = string_format( _( "[%s] Furniture" ), ctxt.get_desc( "FURNITURE" ) );
-    if( ImGui::BeginTabItem( title.c_str(), nullptr, flags ) ) {
+    } else if( here.has_furn( p ) ) {
         cur_target = description_target::furniture;
-        if( !furniture_description.empty() ) {
-            draw_extended_description( furniture_description, info_scroll );
-        } else {
-            cataimgui::draw_colored_text( _( "You do not see any furniture here." ), c_light_gray );
-        }
-        draw_sign_text( p );
-        ImGui::EndTabItem();
-    }
-}
-
-void extended_description_window::draw_terrain_tab()
-{
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
-    if( switch_target == description_target::terrain ) {
-        flags = ImGuiTabItemFlags_SetSelected;
-        switch_target = description_target::num_targets;
-    }
-    std::string title = string_format( _( "[%s] Terrain" ), ctxt.get_desc( "TERRAIN" ) );
-    if( ImGui::BeginTabItem( title.c_str(), nullptr, flags ) ) {
-        cur_target = description_target::terrain;
-        if( !terrain_description.empty() ) {
-            draw_extended_description( terrain_description, info_scroll );
-        } else {
-            cataimgui::draw_colored_text( _( "You can't see the terrain here." ), c_light_gray );
-        }
-        draw_graffiti_text( p );
-        ImGui::EndTabItem();
-    }
-}
-
-void extended_description_window::draw_vehicle_tab()
-{
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
-    if( switch_target == description_target::vehicle ) {
-        flags = ImGuiTabItemFlags_SetSelected;
-        switch_target = description_target::num_targets;
-    }
-    std::string title = string_format( _( "[%s] Vehicle/Appliance" ), ctxt.get_desc( "VEHICLE" ) );
-    if( ImGui::BeginTabItem( title.c_str(), nullptr, flags ) ) {
+    } else if( here.veh_at( p ) ) {
         cur_target = description_target::vehicle;
-        if( !veh_app_description.empty() ) {
-            draw_extended_description( veh_app_description, info_scroll );
-        } else {
-            cataimgui::draw_colored_text( _( "You can't see vehicles or appliances here." ), c_light_gray );
-        }
-        ImGui::EndTabItem();
     }
 }
 
-cataimgui::bounds extended_description_window::get_bounds()
+std::string extended_description_window::tab_rml() const
 {
-    return bounds;
+    switch( cur_target ) {
+        case description_target::creature:
+            return !creature_description.empty() ? extended_description_rml( creature_description ) :
+                   rml_ui::colored_rml( _( "You do not see any creature here." ), c_light_gray );
+        case description_target::furniture:
+            return ( !furniture_description.empty() ?
+                     extended_description_rml( furniture_description ) :
+                     rml_ui::colored_rml( _( "You do not see any furniture here." ), c_light_gray ) ) +
+                   // NOLINTNEXTLINE(cata-text-style): the question mark does not end a sentence
+                   writing_rml( get_map().get_signage( p ), _( "Sign: %s" ), _( "Sign: ???" ) );
+        case description_target::terrain:
+            return ( !terrain_description.empty() ? extended_description_rml( terrain_description ) :
+                     rml_ui::colored_rml( _( "You can't see the terrain here." ), c_light_gray ) ) +
+                   writing_rml( get_map().graffiti_at( p ), _( "Inscription: %s" ),
+                                // NOLINTNEXTLINE(cata-text-style): the question mark does not end a sentence
+                                _( "Inscription: ???" ) );
+        case description_target::vehicle:
+            return !veh_app_description.empty() ? extended_description_rml( veh_app_description ) :
+                   rml_ui::colored_rml( _( "You can't see vehicles or appliances here." ), c_light_gray );
+        case description_target::num_targets:
+            break;
+    }
+    return std::string();
+}
+
+void extended_description_window::on_redraw()
+{
+    // The whole screen, as the old full-size window had
+    set_size( "100%", "100%" );
+    set_tabs( {
+        string_format( _( "[%s] Creature" ), ctxt.get_desc( "CREATURE" ) ),
+        string_format( _( "[%s] Furniture" ), ctxt.get_desc( "FURNITURE" ) ),
+        string_format( _( "[%s] Terrain" ), ctxt.get_desc( "TERRAIN" ) ),
+        string_format( _( "[%s] Vehicle/Appliance" ), ctxt.get_desc( "VEHICLE" ) )
+    }, static_cast<size_t>( cur_target ) );
+    set_body( tab_rml() );
+    if( shown_target != cur_target ) {
+        shown_target = cur_target;
+        scroll_body( rml_ui::scroll::top );
+    }
 }
 
 void extended_description_window::show()
@@ -240,28 +173,31 @@ void extended_description_window::show()
     while( true ) {
         ui_manager::redraw_invalidated();
         std::string action = ctxt.handle_input();
+        if( action == "SELECT" && hovered_tab() >= 0 ) {
+            cur_target = static_cast<description_target>( hovered_tab() );
+            continue;
+        }
+        action = resolve_click( action );
         if( action == "NEXT_TAB" ) {
-            switch_target = cur_target;
-            ++switch_target;
+            ++cur_target;
         } else if( action == "PREV_TAB" ) {
-            switch_target = cur_target;
-            --switch_target;
+            --cur_target;
         }  else if( action == "UP" ) {
-            info_scroll = cataimgui::scroll::line_up;
+            scroll_body( rml_ui::scroll::line_up );
         }  else if( action == "DOWN" ) {
-            info_scroll = cataimgui::scroll::line_down;
+            scroll_body( rml_ui::scroll::line_down );
         }  else if( action == "PAGE_UP" ) {
-            info_scroll = cataimgui::scroll::page_up;
+            scroll_body( rml_ui::scroll::page_up );
         }  else if( action == "PAGE_DOWN" ) {
-            info_scroll = cataimgui::scroll::page_down;
+            scroll_body( rml_ui::scroll::page_down );
         } else if( action == "CREATURE" ) {
-            switch_target = description_target::creature;
+            cur_target = description_target::creature;
         } else if( action == "FURNITURE" ) {
-            switch_target = description_target::furniture;
+            cur_target = description_target::furniture;
         } else if( action == "TERRAIN" ) {
-            switch_target = description_target::terrain;
+            cur_target = description_target::terrain;
         } else if( action == "VEHICLE" ) {
-            switch_target = description_target::vehicle;
+            cur_target = description_target::vehicle;
         } else if( action == "CONFIRM" || action == "QUIT" ) {
             return;
         }

@@ -172,7 +172,7 @@ class render_state
 //     the enum doc). Atlas-fallback paths clear any prior bind first.
 //   - end() is a no-op; bind persists for the next sprite.
 //   - flush() unbinds any held state. Call once per frame after the last
-//     sprite draw so ImGui or the next-frame draws see no leaked bind.
+//     sprite draw so RmlUi or the next-frame draws see no leaked bind.
 //   - destruction unbinds and releases held shader/state slots.
 class variant_pass
 {

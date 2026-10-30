@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "cata_imgui.h"
+#include "rml_window.h"
 #include "translations.h"
 #include "type_id.h"
 
@@ -22,14 +22,12 @@ class end_screen_data
         void draw_end_screen_ui( bool actually_dead = true );
 };
 
-class end_screen_ui_impl : public cataimgui::window
+class end_screen_ui_impl : public rml_ui::window
 {
     public:
-        std::string text;
-        explicit end_screen_ui_impl() : cataimgui::window( _( "The End" ) ) {
-        }
-    protected:
-        void draw_controls() override;
+        end_screen_ui_impl();
+        /// The last words typed so far.
+        std::string last_words() const;
 };
 
 struct end_screen {

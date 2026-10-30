@@ -113,7 +113,6 @@ enum class debug_menu_index : int {
     EDIT_FACTION,
     WRITE_CITY_LIST,
     TALK_TOPIC,
-    IMGUI_DEMO,
     VEHICLE_EFFECTS,
     WISHPROFICIENCY,
     RELOAD_GPU_SHADERS,

@@ -14,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include <imgui/imgui.h>
 
 #include "avatar.h"
 #include "bodypart.h"
@@ -42,6 +41,7 @@
 #include "player_activity.h"
 #include "point.h"
 #include "proficiency.h"
+#include "rml_ui.h"
 #include "stomach.h"
 #include "string_formatter.h"
 #include "talker.h"
@@ -385,12 +385,12 @@ std::function<std::string()> world_items_under_feet()
     };
 }
 
-std::function<std::string()> imgui_fps()
+std::function<std::string()> ui_fps()
 {
     return []() {
-        return string_format( "fps=%.1f dt=%.2fms",
-                              ImGui::GetIO().Framerate,
-                              ImGui::GetIO().DeltaTime * 1000.0f );
+        const float frame_ms = rml_ui::frame_time_ms();
+        return string_format( "fps=%.1f dt=%.2fms", frame_ms > 0.f ? 1000.f / frame_ms : 0.f,
+                              frame_ms );
     };
 }
 

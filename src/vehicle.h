@@ -1052,9 +1052,22 @@ class vehicle
                              int p,
                              int hl = -1, bool detail = false, bool include_fakes = true ) const;
 
+        /**
+         * The lines print_part_list() prints, as markup for a list that lays
+         * itself out: the left and right text of each part at the tile of p,
+         * then the tile's label, if it has one.
+         */
+        std::vector<std::pair<std::string, std::string>> part_list_markup( int p, int hl = -1,
+                bool detail = false, bool include_fakes = true ) const;
+
         // Vehicle parts descriptions - descriptions for all the parts on a single tile
         void print_vparts_descs( const catacurses::window &win, int max_y, int width, int p,
                                  int &start_at, int &start_limit ) const;
+        /**
+         * The descriptions print_vparts_descs() prints, for every part at the
+         * tile of p, as markup, folding the part descriptions to this width.
+         */
+        std::string vparts_descs_markup( int p, int width ) const;
         // towing functions
         void invalidate_towing( map &here, bool first_vehicle = false, Character *remover = nullptr );
         void do_towing_move( map &here );

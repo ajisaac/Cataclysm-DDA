@@ -7,9 +7,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "cata_imgui.h"
 #include "color.h"
 #include "coordinates.h"
 #include "cursesdef.h"
@@ -17,6 +17,7 @@
 #include "input_context.h"
 #include "memory_fast.h"
 #include "point.h"
+#include "rml_window.h"
 #include "translations.h"
 #include "type_id.h"
 
@@ -66,7 +67,7 @@ enum omt_mapgen_action : int {
     OMTM_TOGGLE_POSTPROCESS
 };
 
-class editmap_ui : public cataimgui::window
+class editmap_ui : public rml_ui::window
 {
         input_context ictxt;
         class game_draw_callback_t_container
@@ -85,7 +86,6 @@ class editmap_ui : public cataimgui::window
     public:
         editmap_ui();
 
-        void draw_controls() override;
         void handle_action();
         input_context setup_input_context();
         bool get_direction( tripoint_rel_ms &p, const std::string &action,
@@ -94,11 +94,11 @@ class editmap_ui : public cataimgui::window
         void do_ui_invalidation();
         void draw_main_ui_overlay();
 
-        void draw_current_point_info();
-        void draw_select_menu();
-        // draw a colored symbol followed by a space and another string `info`
-        void draw_symbol_and_info( nc_color symbol_color, int symbol,
-                                   nc_color draw_color, const std::string_view &info );
+        std::string current_point_info_rml() const;
+        std::string select_menu_rml() const;
+        // a colored symbol followed by a space and another string `info`
+        static std::string symbol_and_info_rml( nc_color symbol_color, int symbol,
+                                                nc_color draw_color, const std::string_view &info );
         /*
          * Move point 'editmap.target' via keystroke.
          * if input or ch are not valid movement keys, do nothing and return false
@@ -128,7 +128,7 @@ class editmap_ui : public cataimgui::window
         void brush_apply();
 
     protected:
-        cataimgui::bounds get_bounds() override;
+        void on_redraw() override;
 };
 
 /**

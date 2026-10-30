@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstddef>
 #include <functional>
-#include <imgui/imgui.h>
 #include <iterator>
 #include <limits>
 #include <list>
@@ -19,7 +18,6 @@
 #include "bionics.h"
 #include "bodypart.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "character.h"
 #include "character_id.h"
 #include "clothing_mod.h"
@@ -2221,7 +2219,7 @@ bool inscribe_actor::item_inscription( item &tool, item &cut ) const
                                 string_format( pgettext( "carving", "%1$s on the %2$s is: " ),
                                         gerund, cut.type_name() );
 
-    string_input_popup_imgui popup( 50, hasnote ? cut.get_var( carving ) : std::string() );
+    text_input_popup popup( 50, hasnote ? cut.get_var( carving ) : std::string() );
     popup.set_label( string_format( _( "%s what?" ), verb ) );
     popup.set_description( messageprefix );
     popup.set_identifier( "inscribe_item" );
@@ -2762,7 +2760,7 @@ std::optional<int> learn_spell_actor::use( Character *p, item &, map *,
     }
 
     spellbook_uilist.entries = uilist_initializer;
-    spellbook_uilist.desired_bounds = { -1.0, -1.0, 80 * ImGui::CalcTextSize( "X" ).x, 24 * ImGui::GetTextLineHeightWithSpacing() };
+    spellbook_uilist.desired_bounds = { -1.0, -1.0, 80.0, 24.0 };
     spellbook_uilist.callback = &sp_cb;
     spellbook_uilist.title = _( "Study a spell:" );
     spellbook_uilist.query();

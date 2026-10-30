@@ -22,7 +22,7 @@
 #include "addiction.h"
 #include "bionics.h"
 #include "calendar_ui.h"
-#include "cata_imgui.h"
+#include "cata_scope_helpers.h"
 #include "cata_path.h"
 #include "cata_utility.h"
 #include "catacharset.h"
@@ -36,7 +36,6 @@
 #include "enum_traits.h"
 #include "flexbuffer_json.h"
 #include "game_constants.h"
-#include "imgui/imgui.h"
 #include "input_context.h"
 #include "input_enums.h"
 #include "input_popup.h"
@@ -67,6 +66,7 @@
 #include "recipe_dictionary.h"
 #include "regional_settings.h"
 #include "ret_val.h"
+#include "rml_markup.h"
 #include "rng.h"
 #include "scenario.h"
 #include "skill.h"
@@ -123,9 +123,65 @@ static constexpr int RANDOM_START_LOC_ENTRY = INT_MIN;
 #define COL_SELECTED        c_green  // uilist selected
 #define COL_NOT_SELECTED    c_light_gray  // uilist not selected
 
+namespace
+{
+// The RML the character creator's info is built into, laid out the way the
+// older code drew it: each item on a line of its own, unless same_line()
+// comes before it.
+class cc_flow
+{
+    public:
+        void item( const std::string &rml ) {
+            if( line_open ) {
+                out += same ? ( spaced ? " " : "" ) : "<br/>";
+            }
+            out += rml;
+            line_open = true;
+            same = false;
+        }
+        void text( const std::string &markup ) {
+            item( rml_ui::markup_to_rml( markup ) );
+        }
+        void text( const std::string &markup, const nc_color &color ) {
+            item( rml_ui::markup_to_rml( markup, color ) );
+        }
+        void same_line( bool space_before = true ) {
+            same = true;
+            spaced = space_before;
+        }
+        // A blank line
+        void new_line() {
+            block( "<div class=\"gap\"></div>" );
+        }
+        void separator() {
+            block( "<div class=\"sep\"></div>" );
+        }
+        // Something that is a block of its own, such as a table
+        void block( const std::string &rml ) {
+            out += rml;
+            line_open = false;
+            same = false;
+        }
+        // Everything so far, as text that keeps its spacing, starting afresh
+        std::string take() {
+            std::string rml = "<div class=\"pre\">" + out + "</div>";
+            out.clear();
+            line_open = false;
+            same = false;
+            return rml;
+        }
+    private:
+        std::string out;
+        bool line_open = false;
+        bool same = false;
+        bool spaced = true;
+};
+cc_flow cc_out;
+} // namespace
+
 static void draw_colored_text_wrap( const std::string &original_text, nc_color color )
 {
-    cataimgui::draw_colored_text( original_text, color, ImGui::GetContentRegionAvail().x );
+    cc_out.text( original_text, color );
 }
 
 static bool cities_enabled()
@@ -136,36 +192,14 @@ static bool cities_enabled()
 
 static void draw_spacer()
 {
-    ImGui::NewLine();
+    cc_out.new_line();
 }
 
-static void set_detail_scroll()
+// The heading over the info about the selected entry
+static void setup_list_detail_ui( const std::string &header = std::string() )
 {
-    if( cc_uistate.scrolled_down ) {
-        cc_uistate.scrolled_down = false;
-        ImGui::SetScrollY( std::clamp( ImGui::GetScrollY() + ImGui::GetContentRegionAvail().y, 0.0f,
-                                       ImGui::GetScrollMaxY() ) );
-    } else if( cc_uistate.scrolled_up ) {
-        cc_uistate.scrolled_up = false;
-        ImGui::SetScrollY( std::clamp( ImGui::GetScrollY() - ImGui::GetContentRegionAvail().y, 0.0f,
-                                       ImGui::GetScrollMaxY() ) );
-    }
-}
-
-static void setup_list_detail_ui( const std::string &header = std::string(),
-                                  float uilist_width = 0.33f )
-{
-    ImGui::TableSetupScrollFreeze( 0, 1 ); // Make top row always visible
-    // reserve space for uilist
-    ImGui::TableSetupColumn( "", ImGuiTableColumnFlags_WidthStretch, uilist_width );
-    ImGui::TableSetupColumn( header.empty() ? _( "No entries found!" ) : header.c_str(),
-                             ImGuiTableColumnFlags_WidthStretch, 1.0f - uilist_width );
-    ImGui::TableHeadersRow();
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TableNextColumn();
-
-    set_detail_scroll();
+    cc_out.block( "<h3>" + rml_ui::markup_to_rml( header.empty() ? _( "No entries found!" ) :
+                  header ) + "</h3>" );
 }
 
 static std::string get_character_stat_name( int selected_stat_index )
@@ -1072,9 +1106,8 @@ namespace char_creation
 {
 void draw_action_button( const std::string &button_text, const std::string &button_action )
 {
-    if( ImGui::Button( button_text.c_str() ) ) {
-        cc_uistate.top_bar_button_action = button_action;
-    }
+    // Clicking it is handled by character_creator_ui_impl::handle_click()
+    cc_out.item( rml_ui::button_rml( button_action, rml_ui::escape_rml( button_text ) ) );
 }
 
 // @param draw_effective_stats - if true, draws effective (current) stat; base stat is always drawn
@@ -1089,31 +1122,26 @@ void draw_character_stats( const Character &who, bool draw_effective_stats )
             } else if( effective_stat < base_stat ) {
                 effective_stat_color = c_light_red;
             }
-            cataimgui::draw_colored_text( colorize( string_format( "%s (%s)",
-                                                    effective_stat, base_stat ), effective_stat_color ), c_light_gray );
-        } else {
-            cataimgui::draw_colored_text( string_format( "%d", base_stat ), c_light_gray );
+            return rml_ui::colored_rml( string_format( "%s (%s)", effective_stat, base_stat ),
+                                        effective_stat_color );
         }
+        return rml_ui::colored_rml( string_format( "%d", base_stat ), c_light_gray );
     };
 
-    cataimgui::draw_colored_text( _( "Stats:" ), COL_HEADER );
-    if( ImGui::BeginTable( "STAT_TABLE", 2,
-                           ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX ) ) {
-        ImGui::TableNextColumn();
-        const int stat_count = static_cast<int>( character_stat::DUMMY_STAT );
-        for( int i = 0; i < stat_count; i++ ) {
-            cataimgui::draw_colored_text( string_format( "%s:",
-                                          get_character_stat_name( i ) ), c_light_gray );
+    cc_out.text( _( "Stats:" ), COL_HEADER );
+    const std::array<std::pair<int, int>, 4> values = {{
+            { who.get_str(), who.get_str_base() }, { who.get_dex(), who.get_dex_base() },
+            { who.get_int(), who.get_int_base() }, { who.get_per(), who.get_per_base() }
         }
-        ImGui::NewLine();
-        ImGui::TableNextColumn();
-        display_stat_value( who.get_str(), who.get_str_base() );
-        display_stat_value( who.get_dex(), who.get_dex_base() );
-        display_stat_value( who.get_int(), who.get_int_base() );
-        display_stat_value( who.get_per(), who.get_per_base() );
-
-        ImGui::EndTable();
+    };
+    std::string rows;
+    const int stat_count = static_cast<int>( character_stat::DUMMY_STAT );
+    for( int i = 0; i < stat_count && i < static_cast<int>( values.size() ); i++ ) {
+        rows += "<tr><td>" + rml_ui::colored_rml( string_format( "%s:", get_character_stat_name( i ) ),
+                c_light_gray ) + "</td><td>" + display_stat_value( values[i].first, values[i].second ) +
+                "</td></tr>";
     }
+    cc_out.block( "<table class=\"grid\" style=\"width: auto;\">" + rows + "</table>" );
 
     char_creation::draw_age( who );
     char_creation::draw_height( who );
@@ -1122,9 +1150,9 @@ void draw_character_stats( const Character &who, bool draw_effective_stats )
 
 void draw_character_skills( const Character &who )
 {
-    cataimgui::draw_colored_text( _( "Skills:" ), COL_HEADER );
-    if( ImGui::BeginTable( "SKILL_TABLE", 2,
-                           ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX ) ) {
+    cc_out.text( _( "Skills:" ), COL_HEADER );
+    std::string rows;
+    {
         std::vector<const Skill *> skillslist = Skill::get_skills_sorted_by( [&]( const Skill & a,
         const Skill & b ) {
             const int level_a = who.get_skill_level_object( a.ident() ).exercised_level();
@@ -1159,16 +1187,14 @@ void draw_character_skills( const Character &who )
 
             skill_level = std::clamp( skill_level, MIN_SKILL, MAX_SKILL );
             if( skill_level > 0 ) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( string_format( "%s:", skill->name() ), c_light_gray );
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( string_format( "%d", skill_level ), c_light_gray );
+                rows += "<tr><td>" + rml_ui::colored_rml( string_format( "%s:", skill->name() ),
+                        c_light_gray ) + "</td><td>" + rml_ui::colored_rml( string_format( "%d", skill_level ),
+                                c_light_gray ) + "</td></tr>";
                 //has_skills = true;
             }
         }
-        ImGui::EndTable();
     }
+    cc_out.block( "<table class=\"grid\" style=\"width: auto;\">" + rows + "</table>" );
 }
 
 void draw_starting_vehicle( const Character &who )
@@ -1185,8 +1211,8 @@ void draw_starting_vehicle( const Character &who )
         vehicle_header = _( "Starting vehicle (profession): " );
         vehicle_details = prof_veh->name.translated();
     }
-    cataimgui::draw_colored_text( vehicle_header, COL_HEADER );
-    cataimgui::draw_colored_text( vehicle_details, COL_NOTE_MINOR );
+    cc_out.text( vehicle_header, COL_HEADER );
+    cc_out.text( vehicle_details, COL_NOTE_MINOR );
 }
 
 void draw_character_proficiencies( const Character &who )
@@ -1206,25 +1232,25 @@ void draw_character_proficiencies( const Character &who )
         }
     }
 
-    cataimgui::draw_colored_text( _( "Proficiencies:" ), COL_HEADER );
+    cc_out.text( _( "Proficiencies:" ), COL_HEADER );
     if( prof_proficiencies.empty() ) {
-        cataimgui::draw_colored_text( _( "None!" ), c_light_red );
+        cc_out.text( _( "None!" ), c_light_red );
     } else {
 
         for( const proficiency_id &prof : prof_proficiencies ) {
-            cataimgui::draw_colored_text( prof->name(), c_light_gray );
+            cc_out.text( prof->name(), c_light_gray );
         }
     }
 }
 
 void draw_character_traits( const Character &who )
 {
-    cataimgui::draw_colored_text( _( "Traits:" ), COL_HEADER );
+    cc_out.text( _( "Traits:" ), COL_HEADER );
     trait_group::Trait_list traits_list = who.get_mutations_variants( false );
     std::sort( traits_list.begin(), traits_list.end(), trait_var_display_sort );
     for( const trait_and_var &character_trait : traits_list ) {
         const nc_color trait_color = character_trait.trait->get_display_color();
-        cataimgui::draw_colored_text( character_trait.name(), trait_color );
+        cc_out.text( character_trait.name(), trait_color );
     }
 }
 
@@ -1367,7 +1393,7 @@ void draw_stat_details( avatar &u )
         default:
             break;
     }
-    cataimgui::draw_colored_text( description_str, ImGui::GetContentRegionAvail().x );
+    cc_out.text( description_str );
 }
 
 std::string stat_level_description( int stat_value )
@@ -1621,7 +1647,7 @@ void draw_profession_details()
             }
         }
         if( !prof_ma_known.empty() && !prof_ma_choices.empty() ) {
-            ImGui::NewLine();
+            cc_out.new_line();
         }
         if( !prof_ma_choices.empty() ) {
             draw_colored_text_wrap( string_format( _( "Choose %d:" ), ma_amount ), c_cyan );
@@ -1706,7 +1732,7 @@ void draw_profession_inventory( const avatar &u )
 
     draw_colored_text_wrap( _( "Profession items:" ), COL_HEADER );
     if( prof_items.empty() ) {
-        ImGui::NewLine();
+        cc_out.new_line();
         draw_colored_text_wrap( pgettext( "set_profession_item", "None" ), COL_NOTE_MINOR );
     } else {
         // TODO: If the item group is randomized *at all*, these will be different each time
@@ -1783,9 +1809,9 @@ void draw_hobby_details()
 
 void draw_hobby_selected( const avatar &u )
 {
-    cataimgui::draw_colored_text( _( "Backgrounds Selected:" ), COL_HEADER );
+    cc_out.text( _( "Backgrounds Selected:" ), COL_HEADER );
     for( const profession *hobby : u.hobbies ) {
-        cataimgui::draw_colored_text( hobby->gender_appropriate_name( u.male ), COL_NOTE_MINOR );
+        cc_out.text( hobby->gender_appropriate_name( u.male ), COL_NOTE_MINOR );
     }
 }
 
@@ -1967,8 +1993,8 @@ void draw_name( const avatar &you, bool no_name_entered )
         displayed_player_name = you.name;
     }
     draw_action_button( _( "Name:" ), "CHANGE_NAME" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( displayed_player_name, c_white );
+    cc_out.same_line();
+    cc_out.text( displayed_player_name, c_white );
 }
 
 std::string get_gender_string( bool male )
@@ -1979,37 +2005,37 @@ std::string get_gender_string( bool male )
 void draw_gender( const avatar &you )
 {
     draw_action_button( _( "Gender:" ), "CHANGE_GENDER" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( get_gender_string( you.male ), c_white );
+    cc_out.same_line();
+    cc_out.text( get_gender_string( you.male ), c_white );
 }
 
 void draw_outfit()
 {
     draw_action_button( _( "Outfit:" ), "CHANGE_OUTFIT" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( get_gender_string( outfit ), c_white );
+    cc_out.same_line();
+    cc_out.text( get_gender_string( outfit ), c_white );
 }
 
 void draw_height( const Character &you )
 {
     draw_action_button( _( "Height:" ), "CHANGE_HEIGHT" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( you.height_string(), c_light_gray );
+    cc_out.same_line();
+    cc_out.text( you.height_string(), c_light_gray );
 }
 
 void draw_age( const Character &you )
 {
     draw_action_button( _( "Age:" ), "CHANGE_AGE" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( you.age_string( get_scenario()->start_of_game() ), c_light_gray );
+    cc_out.same_line();
+    cc_out.text( you.age_string( get_scenario()->start_of_game() ), c_light_gray );
 }
 
 void draw_blood( const Character &you )
 {
     draw_action_button( _( "Blood type:" ), "CHANGE_BLOOD_TYPE" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( io::enum_to_string( you.my_blood_type ) +
-                                  ( you.blood_rh_factor ? "+" : "-" ), c_light_gray );
+    cc_out.same_line();
+    cc_out.text( io::enum_to_string( you.my_blood_type ) +
+                 ( you.blood_rh_factor ? "+" : "-" ), c_light_gray );
 }
 
 void draw_scenario_profession( const avatar &you )
@@ -2022,15 +2048,15 @@ void draw_scenario_profession( const avatar &you )
 void draw_time_cataclysm_start()
 {
     draw_action_button( _( "Start of cataclysm:" ), "CHANGE_START_OF_CATACLYSM" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( to_string( get_scenario()->start_of_cataclysm() ), c_light_gray );
+    cc_out.same_line();
+    cc_out.text( to_string( get_scenario()->start_of_cataclysm() ), c_light_gray );
 }
 
 void draw_time_game_start()
 {
     draw_action_button( _( "Start of game:" ), "CHANGE_START_OF_GAME" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( to_string( get_scenario()->start_of_game() ), c_light_gray );
+    cc_out.same_line();
+    cc_out.text( to_string( get_scenario()->start_of_game() ), c_light_gray );
 }
 
 void draw_location( const avatar &you )
@@ -2047,13 +2073,13 @@ void draw_location( const avatar &you )
     char_creation::draw_action_button( _( "Starting location:" ), "CHOOSE_LOCATION" );
 
     if( you.random_start_location ) {
-        cataimgui::draw_colored_text( random_start_location_text, c_red );
+        cc_out.text( random_start_location_text, c_red );
     } else {
         // ::find will return empty location if id was not found. Debug msg will be printed too.
-        cataimgui::draw_colored_text( string_format( n_gettext( "%s (%d variant)", "%s (%d variants)",
-                                      you.start_location.obj().targets_count() ),
-                                      you.start_location.obj().name(), you.start_location.obj().targets_count() ),
-                                      you.random_start_location ? c_red : c_white );
+        cc_out.text( string_format( n_gettext( "%s (%d variant)", "%s (%d variants)",
+                     you.start_location.obj().targets_count() ),
+                     you.start_location.obj().name(), you.start_location.obj().targets_count() ),
+                     you.random_start_location ? c_red : c_white );
     }
 }
 
@@ -2061,9 +2087,9 @@ void draw_starting_city( const avatar &you )
 {
     char_creation::draw_action_button( _( "Starting city:" ), "CHOOSE_CITY" );
     if( you.starting_city.has_value() ) {
-        cataimgui::draw_colored_text( you.starting_city->name, c_white );
+        cc_out.text( you.starting_city->name, c_white );
     } else {
-        cataimgui::draw_colored_text( _( "Random" ), c_light_gray );
+        cc_out.text( _( "Random" ), c_light_gray );
     }
 }
 
@@ -2244,7 +2270,7 @@ std::optional<std::string> query_for_template_name()
     std::string title = _( "Name of template:" );
     std::string desc = _( "Keep in mind you may not use special characters like / in filenames" );
 
-    string_input_popup_imgui spop( FULL_SCREEN_WIDTH - utf8_width( title ) - 8 );
+    text_input_popup spop( FULL_SCREEN_WIDTH - utf8_width( title ) - 8 );
     spop.set_label( title );
     spop.set_description( desc );
     for( int character : fname_char_blacklist ) {
@@ -2380,9 +2406,7 @@ void reset_scenario( avatar &u, const scenario *scen )
 }
 
 character_creator_ui_impl::character_creator_ui_impl( character_creator_ui *parent ) :
-    cataimgui::window( "",
-                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                       ImGuiWindowFlags_NoNav )
+    rml_ui::window( std::string() )
 {
     ui_parent = parent;
 }
@@ -2431,6 +2455,8 @@ void character_creator_ui::setup_input_context( input_context &cc_ictxt, bool qu
     cc_ictxt.register_action( "PREV_TAB" );
     cc_ictxt.register_action( "QUIT" );
     cc_ictxt.register_action( "HELP_KEYBINDINGS" );
+    // For clicking tabs and buttons
+    cc_ictxt.register_action( "SELECT" );
 
     cc_ictxt.register_action( "SAVE_TEMPLATE" );
     cc_ictxt.register_action( "RANDOMIZE_CHAR_NAME" );
@@ -2461,9 +2487,11 @@ void character_creator_ui::setup_input_context( input_context &cc_ictxt, bool qu
     }
 }
 
-static cataimgui::bounds uilist_reset_desired_bounds()
+// The left third of the screen, in terminal cells; on_redraw() sets the top
+// and height to sit beside the details
+static uilist_bounds uilist_reset_desired_bounds()
 {
-    return { 0, -1.0f, 0.33f * ImGui::GetMainViewport()->WorkSize.x, -1.0f };
+    return { 0, -1.0f, 0.33f * TERMX, -1.0f };
 }
 
 void character_creator_ui::setup_new_uilist()
@@ -2698,145 +2726,154 @@ void character_creator_ui::setup_avatar()
     }
 }
 
-void character_creator_ui::update_uilist_position( ImVec2 new_position )
+void character_creator_ui::update_uilist_position( float top, float height )
 {
     std::shared_ptr<uilist> current_uilist = get_current_tab_uilist();
     current_uilist->desired_bounds = uilist_reset_desired_bounds();
-    current_uilist->desired_bounds->y = new_position.y;
-    current_uilist->desired_bounds->h = ImGui::GetContentRegionAvail().y;
+    current_uilist->desired_bounds->y = top;
+    current_uilist->desired_bounds->h = height;
     current_uilist->reposition();
     if( cc_uilist_current ) {
         cc_uilist_current->mark_resized();
     }
 }
 
-void character_creator_ui_impl::draw_controls()
+void character_creator_ui_impl::on_redraw()
 {
     avatar &pc = get_avatar();
+    set_size( "100%", "100%" );
 
-    const character_creator_tab switched_tab = cc_uistate.switched_tab;
-    std::array<ImGuiTabItemFlags, CHARACTER_CREATOR_TAB_COUNT> tab_selected;
-    tab_selected.fill( ImGuiTabItemFlags_None );
-
-    // handle tab switch keyboard input
-    if( switched_tab != character_creator_tab_LAST ) {
-        tab_selected[static_cast<int>( switched_tab )] = ImGuiTabItemFlags_SetSelected;
-        cc_uistate.selected_tab = switched_tab;
+    // handle tab switch input, by key or click
+    if( cc_uistate.switched_tab != character_creator_tab_LAST ) {
+        cc_uistate.selected_tab = cc_uistate.switched_tab;
         cc_uistate.switched_tab = character_creator_tab_LAST;
     }
-
-    auto check_new_tab = [this]( character_creator_tab new_tab ) {
-        if( new_tab != cc_uistate.previous_tab ) {
-            cc_uistate.selected_tab = new_tab;
-            ui_parent->upon_switching_tab();
-        }
-        std::shared_ptr<uilist> current_uilist = ui_parent->get_current_tab_uilist();
-        if( current_uilist ) {
-            const ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
-            if( current_uilist->desired_bounds->y != cursor_pos.y ||
-                current_uilist->desired_bounds->w != uilist_reset_desired_bounds().w ) {
-                ui_parent->update_uilist_position( cursor_pos );
-            }
-        }
-    };
-
-    bool &top_bar_is_open = cc_uistate.top_bar_is_open;
-    ImGui::SetNextItemOpen( top_bar_is_open );
-    if( ( top_bar_is_open = ImGui::CollapsingHeader( string_format(
-                                _( "General Info (Click or %s to %s)" ),
-                                ui_parent->get_current_tab_input().get_desc( "TOGGLE_TOP_BAR" ),
-                                top_bar_is_open ? _( "collapse" ) : _( "open" ) ).c_str() ) ) ) {
-        draw_top_bar( pc );
+    const bool new_tab = cc_uistate.selected_tab != cc_uistate.previous_tab;
+    if( new_tab ) {
+        ui_parent->upon_switching_tab();
     }
 
-    if( ImGui::BeginTabBar( "CHARACTER_CREATOR_TABS" ) ) {
-        if( ImGui::BeginTabItem( _( "SCENARIO" ), nullptr,
-                                 tab_selected[static_cast<int>( CHARCREATOR_SCENARIO )] ) ) {
-            check_new_tab( CHARCREATOR_SCENARIO );
-            draw_scenarios();
-            ImGui::EndTabItem();
+    // Clicking the heading opens or closes the top bar
+    const bool top_bar_is_open = cc_uistate.top_bar_is_open;
+    set_header( "<div class=\"section-head\" data-action=\"TOGGLE_TOP_BAR\">" +
+                rml_ui::escape_rml( string_format( _( "General Info (Click or %s to %s)" ),
+                                    ui_parent->get_current_tab_input().get_desc( "TOGGLE_TOP_BAR" ),
+                                    top_bar_is_open ? _( "collapse" ) : _( "open" ) ) ) + "</div>" +
+                ( top_bar_is_open ? top_bar_rml( pc ) : std::string() ) );
+
+    set_tabs( { _( "SCENARIO" ), _( "PROFESSION" ), _( "BACKGROUND" ), _( "STATS" ), _( "TRAITS" ), _( "SKILLS" ), _( "SUMMARY" ) },
+              static_cast<size_t>( cc_uistate.selected_tab ) );
+
+    std::string details;
+    switch( cc_uistate.selected_tab ) {
+        case CHARCREATOR_SCENARIO:
+            details = scenarios_rml();
+            break;
+        case CHARCREATOR_PROFESSION:
+            details = professions_rml();
+            break;
+        case CHARCREATOR_BACKGROUND:
+            details = backgrounds_rml();
+            break;
+        case CHARCREATOR_STATS:
+            details = stats_rml();
+            break;
+        case CHARCREATOR_TRAITS:
+            details = traits_rml();
+            break;
+        case CHARCREATOR_SKILLS:
+            details = skills_rml();
+            break;
+        case CHARCREATOR_SUMMARY:
+            details = summary_rml();
+            break;
+        default:
+            break;
+    }
+
+    // The tab's uilist, a window of its own, sits over the space on the left
+    const bool has_list = cc_uistate.selected_tab != CHARCREATOR_SUMMARY;
+    set_body_scrolls( false );
+    show( "body", "<div class=\"hbox\" style=\"height: 100%;\">" + std::string( has_list ?
+            "<div class=\"fixed\" style=\"width: 33%;\"></div>" : "" ) +
+          "<div id=\"cc-details\" class=\"pane\">" + details + "</div></div>" );
+
+    if( new_tab ) {
+        scroll( "cc-details", rml_ui::scroll::top );
+    } else if( cc_uistate.scrolled_down ) {
+        scroll( "cc-details", rml_ui::scroll::page_down );
+    } else if( cc_uistate.scrolled_up ) {
+        scroll( "cc-details", rml_ui::scroll::page_up );
+    }
+    cc_uistate.scrolled_down = false;
+    cc_uistate.scrolled_up = false;
+
+    std::shared_ptr<uilist> current_uilist = ui_parent->get_current_tab_uilist();
+    if( current_uilist ) {
+        update_layout();
+        const std::optional<rml_ui::box> details_box = element_box( "cc-details" );
+        const point view = rml_ui::viewport_px();
+        if( details_box && view.y > 0 ) {
+            // The details' top and height, in terminal cells
+            const float top = std::round( details_box->y / view.y * TERMY );
+            const float height = std::floor( details_box->h / view.y * TERMY );
+            if( !current_uilist->desired_bounds || current_uilist->desired_bounds->y != top ||
+                current_uilist->desired_bounds->h != height ||
+                current_uilist->desired_bounds->w != uilist_reset_desired_bounds().w ) {
+                ui_parent->update_uilist_position( top, height );
+            }
         }
-        if( ImGui::BeginTabItem( _( "PROFESSION" ), nullptr,
-                                 tab_selected[static_cast<int>( CHARCREATOR_PROFESSION )] ) ) {
-            check_new_tab( CHARCREATOR_PROFESSION );
-            draw_professions();
-            ImGui::EndTabItem();
-        }
-        if( ImGui::BeginTabItem( _( "BACKGROUND" ), nullptr,
-                                 tab_selected[static_cast<int>( CHARCREATOR_BACKGROUND )] ) ) {
-            check_new_tab( CHARCREATOR_BACKGROUND );
-            draw_backgrounds();
-            ImGui::EndTabItem();
-        }
-        if( ImGui::BeginTabItem( _( "STATS" ), nullptr,
-                                 tab_selected[static_cast<int>( CHARCREATOR_STATS )] ) ) {
-            check_new_tab( CHARCREATOR_STATS );
-            draw_stats();
-            ImGui::EndTabItem();
-        }
-        if( ImGui::BeginTabItem( _( "TRAITS" ), nullptr,
-                                 tab_selected[static_cast<int>( CHARCREATOR_TRAITS )] ) ) {
-            check_new_tab( CHARCREATOR_TRAITS );
-            draw_traits();
-            ImGui::EndTabItem();
-        }
-        if( ImGui::BeginTabItem( _( "SKILLS" ), nullptr,
-                                 tab_selected[static_cast<int>( CHARCREATOR_SKILLS )] ) ) {
-            check_new_tab( CHARCREATOR_SKILLS );
-            draw_skills();
-            ImGui::EndTabItem();
-        }
-        if( ImGui::BeginTabItem( _( "SUMMARY" ), nullptr,
-                                 tab_selected[static_cast<int>( CHARCREATOR_SUMMARY )] ) ) {
-            check_new_tab( CHARCREATOR_SUMMARY );
-            draw_summary();
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
     }
     cc_uistate.previous_tab = cc_uistate.selected_tab;
 }
 
-void character_creator_ui_impl::draw_top_bar( const avatar &u ) const
+bool character_creator_ui_impl::handle_click()
 {
-    auto draw_separator = []() {
-        ImGui::SameLine();
-        draw_colored_text_wrap( " | ", c_white );
-        ImGui::SameLine();
-    };
-
-    if( ImGui::BeginTable( "TOPBAR", 2, ImGuiTableFlags_BordersInnerV ) ) {
-        ImGui::TableSetupColumn( "", ImGuiTableColumnFlags_WidthFixed );
-        ImGui::TableSetupColumn( "", ImGuiTableColumnFlags_WidthStretch );
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex( 0 );
-        const avatar &you = get_avatar();
-        char_creation::draw_name( you, cc_uistate.no_name_entered );
-
-        ImGui::TableSetColumnIndex( 1 );
-        char_creation::draw_scenario_profession( you );
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex( 0 );
-        char_creation::draw_gender( you );
-        draw_separator();
-        char_creation::draw_outfit();
-
-        ImGui::TableSetColumnIndex( 1 );
-        cataimgui::draw_colored_text( _( "Randomize:" ), c_white );
-        ImGui::SameLine();
-        char_creation::draw_action_button( _( "Name" ), "RANDOMIZE_CHAR_NAME" );
-        ImGui::SameLine();
-        char_creation::draw_action_button( _( "Description" ), "RANDOMIZE_CHAR_DESCRIPTION" );
-        if( cc_uistate.generation_type == character_type::RANDOM ) {
-            ImGui::SameLine();
-            char_creation::draw_action_button( _( "All" ), "REROLL_CHARACTER" );
-            ImGui::SameLine();
-            char_creation::draw_action_button( _( "Keep Scenario" ), "REROLL_CHARACTER_WITH_SCENARIO" );
-        }
-        ImGui::EndTable();
+    const int tab = hovered_tab();
+    if( tab >= 0 && tab < CHARACTER_CREATOR_TAB_COUNT ) {
+        cc_uistate.switched_tab = static_cast<character_creator_tab>( tab );
+        return true;
     }
+    const std::string action = hovered_attribute( "data-action" );
+    if( action.empty() ) {
+        return false;
+    }
+    cc_uistate.top_bar_button_action = action;
+    return true;
+}
+
+std::string character_creator_ui_impl::top_bar_rml( const avatar &u ) const
+{
+    const avatar &you = get_avatar();
+    // Two columns of two rows, each cell drawn into the flow and taken out
+    char_creation::draw_name( you, cc_uistate.no_name_entered );
+    const std::string name_cell = cc_out.take();
+    char_creation::draw_scenario_profession( you );
+    const std::string scenario_cell = cc_out.take();
+
+    char_creation::draw_gender( you );
+    cc_out.same_line();
+    cc_out.text( " | ", c_white );
+    cc_out.same_line();
+    char_creation::draw_outfit();
+    const std::string gender_cell = cc_out.take();
+
+    cc_out.text( _( "Randomize:" ), c_white );
+    cc_out.same_line();
+    char_creation::draw_action_button( _( "Name" ), "RANDOMIZE_CHAR_NAME" );
+    cc_out.same_line();
+    char_creation::draw_action_button( _( "Description" ), "RANDOMIZE_CHAR_DESCRIPTION" );
+    if( cc_uistate.generation_type == character_type::RANDOM ) {
+        cc_out.same_line();
+        char_creation::draw_action_button( _( "All" ), "REROLL_CHARACTER" );
+        cc_out.same_line();
+        char_creation::draw_action_button( _( "Keep Scenario" ), "REROLL_CHARACTER_WITH_SCENARIO" );
+    }
+    const std::string randomize_cell = cc_out.take();
+
+    std::string rml = "<table class=\"grid\"><tr><td style=\"width: 40%;\">" + name_cell +
+                      "</td><td>" + scenario_cell + "</td></tr><tr><td>" + gender_cell + "</td><td>" +
+                      randomize_cell + "</td></tr></table>";
 
     if( cc_uistate.recalc_rating ) {
         cc_uistate.recalc_rating = false;
@@ -2845,18 +2882,23 @@ void character_creator_ui_impl::draw_top_bar( const avatar &u ) const
     draw_colored_text_wrap( cc_uistate.rating_string, c_white );
 
     char_creation::draw_action_button( _( "Save Template" ), "SAVE_TEMPLATE" );
-    ImGui::SameLine();
+    cc_out.same_line();
     char_creation::draw_action_button( _( "Reset Calendar" ), "RESET_CALENDAR" );
-    ImGui::SameLine();
-    cataimgui::draw_colored_text( string_format(
-                                      _( "Press <color_light_green>%s</color> to view and alter keybindings." ),
-                                      ui_parent->get_current_tab_input().get_desc( "HELP_KEYBINDINGS" ) ) );
+    cc_out.same_line();
+    cc_out.text( string_format(
+                     _( "Press <color_light_green>%s</color> to view and alter keybindings." ),
+                     ui_parent->get_current_tab_input().get_desc( "HELP_KEYBINDINGS" ) ) );
+    return rml + cc_out.take();
 }
 
 bool character_creator_ui::display()
 {
     cc_uistate.reset();
     character_creator_ui_impl ccui( this );
+    ui_impl = &ccui;
+    on_out_of_scope forget_impl( [this]() {
+        ui_impl = nullptr;
+    } );
 
     // setup all uilists/inputs
     character_creator_tab preserve_first_tab = cc_uistate.selected_tab;
@@ -2892,7 +2934,13 @@ bool character_creator_ui::display()
             }
         } else {
             cc_uilist_current.reset();
-            handle_action( current_tab_input.handle_input( 33 ) );
+            const std::string action = current_tab_input.handle_input( 33 );
+            // With no uilist, a click goes straight to the window
+            if( action == "SELECT" ) {
+                ccui.handle_click();
+            } else {
+                handle_action( action );
+            }
         }
         if( !cc_uistate.top_bar_button_action.empty() ) {
             handle_action( cc_uistate.top_bar_button_action );
@@ -2905,193 +2953,164 @@ bool character_creator_ui::display()
     return true;
 }
 
-void character_creator_ui_impl::draw_scenarios() const
+std::string character_creator_ui_impl::scenarios_rml() const
 {
     const avatar &u = get_avatar();
     cc_uistate.recalc_scenario_list( u );
     const scenario *current_scenario = cc_uistate.get_selected_scenario();
 
-    if( ImGui::BeginTable( "SCENARIO_MAIN", 2, CHARACTER_CREATOR_TABLE_FLAGS ) ) {
-        if( current_scenario ) {
-            std::string scenario_name = current_scenario->gender_appropriate_name( !u.male );
-            if( current_scenario == get_scenario() ) {
-                append_screen_reader_active( scenario_name );
-            }
-            setup_list_detail_ui( string_format( _( "Scenario: %s" ), scenario_name ) );
-            char_creation::draw_scenario_details( u );
-        } else {
-            setup_list_detail_ui();
+    if( current_scenario ) {
+        std::string scenario_name = current_scenario->gender_appropriate_name( !u.male );
+        if( current_scenario == get_scenario() ) {
+            append_screen_reader_active( scenario_name );
         }
-        ImGui::EndTable();
+        setup_list_detail_ui( string_format( _( "Scenario: %s" ), scenario_name ) );
+        char_creation::draw_scenario_details( u );
+    } else {
+        setup_list_detail_ui();
     }
+    return cc_out.take();
 }
 
-void character_creator_ui_impl::draw_professions() const
+// Two columns side by side, a rule between them
+static std::string columns_rml( const std::string &left, const std::string &right )
+{
+    return "<div class=\"hbox\"><div class=\"grow\" style=\"padding-right: 10dp;\">" + left +
+           "</div><div class=\"grow\" style=\"padding-left: 10dp; border-left: 1dp #39465c;\">" +
+           right + "</div></div>";
+}
+
+std::string character_creator_ui_impl::professions_rml() const
 {
     const avatar &u = get_avatar();
     cc_uistate.recalc_profession_list( u );
 
-    if( ImGui::BeginTable( "PROFESSION_MAIN", 2, CHARACTER_CREATOR_TABLE_FLAGS ) ) {
-        const profession_id &selected_profession = cc_uistate.get_selected_profession();
-
-        if( !selected_profession.is_null() ) {
-            std::string profession_name = selected_profession->gender_appropriate_name( u.male );
-            if( u.prof->ident() == selected_profession ) {
-                append_screen_reader_active( profession_name );
-            }
-            setup_list_detail_ui( string_format( _( "Profession: %s" ), profession_name ) );
-            char_creation::draw_profession_header( u );
-            draw_spacer();
-            if( ImGui::BeginTable( "PROFESSION_COLUMNS", 2 ) ) {
-                ImGui::TableNextColumn();
-                char_creation::draw_profession_inventory( u );
-                ImGui::NewLine();
-                ImGui::TableNextColumn();
-                char_creation::draw_profession_details();
-                ImGui::EndTable();
-            }
-        } else {
-            setup_list_detail_ui();
-        }
-        ImGui::EndTable();
+    const profession_id &selected_profession = cc_uistate.get_selected_profession();
+    if( selected_profession.is_null() ) {
+        setup_list_detail_ui();
+        return cc_out.take();
     }
+    std::string profession_name = selected_profession->gender_appropriate_name( u.male );
+    if( u.prof->ident() == selected_profession ) {
+        append_screen_reader_active( profession_name );
+    }
+    setup_list_detail_ui( string_format( _( "Profession: %s" ), profession_name ) );
+    char_creation::draw_profession_header( u );
+    draw_spacer();
+    const std::string top = cc_out.take();
+    char_creation::draw_profession_inventory( u );
+    const std::string inventory = cc_out.take();
+    char_creation::draw_profession_details();
+    const std::string details = cc_out.take();
+    return top + columns_rml( inventory, details );
 }
 
-void character_creator_ui_impl::draw_backgrounds()
+std::string character_creator_ui_impl::backgrounds_rml()
 {
     const avatar &u = get_avatar();
     cc_uistate.recalc_hobby_list( u );
     cc_uistate.recalc_hobbies_taken_list( u );
 
-    if( ImGui::BeginTable( "BACKGROUNDS_MAIN", 2, CHARACTER_CREATOR_TABLE_FLAGS ) ) {
-
-        const profession_id selected_hobby = cc_uistate.get_selected_hobby();
-        if( !selected_hobby.is_null() ) {
-            std::string hobby_name = selected_hobby->gender_appropriate_name( u.male );
-            if( u.hobbies.count( &*selected_hobby ) ) {
-                append_screen_reader_active( hobby_name );
-            }
-            setup_list_detail_ui( string_format( _( "Background: %s" ), hobby_name ) );
-            ImGui::NewLine();
-            char_creation::draw_hobby_header( u );
-            draw_spacer();
-            if( ImGui::BeginTable( "BACKGROUNDS_COLUMNS", 2, ImGuiTableFlags_BordersInnerV,
-                                   ImVec2( 0.0F, ImGui::GetContentRegionAvail().y ) ) ) {
-                ImGui::TableNextColumn();
-                char_creation::draw_hobby_details();
-                ImGui::NewLine();
-                ImGui::TableNextColumn();
-                char_creation::draw_hobby_selected( u );
-                ImGui::EndTable();
-            }
-        } else {
-            setup_list_detail_ui();
-        }
-        ImGui::EndTable();
+    const profession_id selected_hobby = cc_uistate.get_selected_hobby();
+    if( selected_hobby.is_null() ) {
+        setup_list_detail_ui();
+        return cc_out.take();
     }
+    std::string hobby_name = selected_hobby->gender_appropriate_name( u.male );
+    if( u.hobbies.count( &*selected_hobby ) ) {
+        append_screen_reader_active( hobby_name );
+    }
+    setup_list_detail_ui( string_format( _( "Background: %s" ), hobby_name ) );
+    char_creation::draw_hobby_header( u );
+    draw_spacer();
+    const std::string top = cc_out.take();
+    char_creation::draw_hobby_details();
+    const std::string details = cc_out.take();
+    char_creation::draw_hobby_selected( u );
+    const std::string selected = cc_out.take();
+    return top + columns_rml( details, selected );
 }
 
-void character_creator_ui_impl::draw_stats()
+std::string character_creator_ui_impl::stats_rml()
 {
-    if( ImGui::BeginTable( "STATS_MAIN", 2, CHARACTER_CREATOR_TABLE_FLAGS ) ) {
-        setup_list_detail_ui( char_creation::get_character_stat_header( cc_uistate.selected_stat_index ) );
-        ImGui::NewLine();
-        char_creation::draw_stat_details( get_avatar() );
-        ImGui::EndTable();
-    }
+    setup_list_detail_ui( char_creation::get_character_stat_header( cc_uistate.selected_stat_index ) );
+    char_creation::draw_stat_details( get_avatar() );
+    return cc_out.take();
 }
 
-void character_creator_ui_impl::draw_traits()
+std::string character_creator_ui_impl::traits_rml()
 {
     const avatar &u = get_avatar();
     cc_uistate.recalc_trait_list( u );
     const trait_id selected_trait = cc_uistate.get_selected_trait();
-    if( ImGui::BeginTable( "TRAITS_MAIN", 2, CHARACTER_CREATOR_TABLE_FLAGS ) ) {
-        if( !selected_trait.is_null() ) {
-            std::string trait_name = selected_trait->name();
-            if( u.has_trait( selected_trait ) ) {
-                append_screen_reader_active( trait_name );
-            }
-            setup_list_detail_ui( trait_name );
-            draw_spacer();
-            draw_colored_text_wrap( selected_trait->desc(), c_white );
-        } else {
-            setup_list_detail_ui();
+    if( !selected_trait.is_null() ) {
+        std::string trait_name = selected_trait->name();
+        if( u.has_trait( selected_trait ) ) {
+            append_screen_reader_active( trait_name );
         }
-        ImGui::EndTable();
+        setup_list_detail_ui( trait_name );
+        draw_colored_text_wrap( selected_trait->desc(), c_white );
+    } else {
+        setup_list_detail_ui();
     }
+    return cc_out.take();
 }
 
-void character_creator_ui_impl::draw_skills()
+std::string character_creator_ui_impl::skills_rml()
 {
     cc_uistate.recalc_skill_list();
-    if( ImGui::BeginTable( "SKILLS_MAIN", 2, CHARACTER_CREATOR_TABLE_FLAGS ) ) {
-        const skill_id selected_skill = cc_uistate.get_selected_skill();
-        if( !selected_skill.is_null() ) {
-            const avatar &u = get_avatar();
-            setup_list_detail_ui( remove_color_tags( get_skill_entry_text( selected_skill, u ) ) );
-            draw_spacer();
-            draw_colored_text_wrap( selected_skill->description(), c_white );
-            draw_spacer();
+    const skill_id selected_skill = cc_uistate.get_selected_skill();
+    if( !selected_skill.is_null() ) {
+        const avatar &u = get_avatar();
+        setup_list_detail_ui( remove_color_tags( get_skill_entry_text( selected_skill, u ) ) );
+        draw_colored_text_wrap( selected_skill->description(), c_white );
+        draw_spacer();
 
-            std::map<skill_id, int> prof_skills;
-            const profession::StartingSkillList &pskills = u.prof->skills();
-            std::copy( pskills.begin(), pskills.end(),
-                       std::inserter( prof_skills, prof_skills.begin() ) );
+        std::map<skill_id, int> prof_skills;
+        const profession::StartingSkillList &pskills = u.prof->skills();
+        std::copy( pskills.begin(), pskills.end(),
+                   std::inserter( prof_skills, prof_skills.begin() ) );
 
-            char_creation::draw_skill_details( u, prof_skills, selected_skill );
-        } else {
-            setup_list_detail_ui();
-        }
-        ImGui::EndTable();
+        char_creation::draw_skill_details( u, prof_skills, selected_skill );
+    } else {
+        setup_list_detail_ui();
     }
+    return cc_out.take();
 }
 
-void character_creator_ui_impl::draw_summary()
+std::string character_creator_ui_impl::summary_rml()
 {
     const avatar &u = get_avatar();
     const Character &who = get_player_character();
-    ImGui::PushStyleVar( ImGuiStyleVar_CellPadding, { 20.0f, 0.0f } );
-    if( ImGui::BeginTable( "DESCRIPTION_MAIN", 3, CHARACTER_CREATOR_TABLE_FLAGS |
-                           ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX | ImGuiTableFlags_BordersInnerV ) ) {
-        ImGui::TableNextColumn();
 
-        char_creation::draw_character_stats( who, false );
-        draw_spacer();
-        char_creation::draw_character_skills( who );
+    char_creation::draw_character_stats( who, false );
+    draw_spacer();
+    char_creation::draw_character_skills( who );
+    const std::string first = cc_out.take();
 
-        ImGui::NewLine();
-        ImGui::TableNextColumn();
-        char_creation::draw_character_traits( who );
-        draw_spacer();
-        char_creation::draw_character_proficiencies( who );
-        draw_spacer();
-        char_creation::draw_hobby_selected( u );
+    char_creation::draw_character_traits( who );
+    draw_spacer();
+    char_creation::draw_character_proficiencies( who );
+    draw_spacer();
+    char_creation::draw_hobby_selected( u );
+    const std::string second = cc_out.take();
 
-        ImGui::NewLine();
-        ImGui::TableNextColumn();
-        char_creation::draw_location( u );
+    char_creation::draw_location( u );
+    draw_spacer();
+    if( get_option<bool>( "SELECT_STARTING_CITY" ) ) {
+        char_creation::draw_starting_city( u );
         draw_spacer();
-        if( get_option<bool>( "SELECT_STARTING_CITY" ) ) {
-            char_creation::draw_starting_city( u );
-            draw_spacer();
-        }
-        char_creation::draw_starting_vehicle( who );
-        draw_spacer();
-        bool dummy = true;
-        char_creation::draw_profession_bionics( dummy, _( "Bionics" ), *who.prof );
-
-        set_detail_scroll();
-
-        ImGui::EndTable();
     }
-    ImGui::PopStyleVar();
-}
+    char_creation::draw_starting_vehicle( who );
+    draw_spacer();
+    bool dummy = true;
+    char_creation::draw_profession_bionics( dummy, _( "Bionics" ), *who.prof );
+    const std::string third = cc_out.take();
 
-cataimgui::bounds character_creator_ui_impl::get_bounds()
-{
-    const ImVec2 viewport = ImGui::GetMainViewport()->WorkSize;
-    return { 0, 0, viewport.x, viewport.y };
+    return "<div class=\"hbox\"><div class=\"fixed\" style=\"padding-right: 20dp;\">" + first +
+           "</div><div class=\"fixed\" style=\"padding: 0 20dp; border-left: 1dp #39465c;\">" + second +
+           "</div><div class=\"grow\" style=\"padding-left: 20dp; border-left: 1dp #39465c;\">" + third +
+           "</div></div>";
 }
 
 template<typename T>
@@ -3384,6 +3403,10 @@ bool character_creator_callback::key( const input_context &ctxt, const input_eve
 
 bool character_creator_ui::handle_action( const std::string &action )
 {
+    if( action == "SELECT" ) {
+        // A click on the details window rather than the list; display() acts on it
+        return ui_impl != nullptr && ui_impl->handle_click();
+    }
     avatar &you = get_avatar();
 
     auto mod_stat_base = [&you]( int mod_value ) {
@@ -3512,7 +3535,7 @@ bool character_creator_ui::handle_action( const std::string &action )
             }
         }
     } else if( action == "CHANGE_NAME" ) {
-        string_input_popup_imgui popup( 60, you.name );
+        text_input_popup popup( 60, you.name );
         popup.set_description( _( "Enter name.  Cancel to delete all." ) );
         popup.set_max_input_length( NAME_CHARACTER_LIMIT );
         you.name = popup.query();

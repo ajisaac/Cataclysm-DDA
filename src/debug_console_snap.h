@@ -42,7 +42,7 @@ std::function<std::string()> world_calendar();
 std::function<std::string()> vehicle_under_avatar();
 std::function<std::string()> world_tile_under_feet();
 std::function<std::string()> world_items_under_feet();
-std::function<std::string()> imgui_fps();
+std::function<std::string()> ui_fps();
 
 // Parameterized snapshots. Each captures its argument by value into the
 // closure so the snap survives mutation of any caller-side temporaries.

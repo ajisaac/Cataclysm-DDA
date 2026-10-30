@@ -860,7 +860,7 @@ std::vector<std::string> furn_t::extended_description() const
         const iteminfo_query quality_query( quality_part );
         std::vector<iteminfo> info_vec;
         pseudo.qualities_info( info_vec, &quality_query, 1, false );
-        // A bit of cargo-culting here, pre-imgui printing code was adapted
+        // A bit of cargo-culting here, older printing code was adapted
         // to split string with line breaks into single-line strings
         std::string quality_string = format_item_info( info_vec, {} );
         size_t strpos = 0;

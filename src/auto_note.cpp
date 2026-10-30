@@ -499,7 +499,7 @@ void auto_note_manager_gui::show()
             entry.second = false;
             ( bCharacter ? charwasChanged : globalwasChanged ) = true;
         } else if( action == "CHANGE_MAPEXTRA_CHARACTER" ) {
-            string_input_popup_imgui custom_symbol_popup( 0 );
+            text_input_popup custom_symbol_popup( 0 );
             custom_symbol_popup.set_label( _( "Enter a map extra custom symbol (empty to unset):" ) );
             custom_symbol_popup.set_max_input_length( 1 );
             const std::string &custom_symbol_str = custom_symbol_popup.query();

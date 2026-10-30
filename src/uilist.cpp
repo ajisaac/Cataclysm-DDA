@@ -19,6 +19,7 @@
 #include "output.h"
 #include "input_popup.h"
 #include "rml_markup.h"
+#include "rml_window.h"
 #include "translations.h"
 #include "ui_manager.h"
 
@@ -84,25 +85,24 @@ void uilist_impl::show( const std::string &id, const std::string &rml )
 void uilist_impl::apply_layout()
 {
     const point view = rml_ui::viewport_px();
-    const float scale = rml_ui::imgui_px_scale();
     const float dp = rml_ui::dp_ratio();
 
-    // desired_bounds is in ImGui pixels, read the way cataimgui::window reads
-    // it: a negative position centers on that axis, and a size of at most 1
-    // on both axes is a fraction of the screen.
+    // desired_bounds is in terminal cells: a negative position centers on
+    // that axis, and a size of at most 1 on both axes is a fraction of the
+    // screen.
     std::string root_style;
     std::string menu_style;
-    // As tall as the ImGui menu would let itself get
+    // As tall as the menu lets itself get
     float menu_height_px = 0.9f * view.y;
     if( parent.desired_bounds ) {
-        const cataimgui::bounds &b = *parent.desired_bounds;
+        const uilist_bounds &b = *parent.desired_bounds;
         if( b.x >= 0.f ) {
             root_style += "justify-content: flex-start;";
-            menu_style += string_format( "margin-left: %.0fpx;", b.x * scale );
+            menu_style += "margin-left: " + rml_ui::term_width( b.x ) + ";";
         }
         if( b.y >= 0.f ) {
             root_style += "align-items: flex-start;";
-            menu_style += string_format( "margin-top: %.0fpx;", b.y * scale );
+            menu_style += "margin-top: " + rml_ui::term_height( b.y ) + ";";
         }
         if( b.w > 0.f && b.w <= 1.f && b.h > 0.f && b.h <= 1.f ) {
             menu_style += string_format( "width: %.0f%%; height: %.0f%%; max-width: none;",
@@ -110,11 +110,11 @@ void uilist_impl::apply_layout()
             menu_height_px = b.h * view.y;
         } else {
             if( b.w > 1.f ) {
-                menu_style += string_format( "width: %.0fpx; max-width: none;", b.w * scale );
+                menu_style += "width: " + rml_ui::term_width( b.w ) + "; max-width: none;";
             }
             if( b.h > 1.f ) {
-                menu_style += string_format( "height: %.0fpx;", b.h * scale );
-                menu_height_px = b.h * scale;
+                menu_style += "height: " + rml_ui::term_height( b.h ) + ";";
+                menu_height_px = std::min( b.h / std::max( 1, TERMY ), 0.95f ) * view.y;
             }
         }
     }
@@ -639,7 +639,7 @@ void uilist::filterlist()
 
 void uilist::inputfilter()
 {
-    filter_popup = std::make_unique<string_input_popup_imgui>( 0, filter );
+    filter_popup = std::make_unique<text_input_popup>( 0, filter );
     filter_popup->set_max_input_length( 256 );
     filter = filter_popup->query();
     if( filter_popup->cancelled() ) {

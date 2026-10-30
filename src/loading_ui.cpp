@@ -1,139 +1,105 @@
 #include "loading_ui.h"
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
 #include "cached_options.h"
+#include "cata_path.h"
+#include "catacharset.h"
+#include "color.h"
+#include "filesystem.h"
 #include "input.h"
+#include "mod_manager.h"
 #include "options.h"
 #include "output.h"
+#include "path_info.h"
+#include "point.h"
+#include "rml_markup.h"
+#include "rml_ui.h"
+#include "rng.h"
+#include "sdl_wrappers.h"
+#include "sdltiles.h"
+#include "string_formatter.h"
 #include "text_snippets.h"
 #include "ui_manager.h"
-
-#define IMGUI_DEFINE_MATH_OPERATORS
-#include "imgui/imgui.h"
-#undef IMGUI_DEFINE_MATH_OPERATORS
-#include "mod_manager.h"
-#include "path_info.h"
-#include "sdltiles.h"
-#include "sdl_wrappers.h"
-#include "cata_imgui.h"
-#include "text_snippets.h"
 #include "worldfactory.h"
 
 namespace
 {
+// The loading screen, from data/raw/rmlui/loading.rml: a splash image, a tip
+// below it and what is loading below that.
+class loading_screen : public rml_ui::document
+{
+    public:
+        loading_screen() : rml_ui::document( "loading.rml" ) {}
+
+        void set_splash( const cata_path &image ) {
+            if( SDL_Surface_Ptr surf = load_image( image.get_unrelative_path().u8string().c_str() ) ) {
+                image_size = point( surf->w, surf->h );
+            }
+            set_attribute( "splash", "src", rml_ui::file_source( image ) );
+        }
+
+        void set_tip( const std::string &text ) {
+            tip = text;
+            set_inner_rml( "tip", rml_ui::markup_to_rml( colorize( tip, c_cyan ) ) );
+        }
+
+        void set_message( const std::string &text ) {
+            set_inner_rml( "message", rml_ui::escape_rml( text ) );
+        }
+
+    protected:
+        void on_redraw() override {
+            const point view = rml_ui::viewport_px();
+            if( view == laid_out_for || image_size.x <= 0 || image_size.y <= 0 ) {
+                return;
+            }
+            laid_out_for = view;
+            // if our screen space is at least twice as large as minimal, we will use 1.5x font size
+            const float dp = rml_ui::dp_ratio();
+            const bool large_hint_size = view.y / dp > 2 * 384;
+            set_class( "tip", "large", large_hint_size );
+
+            // Scale the image to the room left by the text below it, which is
+            // the tip wrapped to the screen's width and a line of loading
+            // message, preserving its aspect ratio; it scales both "up" and "down"
+            const float tip_font_px = ( large_hint_size ? 24.f : 16.f ) * dp;
+            const float max_width = view.x * 0.96f;
+            const int tip_lines = 1 + static_cast<int>( utf8_width( tip ) * 0.56f * tip_font_px /
+                                  std::max( 1.f, max_width ) );
+            const float max_height = view.y * 0.96f - 1.3f * ( tip_lines * tip_font_px + 2 * 16.f * dp );
+            const float longest_side_ratio = std::max( image_size.x / max_width,
+                                             image_size.y / std::max( 1.f, max_height ) );
+            set_attribute( "splash", "style", string_format( "width: %.0fpx; height: %.0fpx;",
+                           image_size.x / longest_side_ratio, image_size.y / longest_side_ratio ) );
+        }
+
+    private:
+        std::string tip;
+        point image_size;
+        point laid_out_for;
+};
+
 struct ui_state {
-    ui_adaptor *ui;
-    background_pane *bg;
-    ImVec2 window_size;
-    ImVec2 splash_size;
-    SDL_Texture_Ptr splash;
+    // Before the screen, so it is drawn below it
+    background_pane bg;
+    loading_screen screen;
     cata_path chosen_load_img;
-    float hint_height;
-    float loading_msg_height;
-    // height of all the text that will be shown below the splash screen, tip + loading msg
-    float text_height;
-    // if screen resolution is large enough, we will increase the size of snippet text by 1.5x
-    bool large_hint_size;
-    // actual tip we generated from the tip list
-    std::string tip;
-    std::string context;
-    std::string step;
 };
 } // namespace
 
 static ui_state *gLUI = nullptr;
 
-static void redraw()
-{
-    ImGui::SetNextWindowSize( ImGui::GetMainViewport()->Size );
-    ImGui::SetNextWindowPos( {0, 0}, ImGuiCond_Always );
-    ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
-    if( ImGui::Begin( "Loading…", nullptr,
-                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings ) ) {
-
-        const float width = ImGui::GetContentRegionAvail().x;
-
-        // image
-        const float center_x = ImGui::GetMainViewport()->Size.x / 2;
-        const float image_start_pos_x = center_x - ( gLUI->splash_size.x / 2 );
-        ImGui::SetCursorPosX( image_start_pos_x );
-        if( gLUI->splash ) {
-            ImGui::Image( reinterpret_cast<ImTextureID>( gLUI->splash.get() ), gLUI->splash_size );
-        }
-
-        // hint
-        ImGui::SetCursorPosY( ImGui::GetWindowHeight() - gLUI->text_height );
-        if( gLUI->large_hint_size ) {
-            cataimgui::PushGuiFont1_5x();
-        }
-        const float tip_width = cataimgui::get_string_width( gLUI->tip );
-        // center align
-        ImGui::SetCursorPosX( std::max( ( width / 2.f ) - ( tip_width / 2.f ),
-                                        ImGui::GetStyle().WindowPadding.x ) );
-        const std::string hint = string_format( "%s", colorize( gLUI->tip, c_cyan ) );
-
-        cataimgui::draw_colored_text( hint, width );
-        if( gLUI->large_hint_size ) {
-            cataimgui::PopGuiFont1_5x();
-        }
-
-        // loading msg
-        ImGui::SetCursorPosY( ImGui::GetWindowHeight() - gLUI->loading_msg_height );
-        // somewhat arbitrary centering of loading msg
-        // hardcoded so it will not jump around depending on the step
-        const float loading_msg_pos_x = center_x - cataimgui::get_string_width( "Loading files: " );
-        ImGui::SetCursorPosX( loading_msg_pos_x );
-        const std::string loading_msg = string_format( "%s %s", gLUI->context, gLUI->step );
-        cataimgui::draw_colored_text( loading_msg, ImGui::GetContentRegionAvail().x );
-    }
-    ImGui::End();
-    ImGui::PopStyleVar();
-
-}
-
-static void resize()
-{
-}
-
 static void update_state( const std::string &context, const std::string &step )
 {
     if( gLUI == nullptr ) {
         gLUI = new struct ui_state;
-        gLUI->bg = new background_pane;
-        gLUI->ui = new ui_adaptor;
-        gLUI->ui->is_imgui = true;
-        gLUI->ui->on_redraw( []( ui_adaptor & ) {
-            redraw();
-        } );
-        gLUI->ui->on_screen_resize( []( ui_adaptor & ) {
-            resize();
-        } );
 
-        // padding will eat some of it, but we cannot access padding without imgui window
-        // so eyeball a bit off the main viewport to compensate
-        const ImVec2 screen_size = ImGui::GetMainViewport()->Size * 0.98f;
-
-        // get snippet text and calculate it's size ahead of time
-        gLUI->tip = SNIPPET.random_from_category( "tip" ).value_or(
-                        translation() ).translated();
-
-        // if our screen space is at least twice as large as minimal, we will use 1.5x font size
-        gLUI->large_hint_size = cataimgui::min_screen_res_y * 2.f < screen_size.y;
-
-        // calculate hint_height maybe with increased font
-        // ideally it would use proper ImGui::PopFont(), but it requires imgui window, which we do not have here
-        // so we just eyeball it to be 1.6x bigger than normal-sized string
-        if( gLUI->large_hint_size ) {
-            gLUI->hint_height = cataimgui::get_string_height( gLUI->tip, screen_size.x ) * 1.6f;
-        } else {
-            gLUI->hint_height = cataimgui::get_string_height( gLUI->tip, screen_size.x );
-        }
-
-        // no matter the size, loading message always fit in 1 line,
-        // so just use dummy line to calculate it's height
-        gLUI->loading_msg_height = cataimgui::get_string_height( " ", 0 );
-
-        gLUI->text_height = gLUI->hint_height + gLUI->loading_msg_height;
+        // get snippet text
+        gLUI->screen.set_tip( SNIPPET.random_from_category( "tip" ).value_or(
+                                  translation() ).translated() );
 
         // get image
         std::vector<cata_path> imgs;
@@ -170,29 +136,16 @@ static void update_state( const std::string &context, const std::string &step )
                     imgs.emplace_back( img_path );
                 }
             }
-            gLUI->chosen_load_img = random_entry( imgs );
+            if( !imgs.empty() ) {
+                gLUI->chosen_load_img = random_entry( imgs );
+            }
         }
-        SDL_Surface_Ptr surf = load_image( gLUI->chosen_load_img.get_unrelative_path().u8string().c_str() );
-        // calculate max size of image, decreasing it by the size of text below
-        const ImVec2 max_img_size = { screen_size.x, screen_size.y - gLUI->text_height };
-        // preserve aspect ratio by finding the longest **relative** side and scaling both sides by its ratio to max_img_size
-        // scales both "up" and "down"
-        float width_ratio = static_cast<float>( surf->w ) / max_img_size.x;
-        float height_ratio = static_cast<float>( surf->h ) / max_img_size.y;
-        float longest_side_ratio = width_ratio > height_ratio ? width_ratio : height_ratio;
-        gLUI->splash_size = { static_cast<float>( surf->w ) / longest_side_ratio,
-                              static_cast<float>( surf->h ) / longest_side_ratio
-                            };
-        if( !renderer_should_abort_frame() ) {
-            // Skip the upload when recovery is queued: it would invalidate the
-            // texture. The splash stays absent for this load rather than uploading
-            // against a renderer about to be rebuilt.
-            gLUI->splash = CreateTextureFromSurface( get_sdl_renderer(), surf );
+        if( !( gLUI->chosen_load_img == cata_path() ) ) {
+            // RmlUi loads the texture itself as it draws, and again after a renderer reset
+            gLUI->screen.set_splash( gLUI->chosen_load_img );
         }
-        gLUI->window_size = gLUI->splash_size + ImVec2{ 0.0f, 2.0f * ImGui::GetTextLineHeightWithSpacing() };
     }
-    gLUI->context = std::string( context );
-    gLUI->step = std::string( step );
+    gLUI->screen.set_message( string_format( "%s %s", context, step ) );
 }
 
 void loading_ui::show( const std::string &context, const std::string &step )
@@ -210,18 +163,7 @@ void loading_ui::show( const std::string &context, const std::string &step )
 void loading_ui::done()
 {
     if( gLUI != nullptr ) {
-        // Need to manually clear the screen due to using direct ImGui calls
-        clear_sdl_window();
-        delete gLUI->ui;
-        delete gLUI->bg;
         delete gLUI;
         gLUI = nullptr;
-    }
-}
-
-void loading_ui::release_gpu_resources()
-{
-    if( gLUI != nullptr ) {
-        gLUI->splash.reset();
     }
 }

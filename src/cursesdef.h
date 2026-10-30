@@ -26,7 +26,7 @@ struct point;
  *
  * The terminal backends were removed in the real-time conversion: ncurses
  * (ncurses_def.cpp) and Windows console curses (wincurse.cpp) are both gone, as
- * is the ImTui ImGui-on-ncurses backend. SDL is now required.
+ * is the ImTui backend. SDL is now required.
  *
  * This interface is still shaped like ncurses because it originated as a
  * forwarding layer over it, so ncurses documentation remains the best reference

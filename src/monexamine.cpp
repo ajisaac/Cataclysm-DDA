@@ -192,7 +192,7 @@ void push( monster &z )
 
 void rename_pet( monster &z )
 {
-    string_input_popup_imgui pet_popup( 55, z.unique_name );
+    text_input_popup pet_popup( 55, z.unique_name );
     pet_popup.set_label( _( "Enter new pet name:" ) );
     std::string unique_name = pet_popup.query();
     if( !pet_popup.cancelled() ) {

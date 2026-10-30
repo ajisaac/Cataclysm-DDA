@@ -7,7 +7,6 @@
 
 #include "cached_options.h"
 #include "cata_assert.h"
-#include "cata_imgui.h"
 #include "cata_scope_helpers.h"
 #include "cursesdef.h"
 #include "point.h"
@@ -22,7 +21,6 @@
 
 using ui_stack_t = std::vector<std::reference_wrapper<ui_adaptor>>;
 
-static bool imgui_frame_started = false;
 static bool redraw_in_progress = false;
 static bool showing_debug_message = false;
 static bool restart_redrawing = false;
@@ -32,21 +30,21 @@ static std::optional<SDL_Rect> prev_clip_rect;
 static uint64_t prev_clip_rect_generation = 0;
 static ui_stack_t ui_stack;
 
-ui_adaptor::ui_adaptor() : is_imgui( false ), is_rml( false ), disabling_uis_below( false ),
+ui_adaptor::ui_adaptor() : is_rml( false ), disabling_uis_below( false ),
     is_debug_message_ui( false ),
     invalidated( false ), deferred_resize( false )
 {
     ui_stack.emplace_back( *this );
 }
 
-ui_adaptor::ui_adaptor( ui_adaptor::disable_uis_below ) : is_imgui( false ), is_rml( false ),
+ui_adaptor::ui_adaptor( ui_adaptor::disable_uis_below ) : is_rml( false ),
     disabling_uis_below( true ),
     is_debug_message_ui( false ), invalidated( false ), deferred_resize( false )
 {
     ui_stack.emplace_back( *this );
 }
 
-ui_adaptor::ui_adaptor( ui_adaptor::debug_message_ui ) : is_imgui( false ), is_rml( false ),
+ui_adaptor::ui_adaptor( ui_adaptor::debug_message_ui ) : is_rml( false ),
     disabling_uis_below( true ),
     is_debug_message_ui( true ), invalidated( false ), deferred_resize( false )
 {
@@ -318,16 +316,6 @@ void ui_adaptor::invalidate( const rectangle<point> &rect, const bool reenable_u
     invalidation_consistency_and_optimization();
 }
 
-bool ui_adaptor::has_imgui()
-{
-    for( auto ui : ui_stack ) {
-        if( ui.get().is_imgui ) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool ui_adaptor::has_non_rml_above() const
 {
     for( auto it = ui_stack.rbegin(); it != ui_stack.rend() && &it->get() != this; ++it ) {
@@ -369,26 +357,6 @@ void ui_adaptor::redraw_invalidated( )
         // intact for the next drain to replay the full UI.
         return;
     }
-    int buf_w = 0;
-    int buf_h = 0;
-    get_display_buffer_dims( &buf_w, &buf_h );
-    // This boolean is needed when a debug error is thrown inside redraw_invalidated
-    if( !imgui_frame_started ) {
-        imclient->new_frame( buf_w, buf_h );
-    }
-    imgui_frame_started = true;
-
-    // On abnormal exit (exception unwinding a draw callback) close the frame
-    // without rendering so the next NewFrame() does not assert. No-op on the
-    // normal path: end_frame()/abort_frame() clear imgui_frame_started first.
-    on_out_of_scope imgui_frame_balance( [] {
-        if( imgui_frame_started )
-        {
-            imclient->abort_frame();
-            imgui_frame_started = false;
-        }
-    } );
-
     restore_on_out_of_scope prev_redraw_in_progress( redraw_in_progress );
     restore_on_out_of_scope prev_restart_redrawing( restart_redrawing );
     redraw_in_progress = true;
@@ -454,7 +422,7 @@ void ui_adaptor::redraw_invalidated( )
         if( !restart_redrawing ) {
             for( auto it = first_enabled; !needs_redraw && it != ui_stack_orig->end(); ++it ) {
                 const ui_adaptor &ui = *it;
-                if( ( ui.invalidated || ui.is_imgui || ui.is_rml ) && ui.redraw_cb ) {
+                if( ( ui.invalidated || ui.is_rml ) && ui.redraw_cb ) {
                     needs_redraw = true;
                 }
             }
@@ -471,7 +439,7 @@ void ui_adaptor::redraw_invalidated( )
             for( auto it = first_enabled; !restart_redrawing && it != ui_stack_orig->end(); ++it ) {
                 ui_adaptor &ui = *it;
                 ui.is_on_top = it == top_ui;
-                if( ui.invalidated || ui.is_imgui || ui.is_rml ) {
+                if( ui.invalidated || ui.is_rml ) {
                     if( ui.redraw_cb ) {
                         ui.default_cursor();
                         ui.redraw_cb( ui );
@@ -497,26 +465,6 @@ void ui_adaptor::redraw_invalidated( )
 #if defined(EMSCRIPTEN)
     emscripten_sleep( 1 );
 #endif
-
-    if( renderer_should_abort_frame() ) {
-        // Close the ImGui frame WITHOUT backend rendering: abort_frame balances
-        // the next NewFrame assert without painting the drawlist onto a target
-        // about to be rebuilt. A recovery re-invalidates every adaptor; a bare
-        // resize keeps the buffer contents the present path restretches.
-        if( imgui_frame_started ) {
-            imclient->abort_frame();
-        }
-        imgui_frame_started = false;
-        return;
-    }
-    imclient->end_frame();
-    imgui_frame_started = false;
-
-    // if any ImGui window needed to calculate the size of its contents,
-    //  it needs an extra frame to draw. We do that here.
-    // if( imclient->auto_size_frame_active() ) {
-    //     redraw_invalidated();
-    // }
 }
 
 void ui_adaptor::screen_resized()

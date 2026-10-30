@@ -496,7 +496,7 @@ void user_interface::show()
             ui_manager::redraw();
 
             if( bLeftColumn || action == "ADD_RULE" ) {
-                string_input_popup_imgui popup( 60, cur_rules[iLine].sRule );
+                text_input_popup popup( 60, cur_rules[iLine].sRule );
                 popup.set_label( _( "Pickup Rule:" ) );
                 std::string description = _(
                                               "* is used as a Wildcard.  A few Examples:\n"

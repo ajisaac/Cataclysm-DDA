@@ -45,7 +45,8 @@
 #include "output.h"
 #include "point.h"
 #include "ret_val.h"
-#include "sdltiles.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "string_formatter.h"
 #include "string_input_popup.h"
 #include "trade_ui.h"
@@ -228,6 +229,25 @@ static const int normal_column_gap = 8;
  * @see inventory_selector::get_columns_occupancy_ratio()
  */
 static const double min_ratio_to_center = 0.85;
+
+/**
+ * The window an inventory_selector is shown in. The selector builds its RML
+ * on every redraw; see inventory_selector::refresh_window().
+ */
+class inventory_ui_window : public rml_ui::window
+{
+    public:
+        explicit inventory_ui_window( inventory_selector &selector ) :
+            rml_ui::window( std::string(), "inventory.rml" ), selector( selector ) {}
+
+    protected:
+        void on_redraw() override {
+            selector.refresh_window();
+        }
+
+    private:
+        inventory_selector &selector;
+};
 
 bool inventory_selector::skip_unselectable = false;
 
@@ -1700,166 +1720,125 @@ int inventory_column::reassign_custom_invlets( int cur_idx, std::string_view pic
     return cur_idx;
 }
 
-void inventory_column::draw( const catacurses::window &win, const point &p,
-                             std::vector<std::pair<inclusive_rectangle<point>, inventory_entry *>> &rect_entry_map )
+std::string inventory_column::draw_rml( size_t column_index )
 {
+    std::string rml;
     if( !visible() ) {
-        return;
+        return rml;
     }
-    const auto available_cell_width = [ this ]( inventory_entry const & entry, size_t cell_index ) {
-        const size_t displayed_width = cells[cell_index].current_width;
-        const size_t real_width = get_entry_cell_width( entry, cell_index );
+    const std::string &hl_option = get_option<std::string>( "INVENTORY_HIGHLIGHT" );
+    const bool show_symbols = get_option<bool>( "ITEM_SYMBOLS" );
+    const bool show_marks = allows_selecting() && activatable() && multiselect;
+    const std::string mono_slot = "<span class=\"inv-slot\">";
 
-        return displayed_width > real_width ? displayed_width - real_width : 0;
-    };
-
-    // Do the actual drawing
     for( size_t index = page_offset, line = 0; index < entries.size() &&
          line < entries_per_page; ++index, ++line ) {
         inventory_entry &entry = entries[index];
 
         if( !entry ) {
+            rml += "<div class=\"line\"></div>";
             continue;
         }
         const inventory_entry::entry_cell_cache_t &entry_cell_cache = entry.get_entry_cell_cache( preset );
-
-        int x1 = p.x + get_entry_indent( entry );
-        int x2 = p.x + std::max( static_cast<int>( reserved_width - get_cells_width() ), 0 );
-        int yy = p.y + line;
-
-        const bool selected = active && is_highlighted( entry );
-
-        const int hx_max = p.x + get_width();
-        inclusive_rectangle<point> rect = inclusive_rectangle<point>( point( x1, yy ),
-                                          point( hx_max - 1, yy ) );
-        rect_entry_map.emplace_back( rect,
-                                     &entry );
-
-        if( selected && visible_cells() > 1 ) {
-            mvwhline( win, point( x1, yy ), h_white, ' ', hx_max - x1 );
-        }
-
         cata_assert( entry.denial.has_value() );
         const std::string &denial = *entry.denial;
+        const bool selected = active && is_highlighted( entry );
+        const bool grayed = entry.is_item() && !selected && !entry.is_selectable();
 
-        if( !denial.empty() ) {
-            // Determine the width available for the first cell to print, then use that to trim the denial
-            const size_t first_cell_width = std::min( get_entry_cell_width( entry, 0 ),
-                                            x2 + cells[0].current_width - min_denial_gap );
-            const size_t max_denial_width = std::max( static_cast<int>( get_width() - ( min_denial_gap +
-                                            first_cell_width ) ), 0 );
-            const size_t denial_width = std::min( max_denial_width, static_cast<size_t>( utf8_width( denial,
-                                                  true ) ) );
-
-            if( denial_width > 0 ) {
-                /* Need to determine exact point to start printing from the left, since just trimming produces
-                 * artifacts on languages with wide characters, and right_print expects only a second column */
-                std::string trimmed = trim_by_length( denial, denial_width );
-                const int x = p.x + get_width() - utf8_width( remove_color_tags( trimmed ) );
-                nc_color temp = c_red;
-                print_colored_text( win, point( x, yy ), temp, c_red,
-                                    selected ? hilite_string( colorize( trimmed, c_red ) ) : trimmed );
-                entry.cached_denial_space = denial_width;
+        // Relatives of the highlighted item, marked the way the option says
+        std::string relation;
+        std::string row_class = "line inv-row";
+        if( entry.is_category() ) {
+            row_class += " inv-cat";
+        } else if( selected ) {
+            row_class += " selected";
+        } else if( grayed ) {
+            row_class += " disabled";
+        } else if( entry.highlight_as_parent || entry.highlight_as_child ) {
+            if( hl_option == "symbol" ) {
+                relation = rml_ui::colored_rml( entry.highlight_as_parent ? "<" : ">", h_white );
+            } else {
+                row_class += entry.highlight_as_parent ? " inv-parent" : " inv-child";
             }
         }
+        entry.highlight_as_parent = false;
+        entry.highlight_as_child = false;
 
-        size_t count = denial.empty() ? cells.size() : 1;
+        rml += "<div class=\"" + row_class + "\" data-col=\"" + std::to_string( column_index ) +
+               "\" data-entry=\"" + std::to_string( index ) + "\">";
 
-        for( size_t cell_index = 0; cell_index < count; ++cell_index ) {
-            if( !cells[cell_index].visible() ) {
-                continue; // Don't show empty cells
-            }
-
-            if( line != 0 && cell_index != 0 && entry.is_category() ) {
-                break; // Don't show duplicated titles
-            }
-
-            x2 += cells[cell_index].current_width;
-            std::string text = entry_cell_cache.text[cell_index];
-
-            size_t text_width = utf8_width( text, true );
-            size_t text_gap = cell_index > 0 ? std::max( cells[cell_index].gap(), min_cell_gap ) : 0;
-            size_t available_width = x2 - x1 - text_gap;
-
-            if( text_width > available_width ) {
-                // See if we can steal some of the needed width from an adjacent cell
-                if( cell_index == 0 && count >= 2 ) {
-                    available_width += available_cell_width( entry, 1 );
-                } else if( cell_index > 0 ) {
-                    available_width += available_cell_width( entry, cell_index - 1 );
-                }
-                text_width = std::min( text_width, available_width );
-            }
-
-            if( text_width > 0 ) {
-                const int text_x = cell_index == 0 ? x1 : x2 -
-                                   text_width; // Align either to the left or to the right
-
-                const std::string &hl_option = get_option<std::string>( "INVENTORY_HIGHLIGHT" );
-                if( cell_index == 0 && entry.chevron ) {
-                    bool const hide_override = hide_entries_override && entry.any_item()->is_container();
-                    nc_color const col = entry.is_collation_header() ? c_light_blue : hide_override ?
-                                         *hide_entries_override ? c_red : c_green : c_dark_gray;
-                    bool const stat = entry.is_collation_entry() ||
-                                      !hide_override ? entry.collapsed : *hide_entries_override;
-                    trim_and_print( win, point( text_x - 1, yy ), 1, col,
-                                    stat ? "▶" : "▼" );
-                }
-                if( entry.is_item() && ( selected || !entry.is_selectable() ) ) {
-                    trim_and_print( win, point( text_x, yy ), text_width, selected ? h_white : c_dark_gray,
-                                    remove_color_tags( text ) );
-                } else if( entry.is_item() && entry.highlight_as_parent ) {
-                    if( hl_option == "symbol" ) {
-                        trim_and_print( win, point( text_x - 1, yy ), 1, h_white, "<" );
-                        trim_and_print( win, point( text_x, yy ), text_width, entry_cell_cache.color, text );
-                    } else {
-                        trim_and_print( win, point( text_x, yy ), text_width, c_white_white,
-                                        remove_color_tags( text ) );
-                    }
-                    entry.highlight_as_parent = false;
-                } else if( entry.is_item() && entry.highlight_as_child ) {
-                    if( hl_option == "symbol" ) {
-                        trim_and_print( win, point( text_x - 1, yy ), 1, h_white, ">" );
-                        trim_and_print( win, point( text_x, yy ), text_width, entry_cell_cache.color, text );
-                    } else {
-                        trim_and_print( win, point( text_x, yy ), text_width, c_black_white,
-                                        remove_color_tags( text ) );
-                    }
-                    entry.highlight_as_child = false;
-                } else {
-                    trim_and_print( win, point( text_x, yy ), text_width, entry_cell_cache.color, text );
-                }
-            }
-
-            x1 = x2;
-        }
+        const auto cell_rml = [&]( const std::string & text ) {
+            return grayed ? rml_ui::colored_rml( remove_color_tags( text ), c_dark_gray ) :
+                   rml_ui::markup_to_rml( text, entry_cell_cache.color );
+        };
 
         if( entry.is_item() ) {
-            int xx = p.x;
-            if( entry.get_invlet() != '\0' ) {
-                mvwputch( win, point( p.x, yy ), entry.get_invlet_color(), entry.get_invlet() );
+            const int invlet = entry.get_invlet();
+            rml += mono_slot + ( invlet != '\0' ? rml_ui::colored_rml( std::string( 1,
+                                 static_cast<char>( invlet ) ), entry.get_invlet_color() ) : std::string() ) + "</span>";
+            if( show_symbols ) {
+                rml += mono_slot + rml_ui::colored_rml( entry.any_item()->symbol(),
+                                                        entry.any_item()->color() ) + "</span>";
             }
-            xx += 2;
-            if( get_option<bool>( "ITEM_SYMBOLS" ) ) {
-                const nc_color color = entry.any_item()->color();
-                mvwputch( win, point( xx, yy ), color, entry.any_item()->symbol() );
-                xx += 2;
-            }
-            if( allows_selecting() && activatable() && multiselect ) {
+            if( show_marks ) {
+                std::string mark;
                 if( entry.chosen_count == 0 ) {
-                    mvwputch( win, point( xx, yy ), c_dark_gray, '-' );
+                    mark = rml_ui::colored_rml( "-", c_dark_gray );
                 } else if( entry.chosen_count >= entry.get_available_count() ) {
-                    mvwputch( win, point( xx, yy ), c_light_green, '+' );
+                    mark = rml_ui::colored_rml( "+", c_light_green );
                 } else {
-                    mvwputch( win, point( xx, yy ), c_light_green, '#' );
+                    mark = rml_ui::colored_rml( "#", c_light_green );
                 }
+                rml += mono_slot + mark + "</span>";
+            }
+            // The indent beyond the slots above, less the arrow's own place
+            const int extra_indent = static_cast<int>( get_entry_indent( entry ) ) - 2 -
+                                     ( show_symbols ? 2 : 0 ) - ( show_marks ? 2 : 0 );
+            if( extra_indent > 0 ) {
+                rml += "<span class=\"inv-indent\" style=\"width: " + rml_ui::chars_width( extra_indent ) +
+                       ";\"></span>";
+            }
+            std::string arrow = relation;
+            if( entry.chevron && relation.empty() ) {
+                bool const hide_override = hide_entries_override && entry.any_item()->is_container();
+                nc_color const col = entry.is_collation_header() ? c_light_blue : hide_override ?
+                                     *hide_entries_override ? c_red : c_green : c_dark_gray;
+                bool const stat = entry.is_collation_entry() ||
+                                  !hide_override ? entry.collapsed : *hide_entries_override;
+                arrow = rml_ui::colored_rml( stat ? "▶" : "▼", col );
+            }
+            rml += std::string( "<span class=\"inv-arrow\"" ) + ( entry.chevron ? " data-chevron=\"1\"" : "" ) +
+                   ">" + arrow + "</span>";
+        }
+
+        rml += "<span class=\"inv-name\">" + cell_rml( entry_cell_cache.text[0] ) + "</span>";
+
+        if( !denial.empty() ) {
+            rml += "<span class=\"inv-denial\">" + rml_ui::markup_to_rml( denial, c_red ) + "</span>";
+        } else if( !entry.is_category() || line == 0 ) {
+            // A category only titles the cells at the top of the page
+            for( size_t cell_index = 1; cell_index < cells.size(); ++cell_index ) {
+                if( !cells[cell_index].visible() ) {
+                    continue; // Don't show empty cells
+                }
+                rml += "<span class=\"inv-cell\" style=\"width: " +
+                       rml_ui::chars_width( static_cast<int>( cells[cell_index].current_width ) ) + ";\">" +
+                       cell_rml( entry_cell_cache.text[cell_index] ) + "</span>";
             }
         }
+        rml += "</div>";
     }
 
     if( pages_count() > 1 ) {
-        mvwprintw( win, p + point( 0, height - 1 ), _( "Page %d/%d" ), page_index() + 1, pages_count() );
+        rml += "<div class=\"grow\"></div><div class=\"line muted\">" + rml_ui::escape_rml( string_format(
+                    _( "Page %d/%d" ), page_index() + 1, pages_count() ) ) + "</div>";
     }
+    return rml;
+}
+
+inventory_entry *inventory_column::entry_at( size_t index )
+{
+    return index < entries.size() && entries[index].is_item() ? &entries[index] : nullptr;
 }
 
 size_t inventory_column::visible_cells() const
@@ -1996,10 +1975,7 @@ inventory_entry *inventory_selector::add_entry( inventory_column &target_column,
     entry.collapsed = locations.front()->is_collapsed();
     inventory_entry *const ret = target_column.add_entry( entry );
 
-    shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
-    if( current_ui ) {
-        current_ui->mark_resize();
-    }
+    invalidate_layout();
 
     return ret;
 }
@@ -2432,14 +2408,18 @@ inventory_entry *inventory_selector::find_entry_by_invlet( int invlet ) const
     return nullptr;
 }
 
-inventory_entry *inventory_selector::find_entry_by_coordinate( const point &coordinate ) const
+inventory_entry *inventory_selector::find_entry_under_mouse() const
 {
-    for( auto pair : rect_entry_map ) {
-        if( pair.first.contains( coordinate ) ) {
-            return pair.second;
-        }
+    shared_ptr_fast<inventory_ui_window> current_ui = ui.lock();
+    if( !current_ui ) {
+        return nullptr;
     }
-    return nullptr;
+    const int column = current_ui->hovered_index( "data-col" );
+    const int index = current_ui->hovered_index( "data-entry" );
+    if( column < 0 || index < 0 || static_cast<size_t>( column ) >= columns.size() ) {
+        return nullptr;
+    }
+    return columns[column]->entry_at( index );
 }
 
 inventory_entry *inventory_selector::find_entry_by_location( item_location &loc ) const
@@ -2543,6 +2523,19 @@ void inventory_selector::reassign_custom_invlets()
     }
 }
 
+int inventory_selector::page_lines() const
+{
+    const int header_lines = static_cast<int>( get_header_height() );
+    if( !rml_ui::active() ) {
+        // No window to fit, as in tests: the terminal's rows will do
+        return std::max( 2, TERMY - header_lines - 1 - 2 * border );
+    }
+    const float height_fraction = _fixed_size.y < 0 ? 0.98f :
+                                  std::min( 1.0f, static_cast<float>( _fixed_size.y ) / std::max( 1, TERMY ) );
+    // Everything but the rows: the title bar, the header, the footer and padding
+    return std::max( 2, rml_ui::lines_fitting( height_fraction, 120.f + 20.f * header_lines ) );
+}
+
 void inventory_selector::prepare_layout()
 {
     startup_timer const tp_prep =
@@ -2552,40 +2545,38 @@ void inventory_selector::prepare_layout()
         return cur_dim + 2 * max_win_snap_distance >= max_dim ? max_dim : cur_dim;
     };
 
+    // Widths are worked out in terminal columns, which the window's width is
+    // then given in; heights in rows of entries.
     const int nc_width = 2 * ( 1 + border );
-    const int nc_height = get_header_height() + 1 + 2 * border;
+    const int lines = page_lines();
 
-    prepare_layout( TERMX - nc_width, TERMY - nc_height );
+    prepare_layout( TERMX - nc_width, lines );
 
-    int const win_width =
-        _fixed_size.x < 0 ? snap( get_layout_width() + nc_width, TERMX ) : _fixed_size.x;
-    int const win_height =
-        _fixed_size.y < 0
-        ? snap( std::max<int>( get_layout_height() + nc_height, FULL_SCREEN_HEIGHT ), TERMY )
-        : _fixed_size.y;
+    laid_out_width = _fixed_size.x < 0 ?
+                     static_cast<int>( snap( get_layout_width() + nc_width, TERMX ) ) : _fixed_size.x;
 
-    prepare_layout( win_width - nc_width, win_height - nc_height );
+    prepare_layout( laid_out_width - nc_width, lines );
 
-    resize_window( win_width, win_height );
+    layout_valid = true;
+    laid_out_term = point( TERMX, TERMY );
+    laid_out_lines = lines;
 
     debug_print_timer( tp_prep, "prepare_layout took" );
 }
 
-shared_ptr_fast<ui_adaptor> inventory_selector::create_or_get_ui_adaptor()
+shared_ptr_fast<inventory_ui_window> inventory_selector::create_or_get_ui()
 {
-    shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
+    shared_ptr_fast<inventory_ui_window> current_ui = ui.lock();
     if( !current_ui ) {
-        ui = current_ui = make_shared_fast<ui_adaptor>();
-        current_ui->on_screen_resize( [this]( ui_adaptor & ) {
-            prepare_layout();
-        } );
-        current_ui->mark_resize();
-
-        current_ui->on_redraw( [this]( const ui_adaptor & ) {
-            refresh_window();
-        } );
+        ui = current_ui = make_shared_fast<inventory_ui_window>( *this );
+        layout_valid = false;
     }
     return current_ui;
+}
+
+void inventory_selector::invalidate_layout()
+{
+    layout_valid = false;
 }
 
 size_t inventory_selector::get_layout_width() const
@@ -2648,24 +2639,23 @@ size_t inventory_selector::get_footer_min_width() const
     return result;
 }
 
-void inventory_selector::draw_header( const catacurses::window &w ) const
+std::string inventory_selector::header_rml() const
 {
-    trim_and_print( w, point( border + 1, border ), getmaxx( w ) - 2 * ( border + 1 ), c_white, title );
-    fold_and_print( w, point( border + 1, border + 1 ), getmaxx( w ) - 2 * ( border + 1 ), c_dark_gray,
-                    hint );
-
-    int const bottom = border + get_header_height();
-    mvwhline( w, point( border, bottom ), BORDER_COLOR, LINE_OXOX, getmaxx( w ) - 2 * border );
-
-    if( display_stats ) {
-        size_t y = border;
-        for( const std::string &elem : get_stats() ) {
-            right_print( w, y++, border + 1, c_dark_gray, elem );
+    const std::vector<std::string> stats = display_stats ? get_stats() : std::vector<std::string>();
+    if( hint.empty() && stats.empty() ) {
+        return std::string();
+    }
+    std::string rml = "<div class=\"hbox\"><div id=\"inv-hint\" class=\"grow pre\">" +
+                      rml_ui::markup_to_rml( hint, c_dark_gray ) + "</div>";
+    if( !stats.empty() ) {
+        // The lines are padded to line up, so they need a fixed-width font
+        rml += "<div id=\"inv-stats\" class=\"fixed mono pre right\">";
+        for( size_t i = 0; i < stats.size(); ++i ) {
+            rml += ( i > 0 ? "<br/>" : "" ) + rml_ui::markup_to_rml( stats[i], c_dark_gray );
         }
+        rml += "</div>";
     }
-    if( uistate.numpad_navigation ) {
-        right_print( w, bottom, border + 1, c_dark_gray, _( "Numpad ON" ) );
-    }
+    return rml + "</div>";
 }
 
 inventory_selector::stat display_stat( const std::string &caption, int cur_value, int max_value,
@@ -3174,79 +3164,65 @@ inventory_selector::header_stats inventory_selector::convert_stats_to_header_sta
     return new_stats;
 }
 
-void inventory_selector::resize_window( int width, int height )
-{
-    point origin = _fixed_origin;
-    if( origin.x < 0 || origin.y < 0 ) {
-        origin = { ( TERMX - width ) / 2, ( TERMY - height ) / 2 };
-    }
-    w_inv = catacurses::newwin( height, width, origin );
-    if( spopup ) {
-        spopup->window( w_inv, point( 4, getmaxy( w_inv ) - 1 ), ( getmaxx( w_inv ) / 2 ) - 4 );
-    }
-    shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
-    if( current_ui ) {
-        current_ui->position_from_window( w_inv );
-    }
-}
-
 void inventory_selector::refresh_window()
 {
-    cata_assert( w_inv );
+    shared_ptr_fast<inventory_ui_window> current_ui = ui.lock();
+    if( !current_ui ) {
+        return;
+    }
+    if( !layout_valid || laid_out_term != point( TERMX, TERMY ) || laid_out_lines != page_lines() ) {
+        prepare_layout();
+    }
 
     if( get_option<std::string>( "INVENTORY_HIGHLIGHT" ) != "disable" ) {
         highlight();
     }
 
-    werase( w_inv );
-
-    draw_frame( w_inv );
-    draw_header( w_inv );
-    draw_columns( w_inv );
-    draw_footer( w_inv );
-
-    wnoutrefresh( w_inv );
+    current_ui->set_title( title );
+    current_ui->set_size( rml_ui::term_width( laid_out_width ),
+                          _fixed_size.y < 0 ? std::string() : rml_ui::term_height( _fixed_size.y ) );
+    if( _fixed_origin.x < 0 || _fixed_origin.y < 0 ) {
+        current_ui->set_position( std::string(), std::string() );
+    } else {
+        current_ui->set_position( rml_ui::term_width( _fixed_origin.x ),
+                                  rml_ui::term_height( _fixed_origin.y ) );
+    }
+    current_ui->set_header( header_rml() );
+    current_ui->set_body( columns_rml() );
+    current_ui->set_footer( footer_rml() );
 }
 
 std::pair< bool, std::string > inventory_selector::query_string( const std::string &val,
-        bool end_with_toggle )
+        const std::string &prompt, bool end_with_toggle )
 {
-    spopup = std::make_unique<string_input_popup>();
-    spopup->max_length( 256 )
+    string_input_popup spopup;
+    spopup.title( prompt )
+    .max_length( 256 )
     .text( val );
-    spopup->identifier( "item_filter" ).hist_use_uilist( false );
+    spopup.identifier( "item_filter" ).hist_use_uilist( false );
     if( end_with_toggle ) {
         for( input_event const &iev : inp_mngr.get_input_for_action( "TOGGLE_ENTRY", "INVENTORY" ) ) {
-            spopup->add_callback( iev.get_first_input(), [this]() {
-                spopup->confirm();
+            spopup.add_callback( iev.get_first_input(), [&spopup]() {
+                spopup.confirm();
                 return true;
             } );
         }
-    };
-
-    shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
-    if( current_ui ) {
-        current_ui->mark_resize();
     }
 
-    do {
-        ui_manager::redraw();
-        spopup->query_string( /*loop=*/false );
-    } while( !spopup->confirmed() && !spopup->canceled() );
+    spopup.query_string();
 
     std::string rval;
-    bool confirmed = spopup->confirmed();
+    bool confirmed = spopup.confirmed();
     if( confirmed ) {
-        rval = spopup->text();
+        rval = spopup.text();
     }
 
-    spopup.reset();
     return std::make_pair( confirmed, rval );
 }
 
 void inventory_selector::query_set_filter()
 {
-    std::pair< bool, std::string > query = query_string( filter );
+    std::pair< bool, std::string > query = query_string( filter, _( "Filter:" ) );
     if( query.first ) {
         set_filter( query.second );
     }
@@ -3255,7 +3231,7 @@ void inventory_selector::query_set_filter()
 int inventory_selector::query_count( char init, bool end_with_toggle )
 {
     std::string sinit = init != 0 ? std::string( 1, init ) : std::string();
-    std::pair< bool, std::string > query = query_string( sinit, end_with_toggle );
+    std::pair< bool, std::string > query = query_string( sinit, _( "Count:" ), end_with_toggle );
     int ret = -1;
     if( query.first ) {
         try {
@@ -3285,53 +3261,28 @@ std::string inventory_selector::get_filter() const
     return filter;
 }
 
-void inventory_selector::draw_columns( const catacurses::window &w )
+std::string inventory_selector::columns_rml()
 {
-    const auto columns = get_visible_columns();
-
-    const int screen_width = getmaxx( w ) - 2 * ( border + 1 );
-    const bool centered = are_columns_centered( screen_width );
-
-    const int free_space = screen_width - get_columns_width( columns );
-    const int max_gap = ( columns.size() > 1 ) ? free_space / ( static_cast<int>
-                        ( columns.size() ) - 1 ) :
-                        free_space;
-    const int gap = centered ? max_gap : std::min<int>( max_gap, normal_column_gap );
-    const int gap_rounding_error = centered && columns.size() > 1
-                                   ? free_space % ( columns.size() - 1 ) : 0;
-
-    size_t x = border + 1;
-    size_t y = get_header_height() + border + 1;
-    size_t active_x = 0;
-
-    rect_entry_map.clear();
-    for( inventory_column * const &elem : columns ) {
-        if( &elem == &columns.back() ) {
-            x += gap_rounding_error;
-        }
-        if( !is_active_column( *elem ) ) {
-            elem->draw( w, point( x, y ), rect_entry_map );
-        } else {
-            active_x = x;
-        }
-        x += elem->get_width() + gap;
-    }
-
-    get_active_column().draw( w, point( active_x, y ), rect_entry_map );
     if( empty() ) {
-        center_print( w, getmaxy( w ) / 2, c_dark_gray, _( "Your inventory is empty." ) );
+        return "<div id=\"inv-empty\" class=\"muted\">" +
+               rml_ui::escape_rml( _( "Your inventory is empty." ) ) + "</div>";
     }
-}
-
-void inventory_selector::draw_frame( const catacurses::window &w ) const
-{
-    draw_border( w );
-
-    const int y = border + get_header_height();
-    wattron( w, BORDER_COLOR );
-    mvwhline( w, point( 0, y ), LINE_XXXO, 1 );
-    mvwhline( w, point( getmaxx( w ) - border, y ), LINE_XOXX, 1 );
-    wattroff( w, BORDER_COLOR );
+    // Each column's share of the width follows the terminal columns its
+    // cells need, keeping the proportions the layout worked out
+    std::string rml = string_format( "<div id=\"inv-columns\" style=\"height: %ddp;\">",
+                                     static_cast<int>( get_layout_height() * rml_ui::line_dp ) );
+    for( size_t index = 0; index < columns.size(); ++index ) {
+        inventory_column &column = *columns[index];
+        if( !column.visible() ) {
+            continue;
+        }
+        rml += string_format( "<div class=\"inv-col%s\" style=\"flex: %d 1 0;\">",
+                              is_active_column( column ) ? " active" : "",
+                              std::max( 1, static_cast<int>( column.get_width() ) ) );
+        rml += column.draw_rml( index );
+        rml += "</div>";
+    }
+    return rml + "</div>";
 }
 
 std::pair<std::string, nc_color> inventory_selector::get_footer( navigation_mode m ) const
@@ -3343,45 +3294,30 @@ std::pair<std::string, nc_color> inventory_selector::get_footer( navigation_mode
     return std::make_pair( _( "There are no available choices" ), i_red );
 }
 
-void inventory_selector::draw_footer( const catacurses::window &w ) const
+std::string inventory_selector::footer_rml() const
 {
-    if( spopup ) {
-        mvwprintz( w_inv, point( 2, getmaxy( w_inv ) - 1 ), c_cyan, "< " );
-        mvwprintz( w_inv, point( ( getmaxx( w_inv ) / 2 ) - 4, getmaxy( w_inv ) - 1 ), c_cyan, " >" );
-
-        spopup->query_string( /*loop=*/false, /*draw_only=*/true );
-    } else {
-        int filter_offset = 0;
-        if( has_available_choices() || !filter.empty() ) {
-            std::string text = string_format( filter.empty() ? _( "[%s] Filter" ) : _( "[%s] Filter: " ),
-                                              ctxt.get_desc( "INVENTORY_FILTER" ) );
-            filter_offset = utf8_width( text + filter ) + 6;
-
-            mvwprintz( w, point( 2, getmaxy( w ) - border ), c_light_gray, "< " );
-            wprintz( w, c_light_gray, text );
-            wprintz( w, c_white, filter );
-            wprintz( w, c_light_gray, " >" );
-        }
-
-        right_print( w, getmaxy( w ) - border, border + 1, c_light_gray,
-                     string_format( "< [%s] %s >", ctxt.get_desc( "VIEW_CATEGORY_MODE" ),
-                                    _( io::enum_to_string( _uimode ) ) ) );
-        const auto footer = get_footer( mode );
-        if( !footer.first.empty() ) {
-            const int string_width = utf8_width( footer.first );
-            const int x1 = filter_offset + std::max( getmaxx( w ) - string_width - filter_offset, 0 ) / 2;
-            const int x2 = x1 + string_width - 1;
-            const int y = getmaxy( w ) - border;
-
-            mvwprintz( w, point( x1, y ), footer.second, footer.first );
-            wattron( w, c_light_gray );
-            mvwaddch( w, point( x1 - 1, y ), ' ' );
-            mvwaddch( w, point( x2 + 1, y ), ' ' );
-            mvwaddch( w, point( x1 - 2, y ), LINE_XOXX );
-            mvwaddch( w, point( x2 + 2, y ), LINE_XXXO );
-            wattroff( w, c_light_gray );
-        }
+    std::string filter_rml;
+    if( has_available_choices() || !filter.empty() ) {
+        const std::string text = string_format( filter.empty() ? _( "[%s] Filter" ) : _( "[%s] Filter: " ),
+                                                ctxt.get_desc( "INVENTORY_FILTER" ) );
+        filter_rml = rml_ui::button_rml( "INVENTORY_FILTER",
+                                         rml_ui::colored_rml( text, c_light_gray ) + rml_ui::colored_rml( filter, c_white ) );
     }
+    std::string mode_rml;
+    const std::pair<std::string, nc_color> footer = get_footer( mode );
+    if( !footer.first.empty() ) {
+        mode_rml = rml_ui::colored_rml( footer.first, footer.second );
+    }
+    std::string view_rml;
+    if( uistate.numpad_navigation ) {
+        view_rml += "<span class=\"muted\">" + rml_ui::escape_rml( _( "Numpad ON" ) ) + "</span> ";
+    }
+    view_rml += rml_ui::button_rml( "VIEW_CATEGORY_MODE", rml_ui::colored_rml(
+                                        string_format( "[%s] %s", ctxt.get_desc( "VIEW_CATEGORY_MODE" ),
+                                                _( io::enum_to_string( _uimode ) ) ), c_light_gray ) );
+    return "<div id=\"inv-footer\"><div class=\"inv-footer-side\">" + filter_rml +
+           "</div><div class=\"grow center\">" + mode_rml +
+           "</div><div class=\"inv-footer-side right\">" + view_rml + "</div></div>";
 }
 
 inventory_selector::inventory_selector( Character &u, const inventory_selector_preset &preset )
@@ -3502,26 +3438,27 @@ inventory_input inventory_selector::process_input( const std::string &action, in
 {
     inventory_input res{ action, ch, nullptr };
 
-    if( res.action == "SELECT" || res.action == "COORDINATE" || res.action == "MOUSE_MOVE" ||
-        res.action == "CLICK_AND_DRAG" ) {
-        std::optional<point> o_p = ctxt.get_coordinates_text( w_inv );
-        if( o_p ) {
-            point p = o_p.value();
-            if( window_contains_point_relative( w_inv, p ) ) {
-                res.entry = find_entry_by_coordinate( p );
-                if( res.entry != nullptr && res.entry->is_selectable() ) {
-                    return res;
-                }
-                if( res.entry == nullptr && res.action == "SELECT" ) {
-                    p.x++;
-                    res.entry = find_entry_by_coordinate( p );
-                    // if the user has clicked the coordinate just to the left of a pocket, they are clicking the pocket's expander icon
-                    if( res.entry != nullptr && res.entry->is_selectable() && res.entry->chevron ) {
-                        res.action = "SHOW_HIDE_CONTENTS";
-                        return res;
-                    }
-                }
+    shared_ptr_fast<inventory_ui_window> current_ui = ui.lock();
+    if( current_ui && res.action == "SELECT" ) {
+        // The filter, the view mode and the close button are buttons
+        const std::string clicked = current_ui->resolve_click( res.action );
+        if( clicked != res.action ) {
+            res.action = clicked;
+            return res;
+        }
+    }
+    if( current_ui && ( res.action == "SELECT" || res.action == "COORDINATE" ||
+                        res.action == "MOUSE_MOVE" || res.action == "CLICK_AND_DRAG" ) ) {
+        res.entry = find_entry_under_mouse();
+        if( res.entry != nullptr && res.entry->is_selectable() ) {
+            // A click on a pocket's arrow shows or hides what is in it
+            if( res.action == "SELECT" && res.entry->chevron &&
+                current_ui->hovered_index( "data-chevron" ) >= 0 ) {
+                highlight( res.entry->any_item() );
+                res.action = "SHOW_HIDE_CONTENTS";
+                res.entry = nullptr;
             }
+            return res;
         }
     }
 
@@ -3617,10 +3554,10 @@ void inventory_selector::on_input( const inventory_input &input )
         }
     } else if( input.action == "INVENTORY_FILTER" ) {
         query_set_filter();
-        ui.lock()->mark_resize();
+        invalidate_layout();
     } else if( input.action == "RESET_FILTER" ) {
         set_filter( "" );
-        ui.lock()->mark_resize();
+        invalidate_layout();
     } else if( input.action == "TOGGLE_SKIP_UNSELECTABLE" ) {
         toggle_skip_unselectable();
     } else {
@@ -3630,10 +3567,7 @@ void inventory_selector::on_input( const inventory_input &input )
         refresh_active_column(); // Columns can react to actions by losing their activation capacity
         if( input.action == "TOGGLE_FAVORITE" ) {
             // Favoriting items changes item name length which may require resizing
-            shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
-            if( current_ui ) {
-                current_ui->mark_resize();
-            }
+            invalidate_layout();
         }
         if( input.action == "SHOW_HIDE_CONTENTS_ALL" ) {
             for( inventory_column *col : columns ) {
@@ -3641,13 +3575,12 @@ void inventory_selector::on_input( const inventory_input &input )
             }
         }
         if( input.action == "SHOW_HIDE_CONTENTS" || input.action == "SHOW_HIDE_CONTENTS_ALL" ) {
-            shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
             for( inventory_column * const &col : columns ) {
                 col->invalidate_paging();
             }
-            if( current_ui ) {
+            if( ui.lock() ) {
                 std::vector<item_location> inv = get_highlighted().locations;
-                current_ui->mark_resize();
+                invalidate_layout();
                 highlight_one_of( inv );
             }
         }
@@ -3809,13 +3742,6 @@ void inventory_selector::toggle_categorize_contained()
     // and subclasses w/ selection columns can then re-populate entries
     // using the new invlets
     prepare_layout();
-
-    // invalidate, but dont mark resize, to avoid re-calling prepare_layout()
-    // and as a consequence reassign_custom_invlets()
-    shared_ptr_fast<ui_adaptor> current_ui = ui.lock();
-    if( current_ui ) {
-        current_ui->invalidate_ui();
-    }
 }
 
 void inventory_selector::toggle_active_column( scroll_direction dir )
@@ -3876,7 +3802,7 @@ std::string inventory_selector::action_bound_to_key( char key ) const
 
 item_location inventory_pick_selector::execute()
 {
-    shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
+    shared_ptr_fast<inventory_ui_window> ui = create_or_get_ui();
     debug_print_timer( tp_start );
     item_location startDragItem;
     bool dragActive = false;
@@ -4215,7 +4141,7 @@ void ammo_inventory_selector::mod_chosen_count( inventory_entry &entry, int valu
 
 drop_location ammo_inventory_selector::execute()
 {
-    shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
+    shared_ptr_fast<inventory_ui_window> ui = create_or_get_ui();
     debug_print_timer( tp_start );
     while( true ) {
         ui_manager::redraw();
@@ -4437,9 +4363,7 @@ void inventory_multiselector::toggle_entries( int &count, const toggle_mode mode
         if( !denial.empty() ) {
             const std::string assembled = highlighted_entry.any_item().get_item()->display_name() + ":\n"
                                           + colorize( denial, c_red );
-            if( static_cast<size_t>( utf8_width( denial ) ) > highlighted_entry.cached_denial_space ) {
-                popup( assembled, PF_GET_KEY );
-            }
+            popup( assembled, PF_GET_KEY );
         }
         count = 0;
         return;
@@ -4512,7 +4436,7 @@ void inventory_multiselector::toggle_entries( int &count, const toggle_mode mode
 
 drop_locations inventory_multiselector::execute( bool allow_empty )
 {
-    shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
+    shared_ptr_fast<inventory_ui_window> ui = create_or_get_ui();
     debug_print_timer( tp_start );
     while( true ) {
         ui_manager::redraw();
@@ -4547,7 +4471,7 @@ inventory_compare_selector::inventory_compare_selector( Character &p ) :
 
 std::pair<const item *, const item *> inventory_compare_selector::execute()
 {
-    shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
+    shared_ptr_fast<inventory_ui_window> ui = create_or_get_ui();
     debug_print_timer( tp_start );
     while( true ) {
         ui_manager::redraw();
@@ -4805,7 +4729,7 @@ std::string haul_selector_preset::get_denial( const item_location &item ) const
 
 drop_locations inventory_drop_selector::execute()
 {
-    shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
+    shared_ptr_fast<inventory_ui_window> ui = create_or_get_ui();
     debug_print_timer( tp_start );
     while( true ) {
         ui_manager::redraw();
@@ -4976,7 +4900,7 @@ void pickup_selector::apply_selection( std::vector<drop_location> selection )
 
 drop_locations pickup_selector::execute()
 {
-    shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
+    shared_ptr_fast<inventory_ui_window> ui = create_or_get_ui();
     debug_print_timer( tp_start );
 
     while( true ) {
@@ -5148,18 +5072,35 @@ int inventory_examiner::cleanup() const
     }
 }
 
-void inventory_examiner::draw_item_details( const item_location &sitem )
+std::string inventory_examiner::item_details_rml( const item_location &sitem ) const
 {
     std::vector<iteminfo> vThisItem;
     std::vector<iteminfo> vDummy;
 
     sitem->info( true, vThisItem );
 
-    item_info_data data( sitem->tname(), sitem->type_name(), vThisItem, vDummy, examine_window_scroll );
-    data.without_getch = true;
-
-    draw_item_info( w_examine, data );
+    // data-pane marks the pane, to tell whether the mouse wheel is over it
+    return "<div class=\"pre\" data-pane=\"1\">" + item_info_rml( vThisItem, vDummy ) + "</div>";
 }
+
+namespace
+{
+/** The pane beside an inventory_examiner's list. */
+class examine_pane : public rml_ui::window
+{
+    public:
+        explicit examine_pane( const std::function<void( examine_pane & )> &update ) :
+            rml_ui::window( std::string() ), update( update ) {}
+
+    protected:
+        void on_redraw() override {
+            update( *this );
+        }
+
+    private:
+        std::function<void( examine_pane & )> update;
+};
+} // namespace
 
 void inventory_examiner::force_max_window_size()
 {
@@ -5173,41 +5114,27 @@ int inventory_examiner::execute()
     if( !check_parent_item() ) {
         return NO_CONTENTS_TO_EXAMINE;
     }
-    shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
+    shared_ptr_fast<inventory_ui_window> ui = create_or_get_ui();
     debug_print_timer( tp_start );
 
-    ui_adaptor ui_examine;
-
-    ui_examine.on_screen_resize( [&]( ui_adaptor & ui_examine ) {
-        force_max_window_size();
-        ui->mark_resize();
-
-        int const width = TERMX - _fixed_size.x;
-        int const height = TERMY;
-        point const start_position = point( TERMX - width, 0 );
-
-        scroll_item_info_lines = TERMY / 2;
-
-        w_examine = catacurses::newwin( height, width, start_position );
-        ui_examine.position_from_window( w_examine );
-    } );
-    ui_examine.mark_resize();
-
-    ui_examine.on_redraw( [&]( const ui_adaptor & ) {
+    // Opened after the list's window, so it is redrawn after the list has
+    // settled which item is highlighted
+    examine_pane pane( [this]( examine_pane & win ) {
+        win.set_position( rml_ui::term_width( _fixed_size.x ), "0" );
+        win.set_size( rml_ui::term_width( TERMX - _fixed_size.x ), "100%" );
         const inventory_entry &selected = get_active_column().get_highlighted();
-        if( selected ) {
-            if( selected_item != selected.any_item() ) {
-                //A new item has been selected, reset scrolling
-                examine_window_scroll = 0;
-                selected_item = selected.any_item();
-            }
-            draw_item_details( selected_item );
+        if( selected && selected_item != selected.any_item() ) {
+            //A new item has been selected, reset scrolling
+            selected_item = selected.any_item();
+            win.set_title( selected_item->tname() );
+            win.set_body( item_details_rml( selected_item ) );
+            win.scroll_body( rml_ui::scroll::top );
         }
     } );
 
     while( true ) {
-        /* Since ui_examine is the most recently created ui_adaptor, it will always be redrawn.
-         The item list will only be redrawn when specifically invalidated */
+        // The list's window takes its size from the screen's
+        force_max_window_size();
         ui_manager::redraw();
 
         const inventory_input input = get_input();
@@ -5223,12 +5150,17 @@ int inventory_examiner::execute()
 
         if( input.action == "QUIT" || input.action == "CONFIRM" ) {
             return cleanup();
-        } else if( input.action == "PAGE_UP" || input.action == "SCROLL_UP" ) {
-            examine_window_scroll -= scroll_item_info_lines;
-        } else if( input.action == "PAGE_DOWN" || input.action == "SCROLL_DOWN" ) {
-            examine_window_scroll += scroll_item_info_lines;
+        } else if( input.action == "PAGE_UP" ) {
+            pane.scroll_body( rml_ui::scroll::page_up );
+        } else if( input.action == "PAGE_DOWN" ) {
+            pane.scroll_body( rml_ui::scroll::page_down );
+        } else if( input.action == "SCROLL_UP" || input.action == "SCROLL_DOWN" ) {
+            // Over the pane, the wheel scrolls it by itself
+            if( pane.hovered_index( "data-pane" ) < 0 ) {
+                pane.scroll_body( input.action == "SCROLL_UP" ? rml_ui::scroll::line_up :
+                                  rml_ui::scroll::line_down );
+            }
         } else {
-            ui->invalidate_ui(); //The player is probably doing something that requires updating the base window
             if( input.action == "SHOW_HIDE_CONTENTS" ) {
                 changes_made = true;
             }
@@ -5263,7 +5195,7 @@ std::string unload_selector::hint_string()
 
 std::pair<item_location, bool> unload_selector::execute()
 {
-    shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
+    shared_ptr_fast<inventory_ui_window> ui = create_or_get_ui();
     item_location startDragItem;
     bool dragActive = false;
     while( true ) {
@@ -5342,7 +5274,7 @@ trade_selector::trade_selector( trade_ui *parent, Character &u,
     ctxt.register_action( ACTION_AUTOBALANCE );
     ctxt.register_action( ACTION_BANKBALANCE );
     resize( size, origin );
-    _ui = create_or_get_ui_adaptor();
+    _ui = create_or_get_ui();
 }
 
 trade_selector::select_t trade_selector::to_trade() const
@@ -5358,7 +5290,6 @@ void trade_selector::execute()
     get_active_column().on_activate();
 
     while( !exit ) {
-        _ui->invalidate_ui();
         ui_manager::redraw_invalidated();
         std::string const &action = _ctxt_trade.handle_input();
         if( action == ACTION_SWITCH_PANES ) {
@@ -5379,6 +5310,12 @@ void trade_selector::execute()
             input_event const iev = _ctxt_trade.get_raw_input();
             inventory_input const input =
                 process_input( ctxt.input_to_action( iev ), iev.get_first_input() );
+            if( input.action == ACTION_TRADE_CANCEL ) {
+                // The window's close button
+                _parent->pushevent( trade_ui::event::TRADECANCEL );
+                exit = true;
+                continue;
+            }
             inventory_drop_selector::on_input( input );
             if( input.action == "HELP_KEYBINDINGS" ) {
                 ctxt.display_menu();
@@ -5396,14 +5333,7 @@ void trade_selector::resize( point const &size, point const &origin )
 {
     _fixed_size = size;
     _fixed_origin = origin;
-    if( _ui ) {
-        _ui->mark_resize();
-    }
-}
-
-shared_ptr_fast<ui_adaptor> trade_selector::get_ui() const
-{
-    return _ui;
+    invalidate_layout();
 }
 
 input_context const *trade_selector::get_ctxt() const

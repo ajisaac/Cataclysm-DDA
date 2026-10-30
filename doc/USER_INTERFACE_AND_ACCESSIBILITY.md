@@ -1,11 +1,10 @@
 # User Interface / Accessibility
 
-Cataclysm: Dark Days Ahead uses ncurses, or in the case of the tiles build, an
-ncurses port, for user interface. Window management is achieved by `ui_adaptor`,
-which requires a resizing callback and a redrawing callback for each UI to handle
-resizing and redrawing. A migration effort is underway for user interface code
-to be moved to ImGui, which uses SDL on the tiled build, and ncurses on non-tiled
-Linux builds.
+Cataclysm: Dark Days Ahead draws its user interface with RmlUi over SDL, alongside
+an ncurses-like cell grid that older screens and the map still use. Window
+management is achieved by `ui_adaptor`, which requires a resizing callback and a
+redrawing callback for each UI to handle resizing and redrawing. A migration
+effort is underway for the remaining cell-grid screens to move to RmlUi.
 
 Some good examples of the usage of `ui_adaptor` can be found within the following
 files:
@@ -16,21 +15,25 @@ files:
 
 Details on how to use `ui_adaptor` can be found within `ui_manager.h`.
 
-New user interfaces should be coded using ImGui. ImGui-backed windows are created
-using `cataimgui::window` as a base, see `cata_imgui.h/cpp`. `cataimgui::window`
-still uses `ui_adaptor` but it is handled internally. `cataimgui::window` handles
-creating the ImGui window itself, but any widgets (i.e. text boxes, tables, input
-fields) must be created using the correct function under the `ImGui` namespace.
-Examples of creating any ImGui widget can be found in `src/third-party/imgui_demo.cpp`
+New user interfaces should be coded using RmlUi, an HTML/CSS-like UI library. A
+window is an `rml_ui::document` (see `rml_ui.h`), which loads an `.rml` document
+from `data/raw/rmlui/` and takes part in the `ui_manager` stack through a
+`ui_adaptor` it handles internally. Its `on_redraw()` brings the document up to
+date with game state; input still comes from an `input_context`, and clicks are
+read from what the mouse is over (see `rml_ui::window::resolve_click()`).
 
-Good examples of implementing an ImGui-based UI in Cataclysm:
+Most screens derive from `rml_ui::window` (see `rml_window.h`), a framed window
+with a title, tabs, a scrolling body and a footer, and build their content as
+RML from the classes in `data/raw/rmlui/window.rcss`. `rml_ui::markup_to_rml()`
+converts game text with color tags. A screen drawn immediate-mode style can use
+`rml_ui::im` instead (see `rml_im.h`), as the debug console does.
 
-- `demo_ui` a minimal example (about 80 lines) in `main_menu.cpp` added in
-[PR#72171](https://github.com/CleverRaven/Cataclysm-DDA/pull/72171)
-- `query_popup` and `static_popup` in `popup.h/cpp`, specifically `query_popup_impl`
- which is a private implementation class used by the aforementioned classes.
-- `keybindings_ui` in `input.cpp`, which is a private implementation class used
- by `input_context::display_menu()`.
+Good examples of implementing an RmlUi-based UI in Cataclysm:
+
+- `query_popup` and `static_popup` in `popup.h/cpp`.
+- `keybindings_ui` in `input_context.cpp`, which is a private implementation
+ class used by `input_context::display_menu()`.
+- `mission_ui_impl` in `mission_ui.cpp`, a window with tabs, a list and details.
 
 ## SDL version requirement of the tiles build
 
@@ -95,7 +98,7 @@ cursor position. You can call `ui_adaptor::set_cursor` and similar methods at an
 position in a redrawing callback, and the last cursor position of the topmost UI
 set via the call will be used as the final cursor position. You can also call
 `ui_adaptor::disable_cursor` to prevent a UI's cursor from being used as the final
-cursor position. ImGui-backed screens handle recording of the cursor automatically.
+cursor position. RmlUi-backed screens disable the cursor automatically.
 
 For debugging purposes, you can set the `DEBUG_CURSES_CURSOR` compile flag to
 always show the cursor in the terminal (currently only works with the curses

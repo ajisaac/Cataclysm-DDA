@@ -24,7 +24,7 @@ namespace rml_ui
  *   the catacurses color stack. A stray `</color>` is dropped, and any left
  *   open are closed at the end.
  * - The shorthand tags replace_colors() knows -- `<good>`, `<bad>`, `<info>`
- *   and the rest -- are expanded first, as cataimgui::draw_colored_text does.
+ *   and the rest -- are expanded first.
  * - Anything else that looks like a tag is printed literally, as catacurses
  *   prints it. That includes hotkey markup such as "<M|m>OTD", which callers
  *   must resolve themselves (see shortcut_text()).

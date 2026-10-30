@@ -16,7 +16,6 @@
 #include "filesystem.h"
 #include "flexbuffer_json-inl.h"
 #include "flexbuffer_json.h"
-#include "imgui/imgui.h"
 #include "input_context.h"
 #include "json.h"
 #include "output.h"
@@ -28,12 +27,6 @@
 #include "ui_helpers.h"
 #include "ui_manager.h"
 #include "uilist.h"
-#include "cata_imgui.h"
-
-nc_color::operator ImVec4() const
-{
-    return cataimgui::imvec4_from_color( *this );
-}
 
 void nc_color::serialize( JsonOut &jsout ) const
 {

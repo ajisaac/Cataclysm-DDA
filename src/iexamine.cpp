@@ -5085,7 +5085,7 @@ void iexamine::sign( Character &you, const tripoint_bub_ms &examp )
                                         _( "Add a message to the sign?" );
             std::string ignore_message = _( "You leave the sign alone." );
             if( query_yn( query_message ) ) {
-                string_input_popup_imgui write_popup( 50 );
+                text_input_popup write_popup( 50 );
                 write_popup.set_label( _( "Write what?" ) );
                 write_popup.set_identifier( "signage" );
                 std::string signage = write_popup.query();

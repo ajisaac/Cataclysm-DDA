@@ -13,7 +13,6 @@ lightmap
 color
 tests/generic_factory_test.cpp
 # (mildly) scary conditional compilation in these
-src/cata_imgui.cpp
 src/catacharset.cpp
 src/debug.cpp
 src/editmap.cpp

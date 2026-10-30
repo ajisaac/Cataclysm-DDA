@@ -13,10 +13,9 @@
 
 class Character;
 class advanced_inv_listitem;
+class advanced_inv_window;
 class drop_or_stash_item_info;
 class input_context;
-class string_input_popup;
-class ui_adaptor;
 struct advanced_inv_save_state;
 
 void create_advanced_inv();
@@ -72,32 +71,26 @@ class advanced_inventory
             return panes[side];
         }
     private:
+        friend class advanced_inv_window;
 
         static constexpr int head_height = 5;
         bool move_all_items_and_waiting_to_quit = false;
 
-        std::unique_ptr<ui_adaptor> ui;
-        std::unique_ptr<string_input_popup> spopup;
+        std::unique_ptr<advanced_inv_window> ui;
 
-        // swap the panes and windows via std::swap()
+        // swap the panes via std::swap()
         void swap_panes();
 
         // minimap that displays things around character
-        catacurses::window minimap;
-        catacurses::window mm_border;
-        const int minimap_width  = 3;
-        const int minimap_height = 3;
-        void draw_minimap();
-        void refresh_minimap();
+        std::string minimap_rml();
         char get_minimap_sym( side p ) const;
 
         bool inCategoryMode = false;
 
+        // Rows of items per page, and the window's width and left edge in
+        // terminal columns, which item menus opened from here line up with
         int linesPerPage = 0;
-        int w_height = 0;
         int w_width = 0;
-
-        int headstart = 0;
         int colstart = 0;
 
         bool recalc = false;
@@ -122,8 +115,6 @@ class advanced_inventory
         std::array<advanced_inventory_pane, NUM_PANES> panes;
         static const advanced_inventory_pane null_pane;
         std::array<advanced_inv_area, NUM_AIM_LOCATIONS> squares;
-
-        catacurses::window head;
 
         bool exit = false;
 
@@ -166,10 +157,15 @@ class advanced_inventory
         bool is_processing() const;
 
         static std::string get_sortname( advanced_inv_sortby sortby );
-        void print_items( side p, bool active );
+        std::string items_rml( side p, bool active );
 
-        void redraw_pane( side p );
-        void redraw_sidebar();
+        /** Size the window to the screen, and fill it. Called on every redraw. */
+        void redraw();
+        void update_layout();
+        std::string pane_rml( side p );
+        std::string header_rml();
+        /** What a click does: picks the pane and item under it, or gives a button's action. */
+        std::string handle_click( const std::string &action );
 
         bool move_all_items();
         /**
@@ -180,9 +176,9 @@ class advanced_inventory
                                          std::vector<drop_or_stash_item_info> &item_list,
                                          std::vector<drop_or_stash_item_info> &fav_list, bool forbid_buckets );
 
-        // Returns the x coordinate where the header started. The header is
-        // displayed right of it, everything left of it is still free.
-        int print_header( advanced_inventory_pane &pane, aim_location sel );
+        // The keys for the locations, laid out like the squares around you,
+        // each a button for its location.
+        std::string location_keys_rml( advanced_inventory_pane &pane, aim_location sel );
 
         /**
          * Translate an action ident from the input context to an aim_location.

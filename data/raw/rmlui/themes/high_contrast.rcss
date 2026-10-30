@@ -1,0 +1,33 @@
+/*
+ * Opaque black panels with bright borders and selections, for readability.
+ * See default.rcss for how themes work.
+ */
+
+#window, #menu, #popup, #panel, #text-panel, #sub, .panel
+{
+    background-color: #000000;
+    border-color: #ffffff;
+}
+body
+{
+    color: #ffffff;
+}
+.item.selected, tr.item.selected td, #list .entry.selected, #sub .option.selected,
+#menu .item.selected, #buttons .button.selected, .tab.active, .button.on
+{
+    background-color: #1f5fbf;
+    color: #ffffff;
+}
+.item:hover, tr.item:hover td, #list .entry:hover, .tab:hover, .button:hover
+{
+    background-color: #303030;
+}
+.button
+{
+    background-color: #101010;
+    border-color: #ffffff;
+}
+.sep
+{
+    border-top-color: #ffffff;
+}

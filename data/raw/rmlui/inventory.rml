@@ -1,0 +1,152 @@
+<rml>
+<head>
+    <title>Inventory</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* The inventory menus; see inventory_selector in src/inventory_ui.cpp.
+           Each page of entries is built whole, so the body only scrolls when
+           the window is too short for it. */
+        #body
+        {
+            border-top: 1dp #39465c;
+            padding-top: 4dp;
+        }
+        #inv-hint
+        {
+            min-width: 0;
+        }
+        #inv-stats
+        {
+            margin-left: 16dp;
+        }
+        #inv-columns
+        {
+            display: flex;
+            flex-direction: row;
+        }
+        #inv-empty
+        {
+            padding: 40dp 0;
+            text-align: center;
+        }
+        .inv-col
+        {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .inv-col + .inv-col
+        {
+            margin-left: 24dp;
+            padding-left: 12dp;
+            border-left: 1dp #39465c;
+        }
+
+        /* One entry: its letter, symbol and selection mark in slots of their
+           own, the name, then the other cells right-aligned in widths that
+           line up down the column. */
+        .inv-row
+        {
+            display: flex;
+            align-items: center;
+            padding: 0 4dp;
+            border-radius: 3dp;
+        }
+        .inv-row:hover
+        {
+            background-color: #232b3a;
+        }
+        .inv-row.selected
+        {
+            background-color: #2b3a52;
+        }
+        .inv-row.inv-parent
+        {
+            background-color: #33405a;
+        }
+        .inv-row.inv-child
+        {
+            background-color: #26303f;
+        }
+        .inv-row.inv-cat:hover
+        {
+            background-color: transparent;
+        }
+        .inv-slot
+        {
+            flex: 0 0 auto;
+            width: 1.4em;
+            font-family: cata-mono;
+        }
+        .inv-indent
+        {
+            flex: 0 0 auto;
+        }
+        .inv-arrow
+        {
+            flex: 0 0 auto;
+            width: 1em;
+            text-align: center;
+        }
+        .inv-arrow[data-chevron]:hover
+        {
+            background-color: #39465c;
+            border-radius: 2dp;
+        }
+        .inv-name
+        {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .inv-cell
+        {
+            flex: 0 0 auto;
+            overflow: hidden;
+            text-align: right;
+        }
+        .inv-denial
+        {
+            flex: 0 1 auto;
+            min-width: 0;
+            margin-left: 12dp;
+            overflow: hidden;
+            text-align: right;
+        }
+
+        #inv-footer
+        {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+        }
+        .inv-footer-side
+        {
+            flex: 0 0 auto;
+        }
+        #inv-footer .button
+        {
+            margin-bottom: 0;
+        }
+    </style>
+</head>
+<body>
+    <!-- Filled in by inventory_selector in src/inventory_ui.cpp. -->
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

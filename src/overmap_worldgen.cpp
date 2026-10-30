@@ -4,11 +4,11 @@
 #include "flexbuffer_json.h"
 #include "game.h"
 #include "generic_factory.h"
-#include "imgui/imgui.h"
 #include "map_iterator.h"
 #include "output.h"
 #include "overmapbuffer.h"
 #include "overmap_worldgen.h"
+#include "sdl_wrappers.h"
 #include "string_formatter.h"
 #include "translations.h"
 
@@ -234,7 +234,7 @@ void overmapbuffer::print_region_layout()
     }
 
     //copy to clipboard
-    ImGui::SetClipboardText( total_output.c_str() );
+    SetClipboardText( total_output );
     popup( _( "Copied world region map to clipboard!" ) );
 }
 

@@ -1,121 +1,204 @@
 #include "dialogue_win.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <vector>
 
-#include "catacharset.h"
 #include "debug.h"
 #include "input_context.h"
 #include "output.h"
-#include "point.h"
+#include "rml_markup.h"
+#include "string_formatter.h"
 #include "translations.h"
-#include "ui_manager.h"
 
-// Height of the response section
-static const int RESPONSES_LINES = 15;
+// How far PAGE_UP and PAGE_DOWN move the selected response
+static const int RESPONSES_PAGE = 5;
 
-multiline_list_entry talk_data::get_entry() const
+/**
+ * The dialogue window, from data/raw/rmlui/dialogue.rml: the conversation so
+ * far above, and the responses to pick from below, beside the actions that
+ * need no response.
+ */
+class dialogue_view : public rml_ui::window
 {
-    multiline_list_entry entry;
-    entry.entry_text = colorize( text, color );
-    entry.prefix = formatted_hotkey( hotkey_desc, color );
-    return entry;
-}
+    public:
+        dialogue_view( dialogue_window &dialogue, const std::function<std::string()> &npc_name ) :
+            rml_ui::window( std::string(), "dialogue.rml" ), dialogue( dialogue ), npc_name( npc_name ) {
+            set_body_scrolls( false );
+            dialogue.view = this;
+            dialogue.history_changed = true;
+            dialogue.reveal_response = true;
+        }
+        ~dialogue_view() override {
+            dialogue.view = nullptr;
+        }
 
-dialogue_window::dialogue_window()
-{
-    responses_list = std::make_unique<multiline_list>( resp_win );
-    history_view = std::make_unique<scrolling_text_view>( history_win );
-}
+        void scroll_history( rml_ui::scroll how ) {
+            scroll( "dlg-history", how );
+        }
 
-void dialogue_window::resize( ui_adaptor &ui )
+    protected:
+        void on_redraw() override;
+
+    private:
+        dialogue_window &dialogue;
+        std::function<std::string()> npc_name;
+};
+
+void dialogue_view::on_redraw()
 {
+    // The window takes the middle of the screen, as the terminal one did
     const int win_beginy = TERMY > FULL_SCREEN_HEIGHT ? ( TERMY - FULL_SCREEN_HEIGHT ) / 4 : 0;
     const int win_beginx = TERMX > FULL_SCREEN_WIDTH ? ( TERMX - FULL_SCREEN_WIDTH ) / 4 : 0;
     const int maxy = win_beginy ? TERMY - 2 * win_beginy : FULL_SCREEN_HEIGHT;
     const int maxx = win_beginx ? TERMX - 2 * win_beginx : FULL_SCREEN_WIDTH;
-    d_win = catacurses::newwin( maxy, maxx, point( win_beginx, win_beginy ) );
-    ui.position_from_window( d_win );
-    history_win = catacurses::newwin( maxy - 1 - RESPONSES_LINES - 2 - 1, maxx - 1, point( win_beginx,
-                                      win_beginy + 2 ) );
-    resp_win = catacurses::newwin( RESPONSES_LINES - 1, maxx / 2, point( win_beginx,
-                                   win_beginy + maxy - RESPONSES_LINES ) );
+    set_size( rml_ui::term_width( maxx ), rml_ui::term_height( maxy ) );
 
-    // Reset size-dependant state
-    update_history_view = true;
-    responses_list->fold_entries();
+    set_title( dialogue.title_markup( npc_name() ) );
+    set_header( dialogue.debug_flags_rml() );
+    show( "body", dialogue.body_rml() );
+
+    if( dialogue.history_changed ) {
+        dialogue.history_changed = false;
+        update_layout();
+        scroll( "dlg-history", rml_ui::scroll::bottom );
+    }
+    if( dialogue.reveal_response ) {
+        dialogue.reveal_response = false;
+        scroll_into_view( "dlg-resp-" + std::to_string( dialogue.sel_response ) );
+    }
 }
 
-void dialogue_window::draw( const std::string &npc_name )
+std::unique_ptr<rml_ui::window> dialogue_window::open( const std::function<std::string()>
+        &npc_name )
 {
-    werase( d_win );
+    return std::make_unique<dialogue_view>( *this, npc_name );
+}
 
-    print_header( npc_name );
-    int ycurrent = getmaxy( d_win ) - 1 - RESPONSES_LINES + 1;
-    const int xmid = getmaxx( d_win ) / 2;
+std::string dialogue_window::title_markup( const std::string &name ) const
+{
+    if( is_computer ) {
+        return colorize( string_format( _( "Interaction: %s" ), name ), default_color() );
+    } else if( !is_not_conversation ) {
+        return colorize( string_format( _( "Dialogue: %s" ), name ), default_color() );
+    }
+    return std::string();
+}
+
+std::string dialogue_window::debug_flags_rml() const
+{
+    if( !debug_mode ) {
+        return std::string();
+    }
+    const int flag_count = 5;
+    std::array<bool, flag_count> debug_flags = { show_dynamic_line_conditionals, show_response_conditionals, show_dynamic_line_effects, show_response_effects, show_all_responses };
+    std::array<std::string, flag_count> debug_show_toggle = { "DL_COND", "RESP_COND", "DL_EFF", "RESP_EFF", "ALL_RESP" };
+    std::string rml;
+    for( int i = 0; i < flag_count; i++ ) {
+        rml += rml_ui::colored_rml( debug_show_toggle[i], debug_flags[i] ? c_yellow : c_brown ) + " ";
+    }
+    return rml + " " + rml_ui::colored_rml( "talk_topic: " + debug_topic_name, default_color() );
+}
+
+std::string dialogue_window::body_rml() const
+{
+    // The conversation so far, the latest lines highlighted
+    std::string rml = "<div id=\"dlg-history\">";
+    const int newindex = history.size() - num_lines_highlighted;
+    for( int i = 0; i < static_cast<int>( history.size() ); ++i ) {
+        const nc_color col = ( i >= newindex ) ? history[i].color : c_light_gray;
+        rml += history[i].text.empty() ? "<div class=\"dlg-gap\"></div>" :
+               "<div class=\"dlg-line\">" + rml_ui::markup_to_rml( history[i].text, col ) + "</div>";
+    }
+    rml += "</div>";
+
+    std::string prompt;
+    if( is_computer ) {
+        prompt = _( "Your input:" );
+    } else if( is_not_conversation ) {
+        prompt = _( "What do you do?" );
+    } else {
+        prompt = _( "Your response:" );
+    }
+    rml += "<div id=\"dlg-prompt\">" + rml_ui::colored_rml( prompt, default_color() ) + "</div>";
+
+    // The responses, each clickable
+    rml += "<div id=\"dlg-bottom\"><div id=\"dlg-responses\">";
+    for( int i = 0; i < static_cast<int>( responses.size() ); ++i ) {
+        const talk_data &response = responses[i];
+        rml += string_format( "<div id=\"dlg-resp-%d\" class=\"item dlg-resp%s\" data-row=\"%d\">", i,
+                              i == sel_response ? " selected" : "", i ) +
+               rml_ui::markup_to_rml( formatted_hotkey( response.hotkey_desc, response.color ) +
+                                      colorize( response.text, response.color ) ) + "</div>";
+    }
+    rml += "</div><div id=\"dlg-actions\">";
+
     // Actions go on the right column; they're unaffected by scrolling.
-    const int actions_xoffset = xmid + 2;
-    nc_color cur_color = c_magenta;
-    input_context ctxt( "DIALOGUE_CHOOSE_RESPONSE" );
     if( debug_mode ) {
         for( const std::string &line : responses_debug ) {
-            ycurrent += fold_and_print( d_win, point( actions_xoffset, ycurrent - 1 ), xmid - 4, c_yellow,
-                                        line );
+            rml += "<div>" + rml_ui::markup_to_rml( line, c_yellow ) + "</div>";
         }
-    } else {
-        if( !is_computer && !is_not_conversation && !is_remote ) {
-            std::string formatted_text = formatted_hotkey( ctxt.get_desc( "LOOK_AT", 1 ),
-                                         cur_color ).append( _( "Look at" ) );
-            print_colored_text( d_win, point( actions_xoffset, ycurrent ), cur_color, c_magenta,
-                                formatted_text );
-            ++ycurrent;
-            formatted_text = formatted_hotkey( ctxt.get_desc( "SIZE_UP_STATS", 1 ),
-                                               cur_color ).append( _( "Size up stats" ) );
-            print_colored_text( d_win, point( actions_xoffset, ycurrent ), cur_color, c_magenta,
-                                formatted_text );
-            ++ycurrent;
-            formatted_text = formatted_hotkey( ctxt.get_desc( "ASSESS_PERSONALITY", 1 ),
-                                               cur_color ).append( _( "Assess personality" ) );
-            print_colored_text( d_win, point( actions_xoffset, ycurrent ), cur_color, c_magenta,
-                                formatted_text );
-            ++ycurrent;
-            formatted_text = formatted_hotkey( ctxt.get_desc( "YELL", 1 ), cur_color ).append( _( "Yell" ) );
-            print_colored_text( d_win, point( actions_xoffset, ycurrent ), cur_color, c_magenta,
-                                formatted_text );
-            ++ycurrent;
-            formatted_text = formatted_hotkey( ctxt.get_desc( "CHECK_OPINION", 1 ),
-                                               cur_color ).append( _( "Check opinion" ) );
-            print_colored_text( d_win, point( actions_xoffset, ycurrent ), cur_color, c_magenta,
-                                formatted_text );
+    } else if( !is_computer && !is_not_conversation && !is_remote ) {
+        input_context ctxt( "DIALOGUE_CHOOSE_RESPONSE" );
+        const std::array<std::pair<std::string, std::string>, 5> actions = { {
+                { "LOOK_AT", _( "Look at" ) },
+                { "SIZE_UP_STATS", _( "Size up stats" ) },
+                { "ASSESS_PERSONALITY", _( "Assess personality" ) },
+                { "YELL", _( "Yell" ) },
+                { "CHECK_OPINION", _( "Check opinion" ) }
+            }
+        };
+        for( const std::pair<std::string, std::string> &action : actions ) {
+            rml += "<div class=\"item\" data-action=\"" + action.first + "\">" + rml_ui::markup_to_rml(
+                       formatted_hotkey( ctxt.get_desc( action.first, 1 ), c_magenta ) + action.second,
+                       c_magenta ) + "</div>";
         }
     }
-
-    wnoutrefresh( d_win );
-
-    responses_list->print_entries();
-
-    if( update_history_view ) {
-        update_history_view = false;
-        const int newindex = history.size() - num_lines_highlighted;
-        std::string assembled;
-        for( int i = 0; i < static_cast<int>( history.size() ); ++i ) {
-            nc_color col = ( i >= newindex ) ? history[i].color : c_light_gray;
-            assembled += colorize( history[i].text, col ).append( "\n" );
-        }
-
-        history_view->set_text( assembled, false );
-    }
-    history_view->draw( c_light_gray );
+    return rml + "</div></div>";
 }
 
-void dialogue_window::handle_scrolling( std::string &action, input_context &ctxt )
+void dialogue_window::handle_scrolling( std::string &action, input_context & )
 {
-    if( responses_list->handle_navigation( action, ctxt ) ||
-        history_view->handle_navigation( action, ctxt ) ) {
-        // No further action required
+    const int count = static_cast<int>( responses.size() );
+    const auto select = [&]( int index ) {
+        sel_response = std::clamp( index, 0, std::max( 0, count - 1 ) );
+        reveal_response = true;
+    };
+    if( count > 0 && action == "UP" ) {
+        select( ( sel_response + count - 1 ) % count );
+    } else if( count > 0 && action == "DOWN" ) {
+        select( ( sel_response + 1 ) % count );
+    } else if( action == "HOME" ) {
+        select( 0 );
+    } else if( action == "END" ) {
+        select( count - 1 );
+    } else if( action == "PAGE_UP" ) {
+        select( sel_response - RESPONSES_PAGE );
+    } else if( action == "PAGE_DOWN" ) {
+        select( sel_response + RESPONSES_PAGE );
+    } else if( view != nullptr && action == "SCROLL_INFOBOX_UP" ) {
+        view->scroll_history( rml_ui::scroll::line_up );
+    } else if( view != nullptr && action == "SCROLL_INFOBOX_DOWN" ) {
+        view->scroll_history( rml_ui::scroll::line_down );
+    } else if( view != nullptr && action == "MOUSE_MOVE" ) {
+        // Hovering picks a response, without scrolling to it
+        const int row = view->hovered_index( "data-row" );
+        if( row >= 0 && row < count ) {
+            sel_response = row;
+        }
+    } else if( view != nullptr && action == "SELECT" ) {
+        const std::string clicked = view->resolve_click( action );
+        const int row = view->hovered_index( "data-row" );
+        if( clicked != action ) {
+            // An action, or the close button
+            action = clicked;
+        } else if( row >= 0 && row < count ) {
+            sel_response = row;
+            action = "CONFIRM";
+        }
     }
-    sel_response = responses_list->get_entry_pos();
+    // The mouse wheel scrolls the history or the responses by itself
 }
 
 void dialogue_window::set_up_scrolling( input_context &ctxt ) const
@@ -127,8 +210,17 @@ void dialogue_window::set_up_scrolling( input_context &ctxt ) const
         ctxt.register_action( "YELL" );
         ctxt.register_action( "CHECK_OPINION" );
     }
-    history_view->set_up_navigation( ctxt, scrolling_key_scheme::angle_bracket_scroll );
-    responses_list->set_up_navigation( ctxt );
+    ctxt.register_action( "SCROLL_INFOBOX_UP" );
+    ctxt.register_action( "SCROLL_INFOBOX_DOWN" );
+    ctxt.register_updown();
+    ctxt.register_action( "END" );
+    ctxt.register_action( "HOME" );
+    ctxt.register_action( "PAGE_DOWN" );
+    ctxt.register_action( "PAGE_UP" );
+    ctxt.register_action( "MOUSE_MOVE" );
+    ctxt.register_action( "SCROLL_DOWN" );
+    ctxt.register_action( "SCROLL_UP" );
+    ctxt.register_action( "SELECT" );
 }
 
 void dialogue_window::add_to_history( const std::string &text, const std::string &speaker_name,
@@ -147,7 +239,7 @@ void dialogue_window::add_to_history( const std::string &text, nc_color color )
 {
     history.emplace_back( color, text );
     ++num_lines_highlighted;
-    update_history_view = true;
+    history_changed = true;
 }
 
 void dialogue_window::add_history_separator()
@@ -165,51 +257,15 @@ nc_color dialogue_window::default_color() const
     return is_computer ? c_green : c_white;
 }
 
-void dialogue_window::print_header( const std::string &name ) const
+void dialogue_window::set_responses( const std::vector<talk_data> &new_responses )
 {
-    draw_border( d_win );
-    if( is_computer ) {
-        mvwprintz( d_win, point( 2, 1 ), default_color(), _( "Interaction: %s" ), name );
-    } else if( !is_not_conversation ) {
-        mvwprintz( d_win, point( 2, 1 ), default_color(), _( "Dialogue: %s" ), name );
-    }
-    const int xmax = getmaxx( d_win );
-    int x_debug = 15 + utf8_width( name );
-    const int ymax = getmaxy( d_win );
-    const int ybar = ymax - 1 - RESPONSES_LINES - 1;
-    const int flag_count = 5;
-    std::array<bool, flag_count> debug_flags = { show_dynamic_line_conditionals, show_response_conditionals, show_dynamic_line_effects, show_response_effects, show_all_responses };
-    std::array<std::string, flag_count> debug_show_toggle = { "DL_COND", "RESP_COND", "DL_EFF", "RESP_EFF", "ALL_RESP" };
-    if( debug_mode ) {
-        for( int i = 0; i < flag_count; i++ ) {
-            mvwprintz( d_win, point( x_debug, 1 ), debug_flags[i] ? c_yellow : c_brown, debug_show_toggle[i] );
-            x_debug += utf8_width( debug_show_toggle[i] ) + 1;
-        }
-        x_debug += 2;
-        mvwprintz( d_win, point( x_debug, 1 ), default_color(), "talk_topic: " + debug_topic_name );
-    }
-
-    // Horizontal bar dividing history and responses
-    wattron( d_win, BORDER_COLOR );
-    mvwaddch( d_win, point( 0, ybar ), LINE_XXXO );
-    mvwhline( d_win, point( 1, ybar ), LINE_OXOX, xmax - 1 );
-    mvwaddch( d_win, point( xmax - 1, ybar ), LINE_XOXX );
-    wattroff( d_win, BORDER_COLOR );
-    if( is_computer ) {
-        mvwprintz( d_win, point( 2, ybar + 1 ), default_color(), _( "Your input:" ) );
-    } else if( is_not_conversation ) {
-        mvwprintz( d_win, point( 2, ybar + 1 ), default_color(), _( "What do you do?" ) );
-    } else {
-        mvwprintz( d_win, point( 2, ybar + 1 ), default_color(), _( "Your response:" ) );
-    }
+    responses = new_responses;
+    sel_response = std::clamp( sel_response, 0, std::max( 0,
+                               static_cast<int>( responses.size() ) - 1 ) );
+    reveal_response = true;
 }
 
-void dialogue_window::set_responses( const std::vector<talk_data> &responses )
+void dialogue_window::set_responses_debug( const std::vector<std::string> &new_responses )
 {
-    responses_list->create_entries( responses );
-}
-
-void dialogue_window::set_responses_debug( const std::vector<std::string> &responses )
-{
-    responses_debug = responses;
+    responses_debug = new_responses;
 }

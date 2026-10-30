@@ -71,8 +71,6 @@
 #include "game.h"
 #include "game_inventory.h"
 #include "global_vars.h"
-#include "imgui/imgui.h"
-#include "imgui_demo.h"
 #include "input.h"
 #include "input_context.h"
 #include "input_enums.h"
@@ -301,7 +299,6 @@ std::string enum_to_string<debug_menu::debug_menu_index>( debug_menu::debug_menu
 		case debug_menu::debug_menu_index::EDIT_FACTION: return "EDIT_FACTION";
 		case debug_menu::debug_menu_index::WRITE_CITY_LIST: return "WRITE_CITY_LIST";
         case debug_menu::debug_menu_index::TALK_TOPIC: return "TALK_TOPIC";
-        case debug_menu::debug_menu_index::IMGUI_DEMO: return "IMGUI_DEMO";
         case debug_menu::debug_menu_index::VEHICLE_EFFECTS: return "VEHICLE_EFFECTS";
         case debug_menu::debug_menu_index::WISHPROFICIENCY: return "WISHPROFICIENCY";
         case debug_menu::debug_menu_index::RELOAD_GPU_SHADERS: return "RELOAD_GPU_SHADERS";
@@ -703,7 +700,7 @@ static void monster_ammo_edit( monster &mon )
 
 static std::string query_var_value_text()
 {
-    string_input_popup_imgui popup_val( 85 );
+    text_input_popup popup_val( 85 );
     popup_val.set_label( _( "Text value:" ) );
     return popup_val.query();
 }
@@ -737,7 +734,7 @@ static void edit_vars( std::string const &title, global_variables::impl_t &vars 
     int selected_globvar = global_var_list.ret;
     if( selected_globvar == 0 ) {
         std::string key;
-        string_input_popup_imgui popup_key( 85 );
+        text_input_popup popup_key( 85 );
         popup_key.set_label( _( "Key\n" ) );
         key = popup_key.query();
         if( query_yn( "Is the value a number or a text?  [Y]es for number, [N]o for text." ) ) {
@@ -1006,7 +1003,6 @@ static int info_uilist()
         { uilist_entry( debug_menu_index::TEST_MAP_EXTRA_DISTRIBUTION, true, 'e', _( "Test map extra list" ) ) },
         { uilist_entry( debug_menu_index::GENERATE_EFFECT_LIST, true, 'L', _( "Generate effect list" ) ) },
         { uilist_entry( debug_menu_index::WRITE_CITY_LIST, true, 'C', _( "Write city list to cities.output" ) ) },
-        { uilist_entry( debug_menu_index::IMGUI_DEMO, true, 'u', _( "Open ImGui demo screen" ) ) },
 #if defined(USE_SDL3)
         { uilist_entry( debug_menu_index::RELOAD_GPU_SHADERS, true, 'P', _( "Reload GPU shaders" ) ) },
 #endif
@@ -1725,7 +1721,7 @@ static void change_spells( Character &character )
             break;
 
         } else if( action == "FILTER" ) {
-            string_input_popup_imgui filter_popup( 45, filterstring );
+            text_input_popup filter_popup( 45, filterstring );
             filter_popup.set_label( _( "Filter:" ) );
             filter_popup.set_description( _( "Filter by spell name or id" ) );
             filterstring = filter_popup.query();
@@ -1869,7 +1865,7 @@ static void teleport_overmap( bool specific_coordinates = false )
     Character &player_character = get_player_character();
     std::optional<tripoint_abs_omt> where;
     if( specific_coordinates ) {
-        string_input_popup_imgui coord_popup( 65, "", _( "Teleport where?" ) );
+        text_input_popup coord_popup( 65, "", _( "Teleport where?" ) );
         tripoint_abs_om om_coord;
         point_om_omt om_tile;
         std::tie( om_coord, om_tile ) = project_remain<coords::om>( player_character.pos_abs_omt() );
@@ -2281,7 +2277,7 @@ static void character_edit_desc_menu( Character &you )
     switch( smenu.ret ) {
         case 0: {
             std::string filterstring = get_avatar().get_save_id();
-            string_input_popup_imgui popup( 85, filterstring );
+            text_input_popup popup( 85, filterstring );
             popup.set_label( _( "Rename save file (WARNING: this will duplicate the save):" ) );
             filterstring = popup.query();
             if( !popup.cancelled() ) {
@@ -2291,7 +2287,7 @@ static void character_edit_desc_menu( Character &you )
         break;
         case 1: {
             std::string filterstring = you.name;
-            string_input_popup_imgui popup( 85, filterstring );
+            text_input_popup popup( 85, filterstring );
             popup.set_label( _( "Rename character:" ) );
             filterstring = popup.query();
             if( !popup.cancelled() ) {
@@ -3881,7 +3877,7 @@ static void vehicle_export()
     if( optional_vpart_position ovp = here.veh_at( get_avatar().pos_abs() ) ) {
         cata_path export_dir{ cata_path::root_path::user,  "export_dir" };
         assure_dir_exist( export_dir );
-        string_input_popup_imgui file_popup( 50, "", _( "Export vehicle" ) );
+        text_input_popup file_popup( 50, "", _( "Export vehicle" ) );
         file_popup.set_description( _( "Exported file name?" ) );
         const std::string text = file_popup.query();
         if( file_popup.cancelled() || text.empty() ) {
@@ -3977,11 +3973,11 @@ static void wind_speed()
 //prints overmaps in provided bounds, saves to file, copies to clipboard
 static void print_overmaps()
 {
-    string_input_popup_imgui pop1( 50 );
+    text_input_popup pop1( 50 );
     pop1.set_description( _( "Top-left point?" ) );
     std::optional<tripoint_abs_omt> p1 = pop1.query_coordinate();
     if( !!p1 ) {
-        string_input_popup_imgui pop2( 50 );
+        text_input_popup pop2( 50 );
         pop2.set_description( _( "Bottom-right point?" ) );
         std::optional<tripoint_abs_omt> p2 = pop2.query_coordinate();
         if( !!p2 ) {
@@ -4037,17 +4033,11 @@ static void print_overmaps()
                 final_text += line + '\n';
             }
             //copy to clipboard
-            ImGui::SetClipboardText( final_text.c_str() );
+            SetClipboardText( final_text );
             popup( _( "Copied overmap in points %s, %s to clipboard!" ), p1_om.to_string_writable(),
                    p2_om.to_string_writable() );
         }
     }
-}
-
-static void run_imgui_demo()
-{
-    imgui_demo_ui demo;
-    demo.run();
 }
 
 static void write_city_list()
@@ -4883,12 +4873,6 @@ const std::vector<debug_action_entry> &all_actions()
             {
                 end_screen_data new_instance;
                 new_instance.draw_end_screen_ui();
-            }
-        },
-        {
-            debug_menu_index::IMGUI_DEMO, translate_marker( "ImGui demo" ), "imgui demo", "Game", []()
-            {
-                run_imgui_demo();
             }
         },
         {

@@ -33,7 +33,6 @@
 #include "game.h"
 #include "game_constants.h"
 #include "generic_factory.h"
-#include "imgui/imgui.h"
 #include "input_enums.h"
 #include "input_popup.h"
 #include "item.h"
@@ -52,6 +51,7 @@
 #include "output.h"
 #include "overmap.h"
 #include "overmapbuffer.h"
+#include "rml_markup.h"
 #include "scent_map.h"
 #include "sdltiles.h"
 #include "shadowcasting.h"
@@ -202,7 +202,7 @@ static void edit_json( SAVEOBJ &it )
             }
             fs2.clear();
         } else if( tmret == 1 ) {
-            string_input_popup_imgui popup( 50, save1 );
+            text_input_popup popup( 50, save1 );
             std::string ret = popup.query();
             if( !popup.cancelled() ) {
                 fs1 = fld_string( ret, TERMX - 10 );
@@ -326,6 +326,8 @@ input_context editmap_ui::setup_input_context()
     ctxt.register_action( "EDITMAP_EDIT_OVERMAP" );
     ctxt.register_action( "QUIT" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
+    // For clicking the window's actions
+    ctxt.register_action( "SELECT" );
     // Needed for timeout to be useful
     ctxt.register_action( "ANY_INPUT" );
     return ctxt;
@@ -393,6 +395,14 @@ void editmap_ui::handle_action()
         ui_manager::redraw();
 
         action = ictxt.handle_input( 33 );
+        // Clicking one of the window's actions selects it
+        if( action == "SELECT" ) {
+            const int clicked = hovered_index( "data-row" );
+            if( clicked >= 0 && clicked < SELECTABLE_ACTIONS ) {
+                editmap_state.selected[clicked] = true;
+            }
+            action = resolve_click( action );
+        }
 
         std::optional<editmap_action> selected_action;
         for( int i = 0; i < SELECTABLE_ACTIONS; i++ ) {
@@ -645,8 +655,12 @@ void editmap_ui::draw_main_ui_overlay()
     }
 }
 
-void editmap_ui::draw_current_point_info()
+std::string editmap_ui::current_point_info_rml() const
 {
+    std::string rml;
+    const auto line = [&rml]( const nc_color & color, const std::string & text ) {
+        rml += "<div class=\"pre\">" + rml_ui::markup_to_rml( text, color ) + "</div>";
+    };
     const editmap_uistate &editmap_state = uistate.editmap_state;
     const editmap_brush &brush = get_brush();
     const tripoint_bub_ms &current_point = brush.target;
@@ -669,73 +683,74 @@ void editmap_ui::draw_current_point_info()
     const furn_t &furniture_type = here.furn( current_point ).obj();
 
     // NOLINTNEXTLINE(cata-use-named-point-constants)
-    cataimgui::TextColoredParagraphNewline( draw_color,
-                                            string_format( _( "Target: bub_ms = %s; abs_ms = %s" ), current_point.to_string(),
-                                                    here.get_abs( current_point ).to_string() ) );
+    line( draw_color,
+          string_format( _( "Target: bub_ms = %s; abs_ms = %s" ), current_point.to_string(),
+                         here.get_abs( current_point ).to_string() ) );
     /* uncomment for origin
-    cataimgui::TextColoredParagraphNewline( draw_color,
-                                            string_format( "Origin: bub_ms = %s; abs_ms = %s", current_origin.to_string(),
-                                                    here.get_abs( current_origin ).to_string() ) );
+    line( draw_color,
+          string_format( "Origin: bub_ms = %s; abs_ms = %s", current_origin.to_string(),
+                         here.get_abs( current_origin ).to_string() ) );
     */
-    ImGui::Separator();
-    draw_symbol_and_info( terrain_type.color(), terrain_type.symbol(), draw_color,
-                          string_format( _( " Terrain: %s (#%d); move cost %d" ),
-                                         terrain_type.id.str(), t.to_i(), terrain_type.movecost ) );
+    rml += "<div class=\"sep\"></div>";
+    rml += symbol_and_info_rml( terrain_type.color(), terrain_type.symbol(), draw_color,
+                                string_format( _( " Terrain: %s (#%d); move cost %d" ),
+                                               terrain_type.id.str(), t.to_i(), terrain_type.movecost ) );
 
     const furn_id &f = here.furn( current_point );
     if( f.to_i() > 0 ) {
-        draw_symbol_and_info( furniture_type.color(), furniture_type.symbol(), draw_color,
-                              string_format( _( " Furniture: %s (#%d); move cost %d; move strength %d" ),
-                                             furniture_type.id.str(), f.to_i(), furniture_type.movecost, furniture_type.move_str_req ) );
+        rml += symbol_and_info_rml( furniture_type.color(), furniture_type.symbol(), draw_color,
+                                    string_format( _( " Furniture: %s (#%d); move cost %d; move strength %d" ),
+                                                   furniture_type.id.str(), f.to_i(), furniture_type.movecost, furniture_type.move_str_req ) );
     }
 
     const trap &cur_trap = here.tr_at( current_point );
     if( !cur_trap.is_null() ) {
-        draw_symbol_and_info( cur_trap.color, cur_trap.sym, draw_color,
-                              string_format( _( "Trap: %s (#%d)" ), cur_trap.id.str(), cur_trap.loadid.to_i() ) );
+        rml += symbol_and_info_rml( cur_trap.color, cur_trap.sym, draw_color,
+                                    string_format( _( "Trap: %s (#%d)" ), cur_trap.id.str(), cur_trap.loadid.to_i() ) );
     }
 
     for( auto &fld : here.get_field( current_point ) ) {
         const field_entry &cur = fld.second;
-        draw_symbol_and_info( cur.color(), cur.symbol().front(), draw_color,
-                              string_format( _( "Field: %s (#%d); Intensity: %d (%s); Age: %d" ),
-                                             cur.get_field_type().id().str(), cur.get_field_type().to_i(),
-                                             cur.get_field_intensity(), cur.name(), to_turns<int>( cur.get_field_age() ) ) );
+        rml += symbol_and_info_rml( cur.color(), cur.symbol().front(), draw_color,
+                                    string_format( _( "Field: %s (#%d); Intensity: %d (%s); Age: %d" ),
+                                                   cur.get_field_type().id().str(), cur.get_field_type().to_i(),
+                                                   cur.get_field_intensity(), cur.name(), to_turns<int>( cur.get_field_age() ) ) );
     }
 
-    if( ImGui::CollapsingHeader( "Advanced Info" ) || editmap_state.advanced_info_toggle ) {
+    // Clicking the heading shows or hides the rest
+    rml += std::string( "<div class=\"section-head\" data-action=\"EDITMAP_TOGGLE_ADVANCED_INFO\">" ) +
+           ( editmap_state.advanced_info_toggle ? "- " : "+ " ) + "Advanced Info</div>";
+    if( editmap_state.advanced_info_toggle ) {
         const level_cache &map_cache = here.get_cache( current_point.z() );
 
         Character &player_character = get_player_character();
         const std::string u_see_msg = player_character.sees( here, current_point ) ? _( "yes" ) : _( "no" );
-        cataimgui::TextColoredParagraphNewline( draw_color,
-                                                string_format( _( "distance: %d; u_see: %s; vehicle: %s; scent: %d" ),
-                                                        rl_dist( player_character.pos_bub(), current_point ), u_see_msg, veh_msg,
-                                                        get_scent().get( current_point ) ) );
-        cataimgui::TextColoredParagraphNewline( draw_color,
-                                                string_format( _( "sight_range: %d; noon_sight_range: %d;" ),
-                                                        player_character.sight_range( g->light_level( player_character.posz() ) ),
-                                                        player_character.sight_range( sun_moon_light_at_noon_near( calendar::turn ) ) ) );
-        cataimgui::TextColoredParagraphNewline( draw_color,
-                                                string_format( _( "cache{transp:%.4f; seen:%.4f; cam:%.4f}" ),
-                                                        map_cache.transparency_cache[current_point.x()][current_point.y()],
-                                                        map_cache.seen_cache[current_point.x()][current_point.y()],
-                                                        map_cache.camera_cache[current_point.x()][current_point.y()]
-                                                             ) );
+        line( draw_color,
+              string_format( _( "distance: %d; u_see: %s; vehicle: %s; scent: %d" ),
+                             rl_dist( player_character.pos_bub(), current_point ), u_see_msg, veh_msg,
+                             get_scent().get( current_point ) ) );
+        line( draw_color,
+              string_format( _( "sight_range: %d; noon_sight_range: %d;" ),
+                             player_character.sight_range( g->light_level( player_character.posz() ) ),
+                             player_character.sight_range( sun_moon_light_at_noon_near( calendar::turn ) ) ) );
+        line( draw_color,
+              string_format( _( "cache{transp:%.4f; seen:%.4f; cam:%.4f}" ),
+                             map_cache.transparency_cache[current_point.x()][current_point.y()],
+                             map_cache.seen_cache[current_point.x()][current_point.y()],
+                             map_cache.camera_cache[current_point.x()][current_point.y()] ) );
         map::apparent_light_info al = map::apparent_light_helper( map_cache,
                                       tripoint_bub_ms( current_point ) );
         int apparent_light = static_cast<int>(
                                  here.apparent_light_at( current_point, here.get_visibility_variables_cache() ) );
-        cataimgui::TextColoredParagraphNewline( draw_color,
-                                                string_format( _( "outside: %d; obstructed: %d; floor: %d" ),
-                                                        static_cast<int>( here.is_outside( current_point ) ),
-                                                        static_cast<int>( al.obstructed ),
-                                                        static_cast<int>( here.has_floor( current_point ) )
-                                                             ) );
-        cataimgui::TextColoredParagraphNewline( draw_color,
-                                                string_format( _( "light_at: %s; apparent light: %.5f (%d)" ),
-                                                        map_cache.lm[current_point.x()][current_point.y()].to_string(),
-                                                        al.apparent_light, apparent_light ) );
+        line( draw_color,
+              string_format( _( "outside: %d; obstructed: %d; floor: %d" ),
+                             static_cast<int>( here.is_outside( current_point ) ),
+                             static_cast<int>( al.obstructed ),
+                             static_cast<int>( here.has_floor( current_point ) ) ) );
+        line( draw_color,
+              string_format( _( "light_at: %s; apparent light: %.5f (%d)" ),
+                             map_cache.lm[current_point.x()][current_point.y()].to_string(),
+                             al.apparent_light, apparent_light ) );
         std::string extras;
         if( vp ) {
             extras += _( " [vehicle]" );
@@ -747,15 +762,15 @@ void editmap_ui::draw_current_point_info()
             extras += _( " [roof]" );
         }
 
-        cataimgui::TextColoredParagraphNewline( draw_color,
-                                                string_format( "%s, %s", here.features( current_point ), extras ) );
+        line( draw_color, string_format( "%s, %s", here.features( current_point ), extras ) );
 
         if( here.has_graffiti_at( current_point ) ) {
-            cataimgui::TextColoredParagraphNewline( draw_color, string_format(
-                    here.ter( current_point ) == ter_t_grave_new ? _( "Graffiti: %s" ) : _( "Inscription: %s" ),
-                    here.graffiti_at( current_point ) ) );
+            line( draw_color, string_format(
+                      here.ter( current_point ) == ter_t_grave_new ? _( "Graffiti: %s" ) : _( "Inscription: %s" ),
+                      here.graffiti_at( current_point ) ) );
         }
     }
+    return rml;
 }
 
 static ter_id get_alt_ter( bool isvert, ter_id sel_ter )
@@ -1109,7 +1124,7 @@ void editmap_ui::edit_items()
                         retval = intval;
                         confirmed = query_int( retval, true, "set:" );
                     } else if( imenu.ret == imenu_tags ) {
-                        string_input_popup_imgui popup( 50, strval, _( "Flags:" ) );
+                        text_input_popup popup( 50, strval, _( "Flags:" ) );
                         popup.set_description( "UPPERCASE, no quotes, separate with spaces:" );
                         strval = popup.query();
                         confirmed = !popup.cancelled();
@@ -1539,21 +1554,22 @@ void editmap_ui::cleartmpmap( smallmap &tmpmap ) const
 }
 
 editmap_ui::editmap_ui() :
-    cataimgui::window( _( "MAP_EDITOR" ),
-                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoNav )
+    rml_ui::window( std::string() )
 {
     ictxt = setup_input_context();
 }
 
-void editmap_ui::draw_controls()
+void editmap_ui::on_redraw()
 {
-    draw_current_point_info();
-    draw_select_menu();
+    // Down the left of the screen, over the map
+    set_position( "0", "0" );
+    set_size( "33%", std::string() );
+    set_body( current_point_info_rml() + select_menu_rml() );
 }
 
-void editmap_ui::draw_select_menu()
+std::string editmap_ui::select_menu_rml() const
 {
-    editmap_uistate &editmap_state = uistate.editmap_state;
+    const editmap_uistate &editmap_state = uistate.editmap_state;
     const editmap_brush &brush = get_brush();
 
     auto get_drawing_symbol = []( bool is_drawing ) {
@@ -1576,17 +1592,19 @@ void editmap_ui::draw_select_menu()
                        get_drawing_symbol( brush.drawing_radiation ),  brush.selected_radiation )
     };
 
-    cataimgui::TextColoredParagraphNewline( c_light_gray, _( "? to view keybindings" ) );
-    cataimgui::TextColoredParagraphNewline( c_light_gray, string_format( _( "Fast scroll: %s" ),
-                                            editmap_state.fast_scroll ? _( "ON" ) : _( "OFF" ) ) );
-    cataimgui::TextColoredParagraphNewline( c_light_green, editmap_state.mode == EMM_DRAWING ?
-                                            _( "MODE: Draw" ) : _( "MODE: Select Brush Points" ) );
-    ImGui::Separator();
+    std::string rml = "<div class=\"sep\"></div>" +
+                      rml_ui::colored_rml( _( "? to view keybindings" ), c_light_gray ) + "<br/>" +
+                      rml_ui::colored_rml( string_format( _( "Fast scroll: %s" ),
+                                           editmap_state.fast_scroll ? _( "ON" ) : _( "OFF" ) ), c_light_gray ) + "<br/>" +
+                      rml_ui::colored_rml( editmap_state.mode == EMM_DRAWING ?
+                                           _( "MODE: Draw" ) : _( "MODE: Select Brush Points" ), c_light_green ) +
+                      "<div class=\"sep\"></div>";
+    // Clicking one does it; see handle_action()
     for( int i = 0; i < SELECTABLE_ACTIONS; i++ ) {
-        if( ImGui::Selectable( action_names[i].c_str() ) ) {
-            editmap_state.selected[i] = true;
-        }
+        rml += "<div class=\"item pre\" data-row=\"" + std::to_string( i ) + "\">" +
+               rml_ui::escape_rml( action_names[i] ) + "</div>";
     }
+    return rml;
 }
 
 void editmap_brush::serialize( JsonOut &json ) const
@@ -1649,18 +1667,11 @@ void editmap_uistate::deserialize( const JsonObject &jo )
     jo.read( "fast_scroll", fast_scroll );
 }
 
-void editmap_ui::draw_symbol_and_info( nc_color symbol_color, int symbol,
-                                       nc_color draw_color, const std::string_view &info )
+std::string editmap_ui::symbol_and_info_rml( nc_color symbol_color, int symbol,
+        nc_color draw_color, const std::string_view &info )
 {
-    cataimgui::TextColoredParagraph( symbol_color, std::string() + static_cast<char>( symbol ) );
-    cataimgui::TextColoredParagraph( draw_color, string_format( _( " %s" ), info ) );
-    ImGui::NewLine();
-}
-
-cataimgui::bounds editmap_ui::get_bounds()
-{
-    ImVec2 viewport = ImGui::GetMainViewport()->WorkSize;
-    return { 0, 0, viewport.x * 0.33f, -1.0f };
+    return "<div class=\"pre\">" + rml_ui::colored_rml( std::string() + static_cast<char>( symbol ),
+            symbol_color ) + rml_ui::colored_rml( string_format( _( " %s" ), info ), draw_color ) + "</div>";
 }
 
 std::optional<field_type_id> editmap_brush::select_field()

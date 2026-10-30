@@ -27,6 +27,8 @@
 #include "output.h"
 #include "point.h"
 #include "ret_val.h"
+#include "rml_markup.h"
+#include "rml_window.h"
 #include "string_formatter.h"
 #include "type_id.h"
 #include "vehicle.h"
@@ -53,6 +55,24 @@ point _pane_size()
 }
 
 } // namespace
+
+/** The bar across the top of the trade screen. */
+class trade_header : public rml_ui::window
+{
+    public:
+        explicit trade_header( trade_ui &parent ) : rml_ui::window( std::string() ), parent( parent ) {
+            // The panes take the input, so there is nothing to close it with here
+            set_close_action( std::string() );
+        }
+
+    protected:
+        void on_redraw() override {
+            parent._redraw_header( *this );
+        }
+
+    private:
+        trade_ui &parent;
+};
 
 trade_preset::trade_preset( Character const &you, Character const &trader )
     : _u( you ), _trader( trader )
@@ -120,7 +140,8 @@ bool trade_preset::cat_sort_compare( const inventory_entry &lhs, const inventory
 }
 
 trade_ui::trade_ui( party_t &you, npc &trader, currency_t cost, std::string title )
-    : _upreset{ you, trader }, _tpreset{ trader, you },
+    : _header( std::make_unique<trade_header>( *this ) ),
+      _upreset{ you, trader }, _tpreset{ trader, you },
       _panes{ std::make_unique<pane_t>( this, trader, _tpreset, std::string(), _pane_size(),
                                         _pane_orig( -1 ) ),
               std::make_unique<pane_t>( this, you, _upreset, std::string(), _pane_size(),
@@ -170,20 +191,9 @@ trade_ui::trade_ui( party_t &you, npc &trader, currency_t cost, std::string titl
     _bank = you.cash;
     _delta_bank = 0;
     _panes[_you]->get_active_column().on_deactivate();
-
-    _header_ui.on_screen_resize( [&]( ui_adaptor & ui ) {
-        _header_w = catacurses::newwin( header_size, TERMX, point::zero );
-        ui.position_from_window( _header_w );
-        ui.invalidate_ui();
-        resize();
-    } );
-    _header_ui.mark_resize();
-    _header_ui.on_redraw( [this]( ui_adaptor const & /* ui */ ) {
-        werase( _header_w );
-        _draw_header();
-        wnoutrefresh( _header_w );
-    } );
 }
+
+trade_ui::~trade_ui() = default;
 
 void trade_ui::pushevent( event const &ev )
 {
@@ -230,7 +240,6 @@ void trade_ui::recalc_values_cpane()
     if( !_parties[_trader]->as_npc()->will_exchange_items_freely() ) {
         _balance = _cost + _trade_values[_you] - _trade_values[_trader] + _delta_bank;
     }
-    _header_ui.invalidate_ui();
 }
 
 void trade_ui::autobalance()
@@ -288,7 +297,6 @@ void trade_ui::_process( event const &ev )
             break;
         }
         case event::SWITCH: {
-            _panes[_cpane]->get_ui()->invalidate_ui();
             _cpane = -_cpane + 1;
             break;
         }
@@ -326,10 +334,20 @@ bool trade_ui::_confirm_trade() const
     return false;
 }
 
-void trade_ui::_draw_header()
+void trade_ui::_redraw_header( trade_header &header )
 {
-    draw_border( _header_w, c_light_gray );
-    center_print( _header_w, 1, c_white, _title );
+    if( !_panes[_you] || !_panes[_trader] ) {
+        return; // Still being set up
+    }
+    // Redrawn before the panes, so they lay out at their new size
+    if( _laid_out_term != point( TERMX, TERMY ) ) {
+        _laid_out_term = point( TERMX, TERMY );
+        resize();
+    }
+    header.set_position( "0", "0" );
+    header.set_size( rml_ui::term_width( TERMX ), rml_ui::term_height( header_size ) );
+    header.set_title( _title );
+
     npc const &np = *_parties[_trader]->as_npc();
     nc_color const trade_color =
         npc_trading::npc_will_accept_trade( np, _balance ) ? c_green : c_red;
@@ -338,28 +356,31 @@ void trade_ui::_draw_header()
         cost_str = string_format( _balance >= 0 ? _( "Credit %s" ) : _( "Debt %s" ),
                                   format_money( std::abs( _balance ) ) );
     }
-    center_print( _header_w, 2, trade_color, cost_str );
     const std::string &rname = get_avatar().dialogue_remote_name;
-    mvwprintz( _header_w, { 1, 3 }, c_white, rname.empty() ? _parties[_trader]->get_name() : rname );
-    right_print( _header_w, 3, 1, c_white, _( "You" ) );
-    center_print( _header_w, header_size - 1, c_white,
-                  string_format( _( "%s to switch panes" ),
-                                 colorize( _panes[_you]->get_ctxt()->get_desc(
-                                         trade_selector::ACTION_SWITCH_PANES ),
-                                           c_yellow ) ) );
-    center_print( _header_w, header_size - 2, c_white,
-                  string_format( _( "%s to auto balance with highlighted item" ),
-                                 colorize( _panes[_you]->get_ctxt()->get_desc(
-                                         trade_selector::ACTION_AUTOBALANCE ),
-                                           c_yellow ) ) );
-    if( get_option<bool>( "CAPITALISM" ) ) {
-        right_print( _header_w, 2, 1, c_white, string_format( _( "Bank Balance: %s" ),
-                     format_money( _bank ) ) );
-        right_print( _header_w, 1, 1, c_white,
-                     string_format( _( "%s to balance trade with bank account balance" ),
-                                    colorize( _panes[_you]->get_ctxt()->get_desc(
-                                            trade_selector::ACTION_BANKBALANCE ),
-                                              c_yellow ) ) );
-    }
+    input_context const &ctxt = *_panes[_you]->get_ctxt();
+    const auto key = [&ctxt]( const std::string & action ) {
+        return colorize( ctxt.get_desc( action ), c_yellow );
+    };
 
+    std::string you = rml_ui::colored_rml( _( "You" ), c_white );
+    std::string bank_hint;
+    if( get_option<bool>( "CAPITALISM" ) ) {
+        you = rml_ui::colored_rml( string_format( _( "Bank Balance: %s" ), format_money( _bank ) ),
+                                   c_white ) + " · " + you;
+        bank_hint = string_format( _( "%s to balance trade with bank account balance" ),
+                                   key( trade_selector::ACTION_BANKBALANCE ) );
+    }
+    header.set_body(
+        "<div class=\"hbox\"><div class=\"grow\">" +
+        rml_ui::colored_rml( rname.empty() ? _parties[_trader]->get_name() : rname, c_white ) +
+        "</div><div class=\"grow center\">" + rml_ui::colored_rml( cost_str, trade_color ) +
+        "</div><div class=\"grow right\">" + you + "</div></div>"
+        "<div class=\"hbox\"><div class=\"grow\">" +
+        rml_ui::markup_to_rml( string_format( _( "%s to switch panes" ),
+                               key( trade_selector::ACTION_SWITCH_PANES ) ), c_white ) +
+        "</div><div class=\"grow center\">" +
+        rml_ui::markup_to_rml( string_format( _( "%s to auto balance with highlighted item" ),
+                               key( trade_selector::ACTION_AUTOBALANCE ) ), c_white ) +
+        "</div><div class=\"grow right\">" + rml_ui::markup_to_rml( bank_hint, c_white ) +
+        "</div></div>" );
 }

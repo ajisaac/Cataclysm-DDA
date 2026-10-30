@@ -21,35 +21,22 @@ void ensure_unifont_loaded( std::vector<std::string> &font_list )
     }
 }
 
-unsigned int font_config::imgui_config() const
-{
-    unsigned int ret = 0;
-    if( !antialiasing ) {
-        ret |= ImGuiFreeTypeLoaderFlags_Monochrome;
-        ret |= ImGuiFreeTypeLoaderFlags_MonoHinting;
-    }
-    if( hinting != std::nullopt ) {
-        ret |= *hinting;
-    }
-    return ret;
-}
-
-static std::optional<ImGuiFreeTypeLoaderFlags> hint_to_fonthint( std::string_view hinting )
+static std::optional<font_hinting> hint_to_fonthint( std::string_view hinting )
 {
     if( hinting == "Auto" ) {
-        return ImGuiFreeTypeLoaderFlags_ForceAutoHint;
+        return font_hinting::automatic;
     }
     if( hinting == "NoAuto" ) {
-        return ImGuiFreeTypeLoaderFlags_NoAutoHint;
+        return font_hinting::no_auto;
     }
     if( hinting == "Light" ) {
-        return ImGuiFreeTypeLoaderFlags_LightHinting;
+        return font_hinting::light;
     }
     if( hinting == "None" ) {
-        return ImGuiFreeTypeLoaderFlags_NoHinting;
+        return font_hinting::none;
     }
     if( hinting == "Bitmap" ) {
-        return ImGuiFreeTypeLoaderFlags_Bitmap;
+        return font_hinting::bitmap;
     }
     if( hinting == "Default" ) {
         return std::nullopt;
@@ -81,9 +68,9 @@ static void load_font_from_config( const JsonObject &config, const std::string &
         std::string path = config.get_string( key );
         // Migrate old font config files. Remove after 0.I
         if( path.find( "Terminus.ttf" ) != std::string::npos ) {
-            typefaces.emplace_back( path, ImGuiFreeTypeLoaderFlags_Bitmap );
+            typefaces.emplace_back( path, font_hinting::bitmap );
         }  else if( path.find( "Roboto-Medium.ttf" ) != std::string::npos ) {
-            typefaces.emplace_back( path, ImGuiFreeTypeLoaderFlags_LightHinting );
+            typefaces.emplace_back( path, font_hinting::light );
         } else {
             typefaces.emplace_back( path );
         }
@@ -101,9 +88,9 @@ static void load_font_from_config( const JsonObject &config, const std::string &
                 std::string path = value.get_string();
                 // Migrate old font config files. Remove after 0.I
                 if( path.find( "Terminus.ttf" ) != std::string::npos ) {
-                    typefaces.emplace_back( path, ImGuiFreeTypeLoaderFlags_Bitmap );
+                    typefaces.emplace_back( path, font_hinting::bitmap );
                 } else if( path.find( "Roboto-Medium.ttf" ) != std::string::npos ) {
-                    typefaces.emplace_back( path, ImGuiFreeTypeLoaderFlags_LightHinting );
+                    typefaces.emplace_back( path, font_hinting::light );
                 } else {
                     typefaces.emplace_back( path );
                 }
@@ -122,8 +109,8 @@ static void load_font_from_config( const JsonObject &config, const std::string &
         }
     } else if( key == "gui_typeface" &&
                !config.has_member( key ) ) { // More legacy migration, remove after 0.I
-        typefaces.emplace_back( "data/font/Roboto-Medium.ttf", ImGuiFreeTypeLoaderFlags_LightHinting );
-        typefaces.emplace_back( "data/font/Terminus.ttf", ImGuiFreeTypeLoaderFlags_Bitmap );
+        typefaces.emplace_back( "data/font/Roboto-Medium.ttf", font_hinting::light );
+        typefaces.emplace_back( "data/font/Terminus.ttf", font_hinting::bitmap );
         typefaces.emplace_back( "data/font/unifont.ttf" ); // default hinting
     } else {
         debugmsg( "Font specifiers must be an array, object, or string." );
@@ -163,16 +150,16 @@ static void write_font_config( JsonOut &json, const std::vector<font_config> &ty
             json.member( "hinting", "Default" );
         } else {
             switch( *config.hinting ) {
-                case ImGuiFreeTypeLoaderFlags_ForceAutoHint:
+                case font_hinting::automatic:
                     json.member( "hinting", "Auto" );
                     break;
-                case ImGuiFreeTypeLoaderFlags_Bitmap:
+                case font_hinting::bitmap:
                     json.member( "hinting", "Bitmap" );
                     break;
-                case ImGuiFreeTypeLoaderFlags_LightHinting:
+                case font_hinting::light:
                     json.member( "hinting", "Light" );
                     break;
-                case ImGuiFreeTypeLoaderFlags_NoHinting:
+                case font_hinting::none:
                     json.member( "hinting", "NoAuto" );
                     break;
                 default:

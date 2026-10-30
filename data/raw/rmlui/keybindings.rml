@@ -1,0 +1,95 @@
+<rml>
+<head>
+    <title>Keybindings</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* The legend, with the buttons that change how a row is picked
+           beside its first lines. */
+        #legend
+        {
+            white-space: pre-wrap;
+        }
+        #buttons
+        {
+            flex: 0 0 auto;
+            margin-left: 12dp;
+            text-align: right;
+        }
+        #buttons .button
+        {
+            display: block;
+        }
+        #filter-row
+        {
+            display: flex;
+            align-items: center;
+            margin: 6dp 0;
+        }
+        #filter-row .button
+        {
+            flex: 0 0 auto;
+        }
+        #filter
+        {
+            flex: 1 1 auto;
+        }
+        #filter-row.hidden
+        {
+            display: none;
+        }
+        /* Only the rows that fit are built; see keybindings_ui in
+           src/input_context.cpp. */
+        #body
+        {
+            overflow: hidden;
+            border-top: 1dp #39465c;
+            padding-top: 4dp;
+        }
+        .kb
+        {
+            display: flex;
+            align-items: center;
+        }
+        .kb .invlet
+        {
+            flex: 0 0 auto;
+            width: 1.5em;
+        }
+        .kb .custom
+        {
+            flex: 0 0 auto;
+            width: 1em;
+        }
+        .kb .name
+        {
+            flex: 1 1 auto;
+            overflow: hidden;
+        }
+        .kb .keys
+        {
+            flex: 0 0 auto;
+            width: 38%;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="filter-row" class="hidden">
+                <div id="filter-buttons" class="fixed"></div>
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="body"></div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+</body>
+</rml>

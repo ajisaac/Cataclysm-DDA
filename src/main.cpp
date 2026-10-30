@@ -61,7 +61,6 @@
 #include "translations.h"
 #include "type_id.h"
 #include "ui_manager.h"
-#include "cata_imgui.h"
 #if defined(MACOSX) || defined(__CYGWIN__)
 #   include <unistd.h> // getpid()
 #endif
@@ -157,7 +156,6 @@ void exit_handler( int s )
         signal( SIGABRT, SIG_DFL );
 #endif
 
-        imclient.reset();
         exit( exit_status );
     }
     inp_mngr.set_timeout( old_timeout );
@@ -790,14 +788,6 @@ int main( int argc, const char *argv[] )
         exit_handler( -999 );
     }
 
-    // Load the colors of ImGui to match the colors set by the user.
-    cataimgui::init_colors();
-
-    // set decimal point for float input widgets
-    // uses system locale, because that's what imgui uses to parse and display floats
-    ImGui::GetPlatformIO().Platform_LocaleDecimalPoint =
-        static_cast<unsigned char>( *localeconv()->decimal_point );
-
     // Override existing settings from cli  options
     if( cli.disable_ascii_art ) {
         get_options().get_option( "ENABLE_ASCII_ART" ).setValue( "false" );
@@ -835,8 +825,6 @@ int main( int argc, const char *argv[] )
     if( get_option<std::string>( "USE_LANG" ).empty() && !SystemLocale::Language().has_value() ) {
         display_buffer_draw_scope draw_scope;
         if( !display_buffer_scope_is_invalid() ) {
-            imclient->new_frame(); // we have to prime the pump, because of reasons
-            imclient->end_frame();
             const std::string lang = select_language();
             get_options().get_option( "USE_LANG" ).setValue( lang );
             set_language_from_options();

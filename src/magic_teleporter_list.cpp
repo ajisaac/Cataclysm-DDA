@@ -9,7 +9,6 @@
 
 #include "avatar.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "cata_utility.h"
 #include "character.h"
 #include "coordinates.h"
@@ -17,7 +16,6 @@
 #include "enums.h"
 #include "flexbuffer_json.h"
 #include "game.h"
-#include "imgui/imgui.h"
 #include "input_popup.h"
 #include "json.h"
 #include "map.h"
@@ -37,7 +35,7 @@ static const efftype_id effect_ignore_fall_damage( "ignore_fall_damage" );
 
 static bool popup_string( std::string &result, std::string &title )
 {
-    string_input_popup_imgui popup( -1 );
+    text_input_popup popup( -1 );
     popup.set_label( title );
     result = popup.query();
     return !popup.cancelled();
@@ -207,10 +205,10 @@ std::optional<tripoint_abs_omt> teleporter_list::choose_teleport_location()
     uilist teleport_selector;
     teleport_selector.desired_bounds = {
         -1.0,
-            -1.0,
-            std::max( 80, TERMX * 3 / 8 ) *ImGui::CalcTextSize( "X" ).x,
-            clamp( static_cast<int>( known_teleporters.size() ), 24, TERMY * 9 / 10 ) *ImGui::GetTextLineHeightWithSpacing(),
-        };
+        -1.0,
+        static_cast<float>( std::max( 80, TERMX * 3 / 8 ) ),
+        static_cast<float>( clamp( static_cast<int>( known_teleporters.size() ), 24, TERMY * 9 / 10 ) ),
+    };
 
     int index = 0;
     std::map<int, tripoint_abs_omt> index_pairs;

@@ -673,7 +673,7 @@ comp_list basecamp::get_mission_workers( const mission_id &miss_id, bool contain
 
 void basecamp::query_new_name( bool force )
 {
-    string_input_popup_imgui input_popup( 40 );
+    text_input_popup input_popup( 40 );
     bool done = false;
     bool need_input = true;
     std::string text;

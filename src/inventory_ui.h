@@ -41,10 +41,9 @@ class JsonObject;
 class JsonOut;
 class basecamp;
 class inventory_selector_preset;
+class inventory_ui_window;
 class item_stack;
-class string_input_popup;
 class tinymap;
-class ui_adaptor;
 template <typename E> struct enum_traits;
 
 enum class navigation_mode : int {
@@ -84,7 +83,6 @@ class inventory_entry
         std::string *cached_name = nullptr;
         std::string *cached_name_full = nullptr;
         unsigned int contents_count = 0;
-        size_t cached_denial_space = 0;
 
         inventory_entry() = default;
 
@@ -420,8 +418,14 @@ class inventory_column
         inventory_entry *find_by_invlet( int invlet ) const;
         inventory_entry *find_by_location( item_location const &loc, bool hidden = false ) const;
 
-        void draw( const catacurses::window &win, const point &p,
-                   std::vector< std::pair<inclusive_rectangle<point>, inventory_entry *>> &rect_entry_map );
+        /**
+         * The RML for the entries on the current page, as rows that carry
+         * `data-col` (this column's index in its selector) and `data-entry`
+         * (the entry's index), for finding the entry under the mouse.
+         */
+        std::string draw_rml( size_t column_index );
+        /** The entry at this index, as draw_rml() numbered it, or nullptr. */
+        inventory_entry *entry_at( size_t index );
 
         inventory_entry *add_entry( const inventory_entry &entry );
         void move_entries_to( inventory_column &dest );
@@ -762,7 +766,10 @@ class inventory_selector
         /** Entry has been changed. */
         void on_change( const inventory_entry &entry );
 
-        shared_ptr_fast<ui_adaptor> create_or_get_ui_adaptor();
+        /** The window this selector is shown in, made if it is not open. */
+        shared_ptr_fast<inventory_ui_window> create_or_get_ui();
+        /** Lay the columns out again before the window is next drawn. */
+        void invalidate_layout();
 
         size_t get_layout_width() const;
         size_t get_layout_height() const;
@@ -770,9 +777,11 @@ class inventory_selector
         /**
          * Query user for a string and return it.
          * @param val The default value to have set in the query prompt.
+         * @param prompt What is being asked for.
          * @return A tuple of a bool and string, bool is true if user confirmed.
          */
-        std::pair< bool, std::string > query_string( const std::string &val, bool end_with_toggle = false );
+        std::pair< bool, std::string > query_string( const std::string &val, const std::string &prompt,
+                bool end_with_toggle = false );
         /** Query the user for a filter and apply it. */
         void query_set_filter();
         /** Query the user for a count and return it. */
@@ -848,7 +857,8 @@ class inventory_selector
         /** @return an entry from all entries by its invlet. */
         inventory_entry *find_entry_by_invlet( int invlet ) const;
 
-        inventory_entry *find_entry_by_coordinate( const point &coordinate ) const;
+        /** @return the entry the mouse is over in the window, or nullptr. */
+        inventory_entry *find_entry_under_mouse() const;
         inventory_entry *find_entry_by_location( item_location &loc ) const;
 
         const std::vector<inventory_column *> &get_all_columns() const {
@@ -856,7 +866,6 @@ class inventory_selector
         }
         std::vector<inventory_column *> get_visible_columns() const;
 
-        std::vector< std::pair<inclusive_rectangle<point>, inventory_entry *>> rect_entry_map;
         /** Highlight the parent and contents of the highlighted item. */
         void highlight();
 
@@ -879,18 +888,20 @@ class inventory_selector
         bool force_single_column = false;
 
     private:
-        // These functions are called from resizing/redraw callbacks of ui_adaptor
-        // and should not be made protected or public.
+        friend class inventory_ui_window;
+
+        // These functions are called from the window's redraw and should not
+        // be made protected or public.
         void prepare_layout( size_t client_width, size_t client_height );
         void prepare_layout();
+        /** How many rows of entries fit in the window. */
+        int page_lines() const;
 
-        void resize_window( int width, int height );
         void refresh_window();
 
-        void draw_header( const catacurses::window &w ) const;
-        void draw_footer( const catacurses::window &w ) const;
-        void draw_columns( const catacurses::window &w );
-        void draw_frame( const catacurses::window &w ) const;
+        std::string header_rml() const;
+        std::string footer_rml() const;
+        std::string columns_rml();
         void _add_map_items( tripoint_bub_ms const &target, item_category const &cat, item_stack &items,
                              std::function<item_location( item & )> const &floc, bool add_efiles = false );
 
@@ -969,11 +980,13 @@ class inventory_selector
         const navigation_mode_data &get_navigation_data( navigation_mode m ) const;
 
     private:
-        catacurses::window w_inv;
-
-        weak_ptr_fast<ui_adaptor> ui;
-
-        std::unique_ptr<string_input_popup> spopup;
+        weak_ptr_fast<inventory_ui_window> ui;
+        /** Whether the columns are laid out, and for what. */
+        bool layout_valid = false;
+        point laid_out_term;
+        int laid_out_lines = 0;
+        /** The window's width, in terminal columns. */
+        int laid_out_width = 0;
 
         std::string title;
         std::string hint;
@@ -1229,15 +1242,11 @@ class unload_selector : public inventory_pick_selector
 class inventory_examiner : public inventory_selector
 {
     private:
-        int examine_window_scroll;
-        int scroll_item_info_lines;
-
         void force_max_window_size();
 
     protected:
         item_location parent_item;
         item_location selected_item;
-        catacurses::window w_examine;
         bool changes_made;
         bool parent_was_collapsed;
 
@@ -1247,7 +1256,6 @@ class inventory_examiner : public inventory_selector
                                      const inventory_selector_preset &preset = default_preset ) :
             inventory_selector( p, preset ) {
             force_max_window_size();
-            examine_window_scroll = 0;
             selected_item = item_location::nowhere;
             parent_item = std::move( item_to_look_inside );
             changes_made = false;
@@ -1274,15 +1282,14 @@ class inventory_examiner : public inventory_selector
         int cleanup() const;
 
         /**
-         * Draw the details of sitem in the w_examine window.
+         * The details of sitem, as RML for the detail pane.
          */
-        void draw_item_details( const item_location &sitem );
+        std::string item_details_rml( const item_location &sitem ) const;
 
         /**
          * Display the inventory_examiner menu.
          *
-         * Set up ui_adaptor callbacks for w_examine to draw the item detail pane and allow it to be resized.
-         * Figure out which item is currently selected and call draw_item_details.
+         * Open a detail pane beside the list, showing item_details_rml() of the selected item.
          * Pass essentially everything else back to inventory_selector for handling.
          * If the user changed something while looking through the item's contents (e.g. collapsing a
          * container), return EXAMINED_CONTENTS_WITH_CHANGES to inform the parent window.

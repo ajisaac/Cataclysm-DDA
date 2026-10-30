@@ -87,9 +87,7 @@
 #include "uistate.h"
 #include "ui_manager.h"
 #include "wcwidth.h"
-#include "cata_imgui.h"
 
-std::unique_ptr<cataimgui::client> imclient;
 
 #if defined(_WIN32)
 #   if 1 // HACK: Hack to prevent reordering of #include "platform_win.h" by IWYU
@@ -136,7 +134,6 @@ static bool need_invalidate_framebuffers = false;
 palette_array windowsPalette;
 
 static Font_Ptr font;
-static Font_Ptr gui_font;
 static Font_Ptr map_font;
 static Font_Ptr overmap_font;
 
@@ -389,35 +386,24 @@ static bool SetupRenderTarget()
     return true;
 }
 
-// NoMouseCursorChange blocks ImGui's per-frame SDL_ShowCursor, which
-// would otherwise re-show the cursor immediately after HideCursor.
 void refresh_mouse_config()
 {
     using cata::options::mouse;
-    ImGuiIO &io = ImGui::GetIO();
     if( !mouse.enabled ) {
-        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
         if( IsCursorVisible() ) {
             HideCursor();
         }
         return;
     }
 
-    io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     const std::string hide_mode = get_option<std::string>( "HIDE_CURSOR" );
     if( hide_mode == "show" ) {
-        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
         if( !IsCursorVisible() ) {
             ShowCursor();
         }
-    } else {
-        // "hide" and "hidekb" both require blocking ImGui's per-frame
-        // cursor show so the game can manage visibility directly.
-        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
-        if( hide_mode == "hide" && IsCursorVisible() ) {
-            HideCursor();
-        }
+    } else if( hide_mode == "hide" && IsCursorVisible() ) {
+        // "hidekb" hides it only on keyboard input
+        HideCursor();
     }
 }
 
@@ -793,7 +779,6 @@ static void WinCreate()
     shared_variant_pass = std::make_unique<cata_shader::variant_pass>( renderer.get() );
 #endif
 
-    imclient = std::make_unique<cataimgui::client>( renderer, window, geometry );
     rml_ui::init( renderer );
 
     renderer_coordinator.seed_renderer_policy( renderer_name );
@@ -823,7 +808,6 @@ static void WinDestroy()
     touch_joystick.reset();
 #endif
     rml_ui::shutdown();
-    imclient.reset();
     shutdown_sound();
     tilecontext.reset();
     gamepad::quit();
@@ -1524,7 +1508,7 @@ static void reset_context_tint_masks()
 static void release_font_roots()
 {
     for( Font_Ptr *f : {
-             &font, &gui_font, &map_font, &overmap_font
+             &font, &map_font, &overmap_font
          } ) {
         if( *f ) {
             ( *f )->release_gpu_resources();
@@ -1537,7 +1521,7 @@ static void release_font_roots()
 static void rebuild_font_roots()
 {
     for( Font_Ptr *f : {
-             &font, &gui_font, &map_font, &overmap_font
+             &font, &map_font, &overmap_font
          } ) {
         if( *f ) {
             ( *f )->rebuild_for_renderer( renderer );
@@ -1743,7 +1727,6 @@ recipe_result renderer_resource_coordinator::recipe_device_reset()
         return { recipe_outcome::failure };
     }
 #endif
-    loading_ui::release_gpu_resources();
     display_buffer.reset();
     if( check_pause_abort() ) {
         return { recipe_outcome::failure };
@@ -1756,9 +1739,6 @@ recipe_result renderer_resource_coordinator::recipe_device_reset()
         return { recipe_outcome::failure };
     }
 #endif
-    if( imclient ) {
-        imclient->destroy_backend_device_objects();
-    }
     rml_ui::release_gpu_resources();
     // SDL3 documents a device reset as invalidating every texture, so cached
     // atlas bundles are rejected by the texture-generation bump and replayed
@@ -1809,7 +1789,7 @@ recipe_result renderer_resource_coordinator::recipe_device_reset()
 }
 
 // Install a renderer and its display target, falling back to software if the
-// requested backend fails. ImGui and variant_pass re-attach to whichever
+// requested backend fails. RmlUi and variant_pass re-attach to whichever
 // renderer wins; on success the installed backend is recorded and the instance
 // and texture generations bump. False only if even software fails.
 bool renderer_resource_coordinator::install_renderer_with_fallback()
@@ -1820,13 +1800,8 @@ bool renderer_resource_coordinator::install_renderer_with_fallback()
         if( check_pause_abort() ) {
             return false;
         }
-        if( imclient ) {
-            imclient->shutdown_renderer_backend();
-            if( check_pause_abort() ) {
-                return false;
-            }
-            imclient->shutdown_platform_backend();
-        }
+        // RmlUi's textures go with the renderer that made them
+        rml_ui::release_gpu_resources();
         if( check_pause_abort() ) {
             return false;
         }
@@ -1845,13 +1820,7 @@ bool renderer_resource_coordinator::install_renderer_with_fallback()
         if( check_pause_abort() ) {
             return false;
         }
-        if( imclient ) {
-            imclient->init_platform_backend();
-            if( check_pause_abort() ) {
-                return false;
-            }
-            imclient->init_renderer_backend();
-        }
+        rml_ui::rebind_renderer( renderer );
         if( check_pause_abort() ) {
             return false;
         }
@@ -1942,7 +1911,6 @@ recipe_result renderer_resource_coordinator::recipe_device_lost()
         return { recipe_outcome::failure };
     }
 #endif
-    loading_ui::release_gpu_resources();
     display_buffer.reset();
     if( check_pause_abort() ) {
         return { recipe_outcome::failure };
@@ -5008,12 +4976,12 @@ bool is_string_input( input_context &ctx )
 
 // True when the soft keyboard is legitimately wanted for this context and CDDA
 // must not auto-hide it or convert keystrokes to quick shortcuts: a legacy
-// string-input/curses context, an inventory quantity field, or a focused ImGui
-// text widget (ImGui drives SDL text-input itself; CDDA defers to it).
+// string-input/curses context, an inventory quantity field, or a focused RmlUi
+// text field.
 static bool android_wants_text_input( input_context &ctx )
 {
     return is_string_input( ctx ) || ctx.allow_text_entry
-           || cataimgui::client::want_text_input();
+           || rml_ui::text_field_focused();
 }
 
 int get_key_event_from_string( const std::string &str )
@@ -5112,7 +5080,6 @@ void handle_finger_input( uint32_t ticks )
         }
     }
     if( last_input.type != input_event_t::error ) {
-        imclient->process_cata_input( last_input );
     }
 }
 
@@ -5504,18 +5471,10 @@ static void CheckMessages()
 
     using cata::options::mouse;
 
-    int imgui_buf_w = 0;
-    int imgui_buf_h = 0;
-    get_display_buffer_dims( &imgui_buf_w, &imgui_buf_h );
     while( SDL_PollEvent( &ev ) ) {
-        // Build a display_buffer-coord copy for ImGui and gameplay
-        // consumers. The raw `ev` stays in window coordinates so android
-        // shortcut and joystick hit-tests see the same domain SDL emitted.
-        SDL_Event ev_display = ev;
-        convert_event_to_display_buffer_coords( &ev_display );
-        imclient->process_input( &ev_display, imgui_buf_w, imgui_buf_h );
-        // RmlUi scales window coordinates to its own output-pixel space, so it
-        // takes the raw event.
+        // The event stays in window coordinates, so android shortcut and
+        // joystick hit-tests see the same domain SDL emitted. RmlUi scales
+        // window coordinates to its own output-pixel space itself.
         rml_ui::process_event( ev );
 
         // Window events: SDL3 flattens the SDL_WINDOWEVENT+subtype to top-level events.
@@ -5654,11 +5613,10 @@ static void CheckMessages()
                     if( GetKeysym( ev ).sym == SDLK_AC_BACK ) {
                         if( ticks - ac_back_down_time <= static_cast<uint32_t>
                             ( get_option<int>( "ANDROID_INITIAL_DELAY" ) ) ) {
-                            if( cataimgui::client::want_text_input() ) {
-                                // ImGui owns the keyboard while a text widget is
-                                // focused. Defocus it so ImGui releases text input
-                                // and the keyboard dismisses.
-                                cataimgui::client::clear_text_focus();
+                            if( rml_ui::text_field_focused() ) {
+                                // A focused RmlUi text field takes the keyboard.
+                                // Defocus it so the keyboard dismisses.
+                                rml_ui::blur_text_field();
                             } else if( IsTextInputActive( ::window.get() ) ) {
                                 focus_aware_stop_text_input();
                             } else {
@@ -5767,25 +5725,15 @@ static void CheckMessages()
                     }
                     if( get_option<std::string>( "HIDE_CURSOR" ) == "show" ||
                         get_option<std::string>( "HIDE_CURSOR" ) == "hidekb" ) {
-                        // Cursor visibility must run even when ImGui owns
-                        // the mouse, otherwise hidekb keeps the cursor
-                        // hidden over ImGui windows after keyboard use.
                         if( !IsCursorVisible() ) {
                             ShowCursor();
                         }
-                        // Only feed game's mouseover/highlight pipeline when
-                        // ImGui isn't already consuming the event.
-                        if( !cataimgui::client::want_capture_mouse() ) {
-                            last_input = input_event( MouseInput::Move, input_event_t::mouse );
-                        }
+                        last_input = input_event( MouseInput::Move, input_event_t::mouse );
                     }
                     break;
 
                 case CATA_MOUSEBUTTONDOWN:
                     if( ! mouse.enabled ) {
-                        break;
-                    }
-                    if( cataimgui::client::want_capture_mouse() ) {
                         break;
                     }
                     switch( ev.button.button ) {
@@ -5808,9 +5756,6 @@ static void CheckMessages()
                     if( ! mouse.enabled ) {
                         break;
                     }
-                    if( cataimgui::client::want_capture_mouse() ) {
-                        break;
-                    }
                     switch( ev.button.button ) {
                         case SDL_BUTTON_LEFT:
                             last_input = input_event( MouseInput::LeftButtonReleased, input_event_t::mouse );
@@ -5829,9 +5774,6 @@ static void CheckMessages()
 
                 case CATA_MOUSEWHEEL:
                     if( ! mouse.enabled ) {
-                        break;
-                    }
-                    if( cataimgui::client::want_capture_mouse() ) {
                         break;
                     }
                     if( ev.wheel.y > 0 ) {
@@ -6351,8 +6293,6 @@ void catacurses::init_interface()
 
     font = std::make_unique<FontFallbackList>( renderer, pixel_format, fl.fontwidth, fl.fontheight,
             windowsPalette, fl.typeface, fl.fontsize, fl.fontblending );
-    gui_font = std::make_unique<FontFallbackList>( renderer, pixel_format, fl.fontwidth, fl.fontheight,
-               windowsPalette, fl.gui_typeface, fl.fontsize, fl.fontblending );
     map_font = std::make_unique<FontFallbackList>( renderer, pixel_format, fl.map_fontwidth,
                fl.map_fontheight,
                windowsPalette, fl.map_typeface, fl.map_fontsize, fl.fontblending );
@@ -6361,7 +6301,6 @@ void catacurses::init_interface()
                    windowsPalette, fl.overmap_typeface, fl.overmap_fontsize, fl.fontblending );
     stdscr = newwin( get_terminal_height(), get_terminal_width(), point::zero );
     //newwin calls `new WINDOW`, and that will throw, but not return nullptr.
-    imclient->load_fonts( gui_font, font, windowsPalette, fl.gui_typeface, fl.typeface );
 #if defined(__ANDROID__)
     // Make sure we initialize preview_terminal_width/height to sensible values
     preview_terminal_width = TERMINAL_WIDTH * fontwidth;
@@ -6406,7 +6345,6 @@ void catacurses::endwin()
     fartilecontext.reset();
     overmap_tilecontext.reset();
     font.reset();
-    gui_font.reset();
     map_font.reset();
     overmap_font.reset();
     ui_manager::reset();
@@ -6481,9 +6419,9 @@ input_event input_manager::get_input_event( const keyboard_mode preferred_keyboa
 
     if( needupdate ) {
         refresh_display();
-    } else if( ui_adaptor::has_imgui() || ui_adaptor::has_rml() ) {
-        // ImGui and RmlUi do not mark the display for update the way catacurses
-        // windows do, so a redraw that only changed them still needs presenting.
+    } else if( ui_adaptor::has_rml() ) {
+        // RmlUi does not mark the display for update the way catacurses
+        // windows do, so a redraw that only changed it still needs presenting.
         try_sdl_update();
     }
 
@@ -6517,7 +6455,7 @@ input_event input_manager::get_input_event( const keyboard_mode preferred_keyboa
 
     // Sample the raw mouse position (window coords) and convert into
     // display_buffer coords so canonical gameplay picking matches the
-    // domain ImGui and tile draws use.
+    // domain tile draws use.
     {
         point raw;
         GetMouseState( &raw.x, &raw.y );

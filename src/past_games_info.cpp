@@ -110,7 +110,7 @@ void past_games_info::ensure_loaded( bool show_popup )
 
     loaded_ = true;
 
-    // TODO: Had to guard UI refresh because it corrupted imgui window stack
+    // TODO: Had to guard UI refresh because it corrupted the UI stack
     if( show_popup ) {
         static_popup popup;
         popup.message( "%s", _( "Please wait while past game data loads…" ) );

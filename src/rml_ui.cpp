@@ -1,13 +1,18 @@
 #include "rml_ui.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <map>
 #include <memory>
+#include <system_error>
 #include <string>
 #include <vector>
 
 #include <RmlUi/Core.h>
 
+#include "cata_path.h"
 #include "debug.h"
+#include "filesystem.h"
 #include "path_info.h"
 #include "rml_markup.h"
 #include "rml_render_sdl.h"
@@ -137,10 +142,19 @@ int mouse_button_index( int sdl_button )
     }
 }
 
+// Where the mouse last was, in context pixels
+point mouse_position;
+// Keys pressed since rml_ui::take_key_presses() last took them
+std::vector<rml_ui::key_press> key_presses;
+// When the last frame was drawn, in ms, and the time between frames, smoothed
+uint64_t last_frame_ms = 0;
+float smoothed_frame_ms = 0.f;
+
 void move_mouse( float x, float y, int modifiers )
 {
-    context->ProcessMouseMove( static_cast<int>( x * pixel_density ),
-                               static_cast<int>( y * pixel_density ), modifiers );
+    mouse_position = point( static_cast<int>( x * pixel_density ),
+                            static_cast<int>( y * pixel_density ) );
+    context->ProcessMouseMove( mouse_position.x, mouse_position.y, modifiers );
 }
 
 // Only the keys RmlUi acts on by default: text editing, navigation, and the
@@ -219,6 +233,42 @@ const Rml::SharedPtr<Rml::StyleSheetContainer> &get_palette_sheet()
     return palette_sheet;
 }
 
+// The player's theme, if any, and whether it has been looked for yet.
+Rml::SharedPtr<Rml::StyleSheetContainer> theme_sheet;
+bool theme_loaded = false;
+
+const Rml::SharedPtr<Rml::StyleSheetContainer> &get_theme_sheet()
+{
+    if( !theme_loaded ) {
+        theme_loaded = true;
+        theme_sheet.reset();
+        const cata_path theme_path = PATH_INFO::config_dir_path() / "rmlui_theme.rcss";
+        if( file_exist( theme_path ) ) {
+            theme_sheet = Rml::Factory::InstanceStyleSheetFile(
+                              theme_path.get_unrelative_path().generic_u8string() );
+        }
+    }
+    return theme_sheet;
+}
+
+// Each document's own stylesheet, before the palette and theme were added,
+// so a new theme can be applied over it.
+std::map<const rml_ui::document *, Rml::SharedPtr<Rml::StyleSheetContainer>> own_sheets;
+
+void apply_shared_sheets( const rml_ui::document *owner, Rml::ElementDocument *doc )
+{
+    const Rml::SharedPtr<Rml::StyleSheetContainer> &own = own_sheets[owner];
+    Rml::SharedPtr<Rml::StyleSheetContainer> combined = own;
+    for( const Rml::SharedPtr<Rml::StyleSheetContainer> *sheet : {
+             &get_palette_sheet(), &get_theme_sheet()
+         } ) {
+        if( *sheet ) {
+            combined = combined ? combined->CombineStyleSheetContainer( **sheet ) : *sheet;
+        }
+    }
+    doc->SetStyleSheetContainer( combined );
+}
+
 } // namespace
 
 namespace rml_ui
@@ -288,6 +338,9 @@ void shutdown()
     pass_documents.clear();
     applied_order.clear();
     palette_sheet.reset();
+    theme_sheet.reset();
+    theme_loaded = false;
+    own_sheets.clear();
     context = nullptr;
     saved_renderer = nullptr;
     pixel_density = 1.f;
@@ -329,6 +382,14 @@ void process_event( const SDL_Event &ev )
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
         case SDL_EVENT_TEXT_INPUT: {
+            if( ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat ) {
+                // Bounded, in case nothing takes them
+                if( key_presses.size() >= 64 ) {
+                    key_presses.erase( key_presses.begin() );
+                }
+                key_presses.push_back( { static_cast<int>( ev.key.key ),
+                                         ( modifiers & Rml::Input::KM_CTRL ) != 0 } );
+            }
             // See the header: keys only reach RmlUi while the document with
             // its focus is the top UI.
             Rml::Element *focus = context->GetFocusElement();
@@ -371,8 +432,8 @@ void end_redraw_pass()
         return;
     }
     // A document that was not redrawn this pass is below a disable_uis_below
-    // adaptor, so it should not be seen; nor should one under a catacurses or
-    // ImGui UI, which RmlUi would otherwise draw over.
+    // adaptor, so it should not be seen; nor should one under a catacurses
+    // UI, which RmlUi would otherwise draw over.
     for( document *doc : live_documents ) {
         Rml::ElementDocument *element = doc->get();
         const bool wanted = std::find( pass_documents.begin(), pass_documents.end(),
@@ -421,6 +482,14 @@ void render()
 
     sync_to_window();
 
+    const uint64_t now = SDL_GetTicks();
+    if( last_frame_ms != 0 ) {
+        const float frame_ms = static_cast<float>( now - last_frame_ms );
+        smoothed_frame_ms = smoothed_frame_ms <= 0.f ? frame_ms :
+                            smoothed_frame_ms * 0.9f + frame_ms * 0.1f;
+    }
+    last_frame_ms = now;
+
     // draw_window() sets logical presentation to the display_buffer size when
     // scaling_factor > 1 (sdltiles.cpp) and never resets it, so by the time we
     // draw, renderer coordinates are buffer-space and get scaled up to the
@@ -462,6 +531,33 @@ void release_gpu_resources()
     }
 }
 
+void rebind_renderer( const SDL_Renderer_Ptr &renderer )
+{
+    if( !initialised || !renderer ) {
+        return;
+    }
+    saved_renderer = renderer.get();
+    render_interface->set_renderer( renderer.get() );
+}
+
+static Rml::Element *focused_text_field()
+{
+    Rml::Element *focus = initialised && context ? context->GetFocusElement() : nullptr;
+    return rmlui_dynamic_cast<Rml::ElementFormControlInput *>( focus ) != nullptr ? focus : nullptr;
+}
+
+bool text_field_focused()
+{
+    return focused_text_field() != nullptr;
+}
+
+void blur_text_field()
+{
+    if( Rml::Element *focus = focused_text_field() ) {
+        focus->Blur();
+    }
+}
+
 bool active()
 {
     return initialised;
@@ -476,12 +572,29 @@ point viewport_px()
     return point( size.x, size.y );
 }
 
+float frame_time_ms()
+{
+    return smoothed_frame_ms;
+}
+
+point mouse_px()
+{
+    return mouse_position;
+}
+
+std::vector<key_press> take_key_presses()
+{
+    std::vector<key_press> taken;
+    taken.swap( key_presses );
+    return taken;
+}
+
 float dp_ratio()
 {
     return context ? context->GetDensityIndependentPixelRatio() : 1.f;
 }
 
-float imgui_px_scale()
+float display_buffer_scale()
 {
     int buffer_w = 0;
     int buffer_h = 0;
@@ -491,6 +604,27 @@ float imgui_px_scale()
         return 1.f;
     }
     return static_cast<float>( std::max( 1, std::min( view.x / buffer_w, view.y / buffer_h ) ) );
+}
+
+void reload_theme()
+{
+    theme_loaded = false;
+    for( document *live : live_documents ) {
+        if( live->doc ) {
+            apply_shared_sheets( live, live->doc );
+        }
+    }
+}
+
+std::string file_source( const cata_path &file )
+{
+    std::error_code ec;
+    const std::filesystem::path documents = std::filesystem::absolute(
+            ( PATH_INFO::datadir_path() / "raw" / "rmlui" ).get_unrelative_path(), ec );
+    const std::filesystem::path target = std::filesystem::absolute( file.get_unrelative_path(), ec );
+    const std::filesystem::path relative = std::filesystem::relative( target, documents, ec );
+    // Another drive, on Windows: an absolute path with a drive letter works there
+    return ( ec || relative.empty() ? target : relative ).generic_u8string();
 }
 
 document::document( const std::string &file )
@@ -508,11 +642,12 @@ document::document( const std::string &file )
     live_documents.push_back( this );
 
     // Every document gets the palette, so game text converted by
-    // markup_to_rml() shows in its own colors without each document asking.
-    if( const Rml::SharedPtr<Rml::StyleSheetContainer> &palette = get_palette_sheet() ) {
-        const Rml::StyleSheetContainer *own = doc->GetStyleSheetContainer();
-        doc->SetStyleSheetContainer( own ? own->CombineStyleSheetContainer( *palette ) : palette );
+    // markup_to_rml() shows in its own colors without each document asking,
+    // and then the theme, which can override any of it.
+    if( const Rml::StyleSheetContainer *own = doc->GetStyleSheetContainer() ) {
+        own_sheets[this] = own->CombineStyleSheetContainer( Rml::StyleSheetContainer() );
     }
+    apply_shared_sheets( this, doc );
 
     // Draws nothing into the display buffer, so it has no position: being
     // redrawn is just how this document learns it is still enabled, and where
@@ -534,6 +669,7 @@ document::~document()
     forget_document( live_documents, this );
     forget_document( pass_documents, this );
     forget_document( applied_order, this );
+    own_sheets.erase( this );
     if( doc ) {
         // Detaches from the context immediately, so it is not drawn again.
         doc->Close();
@@ -577,6 +713,63 @@ int document::hovered_child( const std::string &id ) const
         }
     }
     return -1;
+}
+
+bool document::hovering( const std::string &id ) const
+{
+    if( !doc || !context ) {
+        return false;
+    }
+    for( Rml::Element *element = context->GetHoverElement(); element;
+         element = element->GetParentNode() ) {
+        if( element->GetOwnerDocument() != doc ) {
+            return false;
+        }
+        if( element->GetId() == id ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<box> document::element_box( const std::string &id ) const
+{
+    Rml::Element *element = doc ? doc->GetElementById( id ) : nullptr;
+    if( !element ) {
+        return std::nullopt;
+    }
+    const Rml::Vector2f offset = element->GetAbsoluteOffset( Rml::BoxArea::Border );
+    const Rml::Vector2f size = element->GetBox().GetSize( Rml::BoxArea::Border );
+    return box{ offset.x, offset.y, size.x, size.y };
+}
+
+std::string document::hovered_attribute( const std::string &name ) const
+{
+    if( !doc || !context ) {
+        return std::string();
+    }
+    for( Rml::Element *element = context->GetHoverElement(); element;
+         element = element->GetParentNode() ) {
+        if( element->GetOwnerDocument() != doc ) {
+            return std::string();
+        }
+        if( const Rml::Variant *value = element->GetAttribute( name ) ) {
+            return value->Get<Rml::String>();
+        }
+    }
+    return std::string();
+}
+
+void document::scroll_into_view( const std::string &id )
+{
+    if( !doc ) {
+        return;
+    }
+    doc->UpdateDocument();
+    if( Rml::Element *element = doc->GetElementById( id ) ) {
+        element->ScrollIntoView( Rml::ScrollIntoViewOptions( Rml::ScrollAlignment::Nearest,
+                                 Rml::ScrollAlignment::Nearest ) );
+    }
 }
 
 void document::set_attribute( const std::string &id, const std::string &name,

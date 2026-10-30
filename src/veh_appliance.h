@@ -67,7 +67,7 @@ class veh_app_interact
         std::vector<std::function<void()>> app_actions;
         // Input menu in the lower portion. Handles input and draws the list
         // of possible actions. Various stats about the appliance are added
-        // to the uilist header by draw_info_imgui_header();
+        // to the uilist header by draw_info_header();
         uilist imenu;
 
         /**
@@ -80,7 +80,7 @@ class veh_app_interact
         /**
          * Creates the header text, representing the appliance's usage info.
         */
-        std::string draw_info_imgui_header( map &here );
+        std::string draw_info_header( map &here );
         /**
          * Populates the list of available actions for this appliance. The action display
          * names are stored as uilist entries in imenu, and the associated functions

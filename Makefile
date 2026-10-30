@@ -173,7 +173,6 @@ CHKJSON_BIN = $(BUILD_PREFIX)chkjson
 BINDIST_DIR = $(BUILD_PREFIX)bindist
 BUILD_DIR = $(CURDIR)
 SRC_DIR = src
-IMGUI_DIR = $(SRC_DIR)/third-party/imgui
 LOCALIZE = 1
 ASTYLE_BINARY = astyle
 
@@ -1088,18 +1087,6 @@ ASTYLE_SOURCES := $(sort \
 # Third party sources should not be astyle'd
 SOURCES += $(THIRD_PARTY_SOURCES)
 C_SOURCES += $(THIRD_PARTY_C_SOURCES)
-
-IMGUI_SOURCES = $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_demo.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/imgui_stdlib.cpp $(IMGUI_DIR)/imgui_tables.cpp $(IMGUI_DIR)/imgui_widgets.cpp
-ifeq ($(SDL), 1)
-	IMGUI_SOURCES += $(IMGUI_DIR)/imgui_freetype.cpp
-	ifeq ($(SDL3), 1)
-		IMGUI_SOURCES += $(IMGUI_DIR)/imgui_impl_sdl3.cpp $(IMGUI_DIR)/imgui_impl_sdlrenderer3.cpp
-	else
-		IMGUI_SOURCES += $(IMGUI_DIR)/imgui_impl_sdl2.cpp $(IMGUI_DIR)/imgui_impl_sdlrenderer2.cpp
-	endif
-endif
-
-SOURCES += $(IMGUI_SOURCES)
 
 CPP_SOURCES := $(filter %.cpp,$(SOURCES))
 CC_SOURCES := $(filter %.cc,$(SOURCES))

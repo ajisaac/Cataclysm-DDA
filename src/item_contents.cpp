@@ -14,14 +14,12 @@
 #include <type_traits>
 
 #include "avatar.h"
-#include "cata_imgui.h"
 #include "character.h"
 #include "color.h"
 #include "debug.h"
 #include "enum_conversions.h"
 #include "enums.h"
 #include "flat_set.h"
-#include "imgui/imgui.h"
 #include "input.h"
 #include "input_context.h"
 #include "input_enums.h"
@@ -455,8 +453,8 @@ bool pocket_favorite_callback::key( const input_context &ctxt, const input_event
         }
         return true;
     } else if( action == "FAV_SAVE_PRESET" ) {
-        string_input_popup_imgui popup( 34, selected_pocket->settings.get_preset_name().value_or( "" ),
-                                        _( "Enter a preset name:" ) );
+        text_input_popup popup( 34, selected_pocket->settings.get_preset_name().value_or( "" ),
+                                _( "Enter a preset name:" ) );
         const std::string &rval = popup.query();
         if( !popup.cancelled() ) {
             // Check if already exists

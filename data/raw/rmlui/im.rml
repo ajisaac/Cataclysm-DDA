@@ -1,0 +1,268 @@
+<rml>
+<head>
+    <title>Window</title>
+    <link type="text/rcss" href="common.rcss"/>
+    <link type="text/rcss" href="window.rcss"/>
+    <style>
+        /* The building blocks of rml_ui::im windows (src/rml_im.h), whose
+           RML is built immediate-mode style on every redraw. */
+
+        /* A line of items, as ImGui laid them out; SameLine() keeps adding
+           to one. */
+        .im-line
+        {
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            align-items: center;
+            min-height: 22dp;
+        }
+        .im-gap
+        {
+            flex: 0 0 auto;
+            width: 8dp;
+        }
+        .im-spring
+        {
+            flex: 1 1 0;
+        }
+        .im-text
+        {
+            flex: 0 1 auto;
+            min-width: 0;
+            white-space: pre-wrap;
+        }
+        .im-grow
+        {
+            flex: 1 1 auto;
+        }
+        .im-label
+        {
+            flex: 0 0 auto;
+            margin-left: 6dp;
+            white-space: nowrap;
+        }
+        .button.small
+        {
+            padding: 0 6dp;
+            margin: 0 2dp;
+        }
+        .im-check
+        {
+            display: flex;
+            align-items: center;
+        }
+        .im-check:hover
+        {
+            color: #ffffff;
+        }
+        .im-tree
+        {
+            margin: 1dp 0;
+        }
+        .im-septext
+        {
+            margin: 8dp 0 4dp 0;
+            padding-bottom: 2dp;
+            border-bottom: 1dp #39465c;
+            color: #d8d2c0;
+        }
+
+        /* Text fields, sliders and combos */
+        input.text
+        {
+            padding: 2dp 6dp;
+        }
+        input.range
+        {
+            height: 14dp;
+            min-width: 80dp;
+        }
+        input.range slidertrack
+        {
+            height: 4dp;
+            margin-top: 5dp;
+            background-color: #232b3a;
+            border-radius: 2dp;
+        }
+        input.range sliderbar
+        {
+            width: 10dp;
+            height: 14dp;
+            background-color: #5a7aa8;
+            border-radius: 3dp;
+        }
+        input.range sliderbar:hover
+        {
+            background-color: #7a9ac8;
+        }
+        input.range sliderarrowdec, input.range sliderarrowinc
+        {
+            width: 0;
+            height: 0;
+        }
+        .im-combo
+        {
+            display: flex;
+            padding: 2dp 6dp;
+            background-color: #0d1017;
+            border: 1dp #39465c;
+            border-radius: 4dp;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .im-combo:hover
+        {
+            border-color: #5a7aa8;
+        }
+        .im-combo-arrow
+        {
+            margin-left: auto;
+            padding-left: 8dp;
+            color: #8d96a6;
+        }
+
+        /* Children and tables that scroll on their own */
+        .im-child
+        {
+            display: block;
+            overflow-y: auto;
+            min-height: 0;
+        }
+        .im-child.im-fill
+        {
+            flex: 1 1 0;
+        }
+        .im-child.im-border
+        {
+            border: 1dp #39465c;
+            padding: 4dp;
+        }
+        .im-table th
+        {
+            white-space: nowrap;
+        }
+        .im-table th[data-imc]:hover
+        {
+            color: #ffffff;
+        }
+        .im-table.im-rowbg tr:nth-child(even) td
+        {
+            background-color: #161b26;
+        }
+        .im-table tr.line, .im-table tr.line td
+        {
+            height: 22dp;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+
+        /* Tabs */
+        .im-tabs
+        {
+            display: flex;
+            flex-wrap: wrap;
+            margin: 6dp 0;
+            border-bottom: 1dp #39465c;
+        }
+        .im-tab-body
+        {
+            display: block;
+        }
+
+        /* Popups, menus and tooltips, over everything else */
+        #im-overlay
+        {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .im-popup
+        {
+            position: absolute;
+            display: block;
+            min-width: 140dp;
+            max-height: 60%;
+            overflow-y: auto;
+            padding: 6dp;
+            background-color: #1a202cfa;
+            border: 1dp #5a7aa8;
+            border-radius: 4dp;
+            pointer-events: auto;
+        }
+        .im-modal-back
+        {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #00000080;
+            pointer-events: auto;
+        }
+        .im-popup.im-modal
+        {
+            position: relative;
+            min-width: 280dp;
+            padding: 12dp;
+        }
+        .im-tooltip
+        {
+            position: absolute;
+            max-width: 480dp;
+            padding: 4dp 8dp;
+            background-color: #0d1017f5;
+            border: 1dp #39465c;
+            border-radius: 3dp;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        /* Scrollbars, so long panes show where they are */
+        scrollbarvertical
+        {
+            width: 8dp;
+            margin-left: 2dp;
+        }
+        scrollbarvertical slidertrack
+        {
+            background-color: #141821;
+        }
+        scrollbarvertical sliderbar
+        {
+            min-height: 20dp;
+            background-color: #39465c;
+            border-radius: 4dp;
+        }
+        scrollbarvertical sliderarrowdec, scrollbarvertical sliderarrowinc
+        {
+            width: 0;
+            height: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div id="window">
+            <div id="titlebar">
+                <div id="title"></div>
+                <div id="close" data-action="QUIT">×</div>
+            </div>
+            <div id="tabs" class="hidden"></div>
+            <div id="header" class="hidden"></div>
+            <div id="body"></div>
+            <div id="filter-row" class="hidden">
+                <input type="text" id="filter" disabled="disabled"/>
+            </div>
+            <div id="footer" class="hidden"></div>
+        </div>
+    </div>
+    <div id="im-overlay"></div>
+</body>
+</rml>

@@ -546,8 +546,14 @@ inline void full_screen_popup( const char *mes, Args &&... args )
 /*@}*/
 std::string format_item_info( const std::vector<iteminfo> &vItemDisplay,
                               const std::vector<iteminfo> &vItemCompare );
-void display_item_info( const std::vector<iteminfo> &vItemDisplay,
-                        const std::vector<iteminfo> &vItemCompare );
+/**
+ * Item info as RML, the RmlUi counterpart of format_item_info(), with tables
+ * and separators drawn as such. Show it inside an element with
+ * `white-space: pre-wrap`, such as window.rcss's `.pre`, so that text keeps
+ * the spaces it is laid out with.
+ */
+std::string item_info_rml( const std::vector<iteminfo> &vItemDisplay,
+                           const std::vector<iteminfo> &vItemCompare );
 
 // the extra data that item_info needs to draw
 struct item_info_data {
@@ -1260,7 +1266,7 @@ bool service_mode2_upload_interrupt( atlas_upload_interrupt interrupt,
                                      uint64_t instance_before );
 
 /**
- * Sync OS cursor and ImGui cursor-handling flags with the current
+ * Sync the OS cursor with the current
  * ENABLE_MOUSE and HIDE_CURSOR option values. No-op in curses builds.
  */
 void refresh_mouse_config();

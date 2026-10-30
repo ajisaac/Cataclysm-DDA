@@ -495,8 +495,3 @@ labels:
     matcher:
       files:
         - "data/mods/dda_tutorial/**"
-
-  - label: "ImGui"
-    matcher:
-      files:
-        - "src/third-party/imgui/**"

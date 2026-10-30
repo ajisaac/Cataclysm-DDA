@@ -1,10 +1,7 @@
 #include "surroundings_menu.h"
 
 #include <algorithm>
-#include <cfloat>
 #include <functional>
-#include <imgui/imgui.h>
-#include <imgui/imgui_internal.h>
 #include <iterator>
 #include <list>
 #include <memory>
@@ -25,7 +22,6 @@
 #include "game_constants.h"
 #include "game_inventory.h"
 #include "game_ui.h"
-#include "imgui/imgui.h"
 #include "input_popup.h"
 #include "item.h"
 #include "item_contents.h"
@@ -40,9 +36,9 @@
 #include "output.h"
 #include "panels.h"
 #include "point.h"
+#include "rml_markup.h"
 #include "safemode_ui.h"
 #include "string_formatter.h"
-#include "text.h"
 #include "translation.h"
 #include "type_id.h"
 #include "uistate.h"
@@ -166,6 +162,8 @@ static void move_selection( T &data, const int amount )
 tab_data::tab_data( const std::string &title ) : title( title )
 {
     ctxt = input_context( "LIST_SURROUNDINGS" );
+    // For clicking rows, tabs and buttons
+    ctxt.register_action( "SELECT" );
     ctxt.register_action( "NEXT_TAB" );
     ctxt.register_action( "PREV_TAB" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
@@ -183,13 +181,13 @@ tab_data::tab_data( const std::string &title ) : title( title )
     ctxt.register_action( "SORT" );
     ctxt.register_action( "TRAVEL_TO" );
 
-    // arbitrary timeout to fix imgui input weirdness
+    // arbitrary timeout, so the list keeps up with the map as it changes
     ctxt.set_timeout( 10 );
 }
 
 void tab_data::filter_popup()
 {
-    string_input_popup_imgui popup( 70, filter, filter_title );
+    text_input_popup popup( 70, filter, filter_title );
     popup.set_description( filter_description, c_white, true );
     popup.set_label( filter_label );
     popup.set_identifier( filter_identifier );
@@ -386,7 +384,7 @@ void item_tab_data::priority_popup( bool high )
                                    list_items_filter_history_help();
     std::string prio_id = high ? "list_item_priority" : "list_item_downvote";
 
-    string_input_popup_imgui popup( 70, prio_filter, prio_title );
+    text_input_popup popup( 70, prio_filter, prio_title );
     popup.set_description( prio_description, c_white, true );
     popup.set_label( _( "Filter: " ) );
     popup.set_identifier( prio_id );
@@ -722,8 +720,7 @@ void terfurn_tab_data::set_filter_active( bool active ) const
 
 surroundings_menu::surroundings_menu( avatar &you, map &m, std::optional<tripoint_bub_ms> &path_end,
                                       int min_width ) :
-    cataimgui::window( "SURROUNDINGS", ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoNavInputs ),
+    rml_ui::window( std::string() ),
     you( you ),
     path_end( path_end ),
     stored_view_offset( you.view_offset ),
@@ -734,13 +731,21 @@ surroundings_menu::surroundings_menu( avatar &you, map &m, std::optional<tripoin
     terfurn_data.init( you, m );
 
     highlight_new = get_option<bool>( "HIGHLIGHT_UNREAD_ITEMS" );
-    switch_tab = uistate.vmenu_tab;
+    selected_tab = uistate.vmenu_tab;
     if( you.get_wielded_item() ) {
         max_gun_range = you.get_wielded_item()->gun_range( &you );
     }
+
+    // The list scrolls, then the buttons, then the info about the selected
+    // entry, which scrolls on its own
+    set_body_scrolls( false );
+    set_body( "<div id=\"list\" class=\"scroll grow\"></div>"
+              "<div id=\"buttons\" class=\"fixed\" style=\"margin-top: 6dp;\"></div>"
+              "<div id=\"info\" class=\"scroll pre\" style=\"flex: 0 0 auto; margin-top: 6dp; "
+              "padding-top: 6dp; border-top: 1dp #39465c;\"></div>" );
 }
 
-cataimgui::bounds surroundings_menu::get_bounds()
+void surroundings_menu::on_redraw()
 {
     // todo: calculate correct creature text width
     int wanted_width = dist_width + std::max( { item_data.get_max_entity_width(),
@@ -749,39 +754,59 @@ cataimgui::bounds surroundings_menu::get_bounds()
     width = clamp( wanted_width, min_width, TERMX / 3 );
     // hide info panel on small displays
     info_height = TERMY > 30 ? std::min( 25, TERMY / 2 ) : 0;
-    return {
-        static_cast<float>( ImGui::GetMainViewport()->Size.x - str_width_to_pixels( width ) ),
-        0.f,
-        static_cast<float>( str_width_to_pixels( width ) ),
-        static_cast<float>( str_height_to_pixels( TERMY ) )
-    };
-}
+    // Down the right of the screen
+    set_position( rml_ui::term_width( TERMX - width ), "0" );
+    set_size( rml_ui::term_width( width ), "100%" );
+    set_class( "window", "hidden", hide_ui );
 
-void surroundings_menu::draw_controls()
-{
-    hide_if_hidden();
-    if( ImGui::BeginTabBar( "surroundings tabs" ) ) {
-        draw_item_tab();
-        draw_monster_tab();
-        draw_terfurn_tab();
-        ImGui::EndTabBar();
+    set_tabs( {
+        string_format( "%s (%d)", item_data.title, item_data.filtered_list.size() ),
+        string_format( "%s (%d)", monster_data.title, monster_data.filtered_list.size() ),
+        string_format( "%s (%d)", terfurn_data.title, terfurn_data.filtered_list.size() )
+    }, static_cast<size_t>( selected_tab ) );
+
+    switch( selected_tab ) {
+        case surroundings_menu_tab_enum::items:
+            show( "list", item_list_rml() );
+            break;
+        case surroundings_menu_tab_enum::monsters:
+            show( "list", monster_list_rml() );
+            break;
+        case surroundings_menu_tab_enum::terfurn:
+            show( "list", terfurn_list_rml() );
+            break;
+        default:
+            break;
+    }
+    show( "buttons", hotkey_buttons_rml( get_selected_data() ) );
+
+    if( info_height != shown_info_height ) {
+        shown_info_height = info_height;
+        set_class( "info", "hidden", info_height <= 0 );
+        set_attribute( "info", "style", info_height > 0 ?
+                       "flex: 0 0 " + rml_ui::term_height( info_height ) +
+                       "; margin-top: 6dp; padding-top: 6dp; border-top: 1dp #39465c;" : std::string() );
+    }
+    const void *before = shown_info_entity;
+    if( info_height > 0 && show( "info", info_rml() ) && before != shown_info_entity ) {
+        // A new selection's info starts at its top
+        scroll( "info", rml_ui::scroll::top );
+    }
+
+    if( auto_scroll ) {
+        auto_scroll = false;
+        scroll_into_view( "selected-row" );
     }
 }
 
-// todo: get ImGui::SeparatorText to draw on the entire row of a table
-void surroundings_menu::draw_category_separator( const std::string &category,
-        std::string &last_category, int target_col )
+std::string surroundings_menu::category_separator_rml( const std::string &category,
+        std::string &last_category )
 {
-    if( !category.empty() && ( category != last_category ) ) {
-        last_category = category;
-        do {
-            ImGui::TableNextColumn();
-            target_col--;
-        } while( target_col >= 0 );
-        cataimgui::draw_colored_text( category, c_magenta );
-
+    if( category.empty() || category == last_category ) {
+        return std::string();
     }
-    ImGui::TableNextRow();
+    last_category = category;
+    return "<div class=\"pre\">" + rml_ui::markup_to_rml( category, c_magenta ) + "</div>";
 }
 
 // return content_newness based on if item is known and nested items are known
@@ -802,366 +827,243 @@ static void mark_items_read_rec( const item *itm )
     }
 }
 
-static float total_cell_padding( int num_cols )
+// The start of a row of a list: clicking it selects it, and the selected one
+// can be brought into view
+static std::string row_start_rml( int row, bool is_selected )
 {
-    return ImGui::GetStyle().CellPadding.x * ( num_cols - 1 ) * 2;
+    return string_format( "<div %sclass=\"item hbox%s\" data-row=\"%d\">",
+                          is_selected ? "id=\"selected-row\" " : "", is_selected ? " selected" : "", row );
 }
 
-static float total_menu_padding( bool has_info )
+// A cell of a row, `width` characters wide, or taking what is left for 0
+static std::string cell_rml( const std::string &content_rml, int width = 0 )
 {
-    return ImGui::GetStyle().ItemSpacing.y * ( has_info ? 2 : 1 );
+    return width > 0 ?
+           "<div class=\"fixed nowrap\" style=\"width: " + rml_ui::chars_width( width ) + ";\">" +
+           content_rml + "</div>" :
+           "<div class=\"grow nowrap\" style=\"overflow: hidden;\">" + content_rml + "</div>";
 }
 
-void surroundings_menu::draw_item_tab()
+template<typename T>
+static void validate_selection( T &data )
 {
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
-    if( switch_tab == surroundings_menu_tab_enum::items ) {
-        flags = ImGuiTabItemFlags_SetSelected;
-        switch_tab = surroundings_menu_tab_enum::num_tabs;
-    }
-
-    std::string title = string_format( "%s (%d)", item_data.title, item_data.filtered_list.size() );
-
-    if( ImGui::BeginTabItem( title.c_str(), nullptr, flags ) ) {
-        selected_tab = surroundings_menu_tab_enum::items;
-
-        // list of nearby items
-        float list_height = ImGui::GetContentRegionAvail().y - str_height_to_pixels( info_height ) -
-                            get_hotkey_buttons_height( &item_data ) - total_menu_padding( info_height > 0 );
-        const int num_cols = 2;
-        if( ImGui::BeginTable( "items", num_cols, ImGuiTableFlags_ScrollY, ImVec2( 0.0f, list_height ) ) ) {
-            float dir_col_width = str_width_to_pixels( dist_width );
-            float name_col_width = ImGui::GetContentRegionAvail().x - dir_col_width -
-                                   total_cell_padding( num_cols );
-            ImGui::TableSetupColumn( "it_name",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, name_col_width );
-            ImGui::TableSetupColumn( "it_distance",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, dir_col_width );
-            if( item_data.item_list.empty() ) {
-                item_data.selected_entry = nullptr;
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( _( "You don't see any items around you!" ), c_white );
-            } else {
-                if( item_data.filtered_list.empty() ) {
-                    item_data.selected_entry = nullptr;
-                } else if( !item_data.selected_entry ||
-                           std::find( item_data.filtered_list.begin(), item_data.filtered_list.end(),
-                                      item_data.selected_entry ) == item_data.filtered_list.end() ) {
-                    item_data.selected_entry = item_data.filtered_list.front();
-                }
-                std::string last_category;
-                int entry_no = 0;
-                for( map_entity_stack<item> *it : item_data.filtered_list ) {
-                    bool prio_plus = entry_no <= item_data.priority_plus_end;
-                    bool prio_minus = entry_no >= item_data.priority_minus_start;
-                    if( item_data.sort_flags & surroundings_menu_sort_flags::CATEGORY ) {
-                        std::string cat = prio_plus ? _( "HIGH PRIORITY" ) : prio_minus ? _( "LOW PRIORITY" ) :
-                                          it->get_category();
-                        draw_category_separator( cat, last_category, 0 );
-                    }
-                    bool is_selected = it == item_data.selected_entry;
-                    const item *itm = it->get_selected_entity();
-
-                    ImGui::TableNextColumn();
-                    ImGui::PushID( entry_no++ );
-                    ImGui::Selectable( "", &is_selected,
-                                       ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns, ImVec2( 0, 0 ) );
-                    if( is_selected ) {
-                        if( auto_scroll || item_data.selected_entry != it ) {
-                            // auto_scroll marks keyboard selected items
-                            // the other condition marks mouse selected items
-                            mark_items_read_rec( itm );
-                        }
-                        if( auto_scroll ) {
-                            ImGui::SetScrollHereY();
-                            auto_scroll = false;
-                        }
-                        item_data.selected_entry = it;
-                        center_selection( *item_data.get_selected_pos(), width );
-                    }
-                    ImGui::SameLine( 0, 0 );
-                    ImGui::PopID();
-                    nc_color color = prio_plus ? c_yellow : prio_minus ? c_red : it->get_selected_color();
-                    std::string newness_str;
-                    nc_color newness_color;
-                    if( highlight_new ) {
-                        switch( check_items_newness( itm ) ) {
-                            case content_newness::NEW:
-                                newness_str = item_new_str;
-                                newness_color = item_new_col;
-                                break;
-                            case content_newness::MIGHT_BE_HIDDEN:
-                                newness_str = item_maybe_new_str;
-                                newness_color = item_maybe_new_col;
-                                break;
-                            default:
-                                break;
-                        }
-                    }
-
-                    // FIXME: these width calculations somehow work for variable-width but not for fixed-width fonts
-                    ImFont *font = ImGui::GetFont();
-                    float newness_str_width = font->CalcTextSizeA( ImGui::GetFontSize(), FLT_MAX, 0.f,
-                                              newness_str.c_str() ).x + ImGui::GetStyle().ItemSpacing.x;
-                    float wrap_width_subtrahend = ImGui::GetStyle().ItemSpacing.x;
-                    if( highlight_new && !newness_str.empty() ) {
-                        wrap_width_subtrahend += newness_str_width;
-                    }
-
-                    cataimgui::TextColoredTrimmed( it->get_selected_name(), color,
-                                                   name_col_width - wrap_width_subtrahend );
-
-                    if( highlight_new && !newness_str.empty() ) {
-                        ImGui::SameLine( name_col_width - newness_str_width, -1.0f );
-                        cataimgui::draw_colored_text( newness_str, newness_color );
-                    }
-
-                    ImGui::TableNextColumn();
-                    cataimgui::draw_colored_text( it->get_selected_distance_string(), c_light_gray );
-                }
-            }
-            ImGui::EndTable();
-        }
-
-        draw_hotkey_buttons( &item_data );
-
-        if( info_height > 0 ) {
-            if( ImGui::BeginChild( "info", ImVec2( 0.0f, str_height_to_pixels( info_height ) ) ) ) {
-                if( item_data.selected_entry ) {
-                    const item *selected_it = item_data.selected_entry->get_selected_entity();
-                    // using table so we get a (pre-styled) header
-                    if( ImGui::BeginTable( "iteminfo", 1, ImGuiTableFlags_None, ImVec2( 0.0f, 0.0f ) ) ) {
-                        ImGui::TableSetupColumn( remove_color_tags( selected_it->display_name() ).c_str() );
-                        ImGui::TableHeadersRow();
-                        ImGui::TableNextColumn();
-                        // embedded info for selected item
-                        std::vector<iteminfo> selected_info;
-                        std::vector<iteminfo> dummy_info;
-                        selected_it->info( true, selected_info );
-                        item_info_data dummy( "", "", selected_info, dummy_info );
-                        dummy.without_getch = true;
-                        dummy.without_border = true;
-                        cataimgui::set_scroll( info_scroll );
-                        display_item_info( dummy.get_item_display(), dummy.get_item_compare() );
-                        ImGui::EndTable();
-                    }
-                }
-            }
-            ImGui::EndChild();
-        }
-        ImGui::EndTabItem();
+    if( data.filtered_list.empty() ) {
+        data.selected_entry = nullptr;
+    } else if( !data.selected_entry ||
+               std::find( data.filtered_list.begin(), data.filtered_list.end(),
+                          data.selected_entry ) == data.filtered_list.end() ) {
+        data.selected_entry = data.filtered_list.front();
     }
 }
 
-void surroundings_menu::draw_monster_tab()
+std::string surroundings_menu::item_list_rml()
 {
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
-    if( switch_tab == surroundings_menu_tab_enum::monsters ) {
-        flags = ImGuiTabItemFlags_SetSelected;
-        switch_tab = surroundings_menu_tab_enum::num_tabs;
+    if( item_data.item_list.empty() ) {
+        item_data.selected_entry = nullptr;
+        return rml_ui::colored_rml( _( "You don't see any items around you!" ), c_white );
     }
+    validate_selection( item_data );
 
-    std::string title = string_format( "%s (%d)", monster_data.title,
-                                       monster_data.filtered_list.size() );
-
-    if( ImGui::BeginTabItem( title.c_str(), nullptr, flags ) ) {
-        selected_tab = surroundings_menu_tab_enum::monsters;
-
-        // list of nearby monsters
-        float list_height = ImGui::GetContentRegionAvail().y - str_height_to_pixels( info_height ) -
-                            get_hotkey_buttons_height( &monster_data ) - total_menu_padding( info_height > 0 );
-        const int num_cols = 5;
-        if( ImGui::BeginTable( "monsters", num_cols, ImGuiTableFlags_ScrollY, ImVec2( 0.0f,
-                               list_height ) ) ) {
-            float sees_col_width = str_width_to_pixels( 1 );
-            float health_col_width = str_width_to_pixels( 5 );
-            float att_col_width = str_width_to_pixels( 12 );
-            float dir_col_width = str_width_to_pixels( dist_width );
-            float name_col_width = ImGui::GetContentRegionAvail().x - sees_col_width - health_col_width -
-                                   att_col_width - dir_col_width - total_cell_padding( num_cols );
-            ImGui::TableSetupColumn( "mon_sees",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, sees_col_width );
-            ImGui::TableSetupColumn( "mon_name",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, name_col_width );
-            ImGui::TableSetupColumn( "mon_health",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, health_col_width );
-            ImGui::TableSetupColumn( "mon_attitude",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, att_col_width );
-            ImGui::TableSetupColumn( "mon_distance",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, dir_col_width );
-            if( monster_data.filtered_list.empty() ) {
-                monster_data.selected_entry = nullptr;
-            } else if( !monster_data.selected_entry ||
-                       std::find( monster_data.filtered_list.begin(), monster_data.filtered_list.end(),
-                                  monster_data.selected_entry ) == monster_data.filtered_list.end() ) {
-                monster_data.selected_entry = monster_data.filtered_list.front();
-            }
-            std::string last_category;
-            int entry_no = 0;
-            for( map_entity_stack<Creature> *it : monster_data.filtered_list ) {
-                if( monster_data.sort_flags & surroundings_menu_sort_flags::CATEGORY ) {
-                    draw_category_separator( it->get_category(), last_category, 1 );
-                }
-                bool is_selected = it == monster_data.selected_entry;
-                ImGui::TableNextColumn();
-                ImGui::PushID( entry_no++ );
-                ImGui::Selectable( "", &is_selected,
-                                   ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns, ImVec2( 0, 0 ) );
-                if( is_selected ) {
-                    if( auto_scroll ) {
-                        ImGui::SetScrollHereY();
-                        auto_scroll = false;
-                    }
-                    monster_data.selected_entry = it;
-                    center_selection( *monster_data.get_selected_pos(), width );
-                }
-                ImGui::SameLine( 0, 0 );
-                ImGui::PopID();
-                const Creature *mon = it->get_selected_entity();
-                const Character &you = get_player_character();
-                const bool inattentive = you.has_trait( trait_INATTENTIVE );
-                bool sees = mon->sees( get_map(), you ) && !inattentive;
-                cataimgui::draw_colored_text( sees ? "!" : " ", c_yellow );
-
-                ImGui::TableNextColumn();
-                nc_color mon_color = it->get_selected_color();
-                cataimgui::TextColoredTrimmed( it->get_selected_name(), mon_color );
-
-                ImGui::TableNextColumn();
-                nc_color hp_color = c_white;
-                std::string hp_text;
-
-                if( mon->is_monster() ) {
-                    mon->as_monster()->get_HP_Bar( hp_color, hp_text );
-                } else {
-                    std::tie( hp_text, hp_color ) = get_hp_bar( mon->as_npc()->hp_percentage(), 100 );
-                }
-                const int bar_max_width = 5;
-                const int bar_width = utf8_width( hp_text );
-                if( bar_width < bar_max_width ) {
-                    hp_text += "<color_c_white>";
-                    for( int i = bar_max_width - bar_width; i > 0; i-- ) {
-                        hp_text += ".";
-                    }
-                    hp_text += "</color>";
-                }
-                cataimgui::draw_colored_text( hp_text, hp_color );
-
-                ImGui::TableNextColumn();
-                nc_color att_color;
-                std::string att_text;
-
-                if( inattentive ) {
-                    att_text = _( "Unknown" );
-                    att_color = c_yellow;
-                } else if( mon->is_monster() ) {
-                    const std::pair<std::string, nc_color> att = mon->as_monster()->get_attitude();
-                    att_text = att.first;
-                    att_color = att.second;
-                } else if( mon->is_npc() ) {
-                    att_text = npc_attitude_name( mon->as_npc()->get_attitude() );
-                    att_color = mon->symbol_color();
-                }
-                cataimgui::TextColoredTrimmed( att_text, att_color );
-
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( it->get_selected_distance_string(), c_light_gray );
-            }
-            ImGui::EndTable();
+    std::string rml;
+    std::string last_category;
+    int entry_no = 0;
+    for( map_entity_stack<item> *it : item_data.filtered_list ) {
+        bool prio_plus = entry_no <= item_data.priority_plus_end;
+        bool prio_minus = entry_no >= item_data.priority_minus_start;
+        if( item_data.sort_flags & surroundings_menu_sort_flags::CATEGORY ) {
+            std::string cat = prio_plus ? _( "HIGH PRIORITY" ) : prio_minus ? _( "LOW PRIORITY" ) :
+                              it->get_category();
+            rml += category_separator_rml( cat, last_category );
+        }
+        const bool is_selected = it == item_data.selected_entry;
+        const item *itm = it->get_selected_entity();
+        if( is_selected ) {
+            center_selection( *item_data.get_selected_pos(), width );
         }
 
-        draw_hotkey_buttons( &monster_data );
-
-        // embedded info for selected monster
-        if( info_height > 0 ) {
-            if( ImGui::BeginChild( "info", ImVec2( 0.0f, str_height_to_pixels( info_height ) ) ) ) {
-                if( monster_data.selected_entry ) {
-                    draw_extended_description(
-                        monster_data.selected_entry->get_selected_entity()->extended_description(), info_scroll );
-                }
+        nc_color color = prio_plus ? c_yellow : prio_minus ? c_red : it->get_selected_color();
+        std::string newness_rml;
+        if( highlight_new ) {
+            switch( check_items_newness( itm ) ) {
+                case content_newness::NEW:
+                    newness_rml = rml_ui::colored_rml( item_new_str, item_new_col );
+                    break;
+                case content_newness::MIGHT_BE_HIDDEN:
+                    newness_rml = rml_ui::colored_rml( item_maybe_new_str, item_maybe_new_col );
+                    break;
+                default:
+                    break;
             }
-            ImGui::EndChild();
         }
-        ImGui::EndTabItem();
+
+        rml += row_start_rml( entry_no, is_selected ) +
+               cell_rml( rml_ui::markup_to_rml( it->get_selected_name(), color ) );
+        if( !newness_rml.empty() ) {
+            rml += "<div class=\"fixed\" style=\"margin: 0 6dp;\">" + newness_rml + "</div>";
+        }
+        rml += cell_rml( rml_ui::colored_rml( it->get_selected_distance_string(), c_light_gray ),
+                         dist_width ) + "</div>";
+        entry_no++;
     }
+    return rml;
 }
 
-void surroundings_menu::draw_terfurn_tab()
+std::string surroundings_menu::monster_list_rml()
 {
-    ImGuiTabItemFlags_ flags = ImGuiTabItemFlags_None;
-    if( switch_tab == surroundings_menu_tab_enum::terfurn ) {
-        flags = ImGuiTabItemFlags_SetSelected;
-        switch_tab = surroundings_menu_tab_enum::num_tabs;
+    validate_selection( monster_data );
+
+    std::string rml;
+    std::string last_category;
+    int entry_no = 0;
+    for( map_entity_stack<Creature> *it : monster_data.filtered_list ) {
+        if( monster_data.sort_flags & surroundings_menu_sort_flags::CATEGORY ) {
+            rml += category_separator_rml( it->get_category(), last_category );
+        }
+        const bool is_selected = it == monster_data.selected_entry;
+        if( is_selected ) {
+            center_selection( *monster_data.get_selected_pos(), width );
+        }
+        const Creature *mon = it->get_selected_entity();
+        const Character &you = get_player_character();
+        const bool inattentive = you.has_trait( trait_INATTENTIVE );
+        bool sees = mon->sees( get_map(), you ) && !inattentive;
+
+        nc_color hp_color = c_white;
+        std::string hp_text;
+
+        if( mon->is_monster() ) {
+            mon->as_monster()->get_HP_Bar( hp_color, hp_text );
+        } else {
+            std::tie( hp_text, hp_color ) = get_hp_bar( mon->as_npc()->hp_percentage(), 100 );
+        }
+        const int bar_max_width = 5;
+        const int bar_width = utf8_width( hp_text );
+        if( bar_width < bar_max_width ) {
+            hp_text += "<color_c_white>";
+            for( int i = bar_max_width - bar_width; i > 0; i-- ) {
+                hp_text += ".";
+            }
+            hp_text += "</color>";
+        }
+
+        nc_color att_color;
+        std::string att_text;
+
+        if( inattentive ) {
+            att_text = _( "Unknown" );
+            att_color = c_yellow;
+        } else if( mon->is_monster() ) {
+            const std::pair<std::string, nc_color> att = mon->as_monster()->get_attitude();
+            att_text = att.first;
+            att_color = att.second;
+        } else if( mon->is_npc() ) {
+            att_text = npc_attitude_name( mon->as_npc()->get_attitude() );
+            att_color = mon->symbol_color();
+        }
+
+        rml += row_start_rml( entry_no, is_selected ) +
+               cell_rml( rml_ui::colored_rml( sees ? "!" : " ", c_yellow ), 1 ) +
+               cell_rml( rml_ui::markup_to_rml( it->get_selected_name(), it->get_selected_color() ) ) +
+               cell_rml( "<span class=\"mono\">" + rml_ui::markup_to_rml( hp_text, hp_color ) + "</span>", 5 ) +
+               cell_rml( rml_ui::markup_to_rml( att_text, att_color ), 12 ) +
+               cell_rml( rml_ui::colored_rml( it->get_selected_distance_string(), c_light_gray ),
+                         dist_width ) + "</div>";
+        entry_no++;
     }
+    return rml;
+}
 
-    std::string title = string_format( "%s (%d)", terfurn_data.title,
-                                       terfurn_data.filtered_list.size() );
+std::string surroundings_menu::terfurn_list_rml()
+{
+    validate_selection( terfurn_data );
 
-    if( ImGui::BeginTabItem( title.c_str(), nullptr, flags ) ) {
-        selected_tab = surroundings_menu_tab_enum::terfurn;
-
-        float list_height = ImGui::GetContentRegionAvail().y - str_height_to_pixels( info_height ) -
-                            get_hotkey_buttons_height( &terfurn_data ) - total_menu_padding( info_height > 0 );
-        const int num_cols = 2;
-        if( ImGui::BeginTable( "terfurn", num_cols, ImGuiTableFlags_ScrollY, ImVec2( 0.0f,
-                               list_height ) ) ) {
-            float dir_col_width = str_width_to_pixels( dist_width );
-            float name_col_width = ImGui::GetContentRegionAvail().x - dir_col_width -
-                                   total_cell_padding( num_cols );
-            ImGui::TableSetupColumn( "tf_name",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, name_col_width );
-            ImGui::TableSetupColumn( "tf_distance",
-                                     ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, dir_col_width );
-            if( terfurn_data.filtered_list.empty() ) {
-                terfurn_data.selected_entry = nullptr;
-            } else if( !terfurn_data.selected_entry ||
-                       std::find( terfurn_data.filtered_list.begin(), terfurn_data.filtered_list.end(),
-                                  terfurn_data.selected_entry ) == terfurn_data.filtered_list.end() ) {
-                terfurn_data.selected_entry = terfurn_data.filtered_list.front();
-            }
-            std::string last_category;
-            int entry_no = 0;
-            for( map_entity_stack<map_data_common_t> *it : terfurn_data.filtered_list ) {
-                if( terfurn_data.sort_flags & surroundings_menu_sort_flags::CATEGORY ) {
-                    draw_category_separator( it->get_category(), last_category, 0 );
-                }
-                bool is_selected = it == terfurn_data.selected_entry;
-                ImGui::TableNextColumn();
-                ImGui::PushID( entry_no++ );
-                ImGui::Selectable( "", &is_selected,
-                                   ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns, ImVec2( 0, 0 ) );
-                if( is_selected ) {
-                    if( auto_scroll ) {
-                        ImGui::SetScrollHereY();
-                        auto_scroll = false;
-                    }
-                    terfurn_data.selected_entry = it;
-                    center_selection( *terfurn_data.get_selected_pos(), width );
-                }
-                ImGui::SameLine( 0, 0 );
-                ImGui::PopID();
-                nc_color color = it->get_selected_color();
-                cataimgui::TextColoredTrimmed( it->get_selected_name(), color );
-
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( it->get_selected_distance_string(), c_light_gray );
-            }
-            ImGui::EndTable();
+    std::string rml;
+    std::string last_category;
+    int entry_no = 0;
+    for( map_entity_stack<map_data_common_t> *it : terfurn_data.filtered_list ) {
+        if( terfurn_data.sort_flags & surroundings_menu_sort_flags::CATEGORY ) {
+            rml += category_separator_rml( it->get_category(), last_category );
         }
-
-        draw_hotkey_buttons( &terfurn_data );
-
-        // embedded info for selected terrain/furniture
-        if( info_height > 0 ) {
-            if( ImGui::BeginChild( "info", ImVec2( 0.0f, str_height_to_pixels( info_height ) ) ) ) {
-                if( terfurn_data.selected_entry ) {
-                    draw_extended_description(
-                        terfurn_data.selected_entry->get_selected_entity()->extended_description(), info_scroll );
-                }
-            }
-            ImGui::EndChild();
+        const bool is_selected = it == terfurn_data.selected_entry;
+        if( is_selected ) {
+            center_selection( *terfurn_data.get_selected_pos(), width );
         }
-        ImGui::EndTabItem();
+        rml += row_start_rml( entry_no, is_selected ) +
+               cell_rml( rml_ui::markup_to_rml( it->get_selected_name(), it->get_selected_color() ) ) +
+               cell_rml( rml_ui::colored_rml( it->get_selected_distance_string(), c_light_gray ),
+                         dist_width ) + "</div>";
+        entry_no++;
+    }
+    return rml;
+}
+
+const std::string &surroundings_menu::info_rml()
+{
+    const void *entity = nullptr;
+    switch( selected_tab ) {
+        case surroundings_menu_tab_enum::items:
+            entity = item_data.selected_entry ? item_data.selected_entry->get_selected_entity() : nullptr;
+            break;
+        case surroundings_menu_tab_enum::monsters:
+            entity = monster_data.selected_entry ? monster_data.selected_entry->get_selected_entity() :
+                     nullptr;
+            break;
+        case surroundings_menu_tab_enum::terfurn:
+            entity = terfurn_data.selected_entry ? terfurn_data.selected_entry->get_selected_entity() :
+                     nullptr;
+            break;
+        default:
+            break;
+    }
+    if( entity == shown_info_entity ) {
+        return shown_info;
+    }
+    shown_info_entity = entity;
+    shown_info.clear();
+    if( entity == nullptr ) {
+        return shown_info;
+    }
+    if( selected_tab == surroundings_menu_tab_enum::items ) {
+        // embedded info for selected item
+        const item *selected_it = item_data.selected_entry->get_selected_entity();
+        std::vector<iteminfo> selected_info;
+        std::vector<iteminfo> dummy_info;
+        selected_it->info( true, selected_info );
+        shown_info = "<h3>" + rml_ui::markup_to_rml( selected_it->display_name() ) + "</h3>" +
+                     item_info_rml( selected_info, dummy_info );
+    } else if( selected_tab == surroundings_menu_tab_enum::monsters ) {
+        shown_info = extended_description_rml(
+                         monster_data.selected_entry->get_selected_entity()->extended_description() );
+    } else {
+        shown_info = extended_description_rml(
+                         terfurn_data.selected_entry->get_selected_entity()->extended_description() );
+    }
+    return shown_info;
+}
+
+void surroundings_menu::select_row( int row )
+{
+    switch( selected_tab ) {
+        case surroundings_menu_tab_enum::items:
+            if( static_cast<size_t>( row ) < item_data.filtered_list.size() ) {
+                if( item_data.selected_entry != item_data.filtered_list[row] ) {
+                    mark_items_read_rec( item_data.filtered_list[row]->get_selected_entity() );
+                }
+                item_data.selected_entry = item_data.filtered_list[row];
+            }
+            break;
+        case surroundings_menu_tab_enum::monsters:
+            if( static_cast<size_t>( row ) < monster_data.filtered_list.size() ) {
+                monster_data.selected_entry = monster_data.filtered_list[row];
+            }
+            break;
+        case surroundings_menu_tab_enum::terfurn:
+            if( static_cast<size_t>( row ) < terfurn_data.filtered_list.size() ) {
+                terfurn_data.selected_entry = terfurn_data.filtered_list[row];
+            }
+            break;
+        default:
+            break;
     }
 }
 
@@ -1201,11 +1103,18 @@ void surroundings_menu::execute()
 
         ui_manager::redraw();
 
-        std::string action;
-        if( has_button_action() ) {
-            action = get_button_action();
-        } else {
-            action = get_selected_data()->ctxt.handle_input();
+        std::string action = get_selected_data()->ctxt.handle_input();
+        if( action == "SELECT" ) {
+            const int tab = hovered_tab();
+            const int row = hovered_index( "data-row" );
+            if( tab >= 0 ) {
+                selected_tab = static_cast<surroundings_menu_tab_enum>( tab );
+                continue;
+            } else if( row >= 0 ) {
+                select_row( row );
+                continue;
+            }
+            action = resolve_click( action );
         }
 
         if( action == "UP" ) {
@@ -1217,15 +1126,13 @@ void surroundings_menu::execute()
         } else if( action == "PAGE_DOWN" ) {
             select_page_down();
         } else if( action == "SCROLL_ITEM_INFO_UP" ) {
-            info_scroll = cataimgui::scroll::page_up;
+            scroll( "info", rml_ui::scroll::page_up );
         } else if( action == "SCROLL_ITEM_INFO_DOWN" ) {
-            info_scroll = cataimgui::scroll::page_down;
+            scroll( "info", rml_ui::scroll::page_down );
         } else if( action == "NEXT_TAB" ) {
-            switch_tab = selected_tab;
-            ++switch_tab;
+            ++selected_tab;
         } else if( action == "PREV_TAB" ) {
-            switch_tab = selected_tab;
-            --switch_tab;
+            --selected_tab;
         } else if( action == "fire" ) {
             tab_data *data = get_selected_data();
             if( data->fire_at_selected( you, max_gun_range, stored_view_offset ) ) {
@@ -1281,8 +1188,6 @@ void surroundings_menu::get_filter()
     tab_data *data = get_selected_data();
     data->filter_popup();
     data->apply_filter();
-    // FIXME: hack to prevent tab switching after filtering
-    switch_tab = selected_tab;
 }
 
 void surroundings_menu::reset_filter()
@@ -1290,8 +1195,6 @@ void surroundings_menu::reset_filter()
     tab_data *data = get_selected_data();
     data->reset_filter();
     data->apply_filter();
-    // FIXME: hack to prevent tab switching after filtering
-    switch_tab = selected_tab;
 }
 
 void surroundings_menu::get_filter_priority( bool high )
@@ -1399,7 +1302,6 @@ void surroundings_menu::select_prev()
     auto_scroll = true;
     tab_data *selected = get_selected_data();
     selected->move_selection( -1 );
-    info_scroll = cataimgui::scroll::begin;
 }
 
 void surroundings_menu::select_next()
@@ -1407,7 +1309,6 @@ void surroundings_menu::select_next()
     auto_scroll = true;
     tab_data *selected = get_selected_data();
     selected->move_selection( 1 );
-    info_scroll = cataimgui::scroll::begin;
 }
 
 void surroundings_menu::select_page_up()
@@ -1415,7 +1316,6 @@ void surroundings_menu::select_page_up()
     auto_scroll = true;
     tab_data *selected = get_selected_data();
     selected->move_selection( -page_scroll );
-    info_scroll = cataimgui::scroll::begin;
 }
 
 void surroundings_menu::select_page_down()
@@ -1423,7 +1323,6 @@ void surroundings_menu::select_page_down()
     auto_scroll = true;
     tab_data *selected = get_selected_data();
     selected->move_selection( page_scroll );
-    info_scroll = cataimgui::scroll::begin;
 }
 
 void surroundings_menu::select_prev_internal()
@@ -1488,63 +1387,16 @@ std::vector<std::unordered_set<std::string>> surroundings_menu::get_shown_hotkey
     return ret;
 }
 
-void surroundings_menu::draw_hotkey_buttons( const tab_data *tab )
+std::string surroundings_menu::hotkey_buttons_rml( const tab_data *tab )
 {
-    float pos = ImGui::GetStyle().WindowPadding.x;
-    float button_inner_padding = ImGui::GetStyle().FramePadding.x;
-    float posy = ImGui::GetCursorPosY();
-    float line_height = str_height_to_pixels( 1 ) + ImGui::GetStyle().FramePadding.y +
-                        ImGui::GetStyle().ItemSpacing.y;
+    // each group starts a line of its own, and wraps when it runs out of room
+    std::string rml;
     for( const std::unordered_set<std::string> &group : get_shown_hotkeys( tab ) ) {
+        rml += "<div class=\"hbox wrap\">";
         for( const std::string &button : group ) {
-            std::string buttontxt = tab->ctxt.get_button_text( button );
-            float next_pos = get_text_width( buttontxt ) + button_inner_padding +
-                             ImGui::GetStyle().ItemSpacing.x;
-
-            if( pos + next_pos > str_width_to_pixels( width ) ) {
-                posy += line_height;
-                pos = ImGui::GetStyle().WindowPadding.x;
-            }
-
-            ImGui::SetCursorPosX( pos );
-            ImGui::SetCursorPosY( posy );
-            action_button( button, buttontxt );
-
-            pos += next_pos;
+            rml += rml_ui::action_button_rml( tab->ctxt, button );
         }
-        pos = ImGui::GetStyle().WindowPadding.x;
-        posy += line_height;
+        rml += "</div>";
     }
-}
-
-float surroundings_menu::get_hotkey_buttons_height( const tab_data *tab )
-{
-    if( tab->hotkey_groups.empty() ) {
-        return 0;
-    }
-
-    int lines = 0;
-    for( const std::unordered_set<std::string> &group : get_shown_hotkeys( tab ) ) {
-        int pos = 0;
-        for( const std::string &button : group ) {
-            pos += ImGui::GetStyle().FramePadding.x;
-
-            std::string buttontxt = tab->ctxt.get_button_text( button );
-            float next_pos = get_text_width( buttontxt ) + ImGui::GetStyle().FramePadding.x +
-                             ImGui::GetStyle().ItemSpacing.x;
-
-            if( pos + next_pos > str_width_to_pixels( width ) ) {
-                lines++;
-                pos = ImGui::GetStyle().FramePadding.x;
-            }
-
-            pos += next_pos;
-        }
-        lines++;
-    }
-
-    float line_height = str_height_to_pixels( 1 ) + ImGui::GetStyle().FramePadding.y +
-                        ImGui::GetStyle().ItemSpacing.y;
-
-    return lines * line_height;
+    return rml;
 }

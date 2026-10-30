@@ -12,6 +12,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <iterator>
 #include <list>
 #include <locale>
 #include <map>
@@ -27,13 +28,9 @@
 #include <utility>
 #include <vector>
 
-#include <imgui/imgui.h>
-#include <imgui/imgui_stdlib.h>
-
 #include "action.h"
 #include "avatar.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "cata_path.h"
 #include "cata_scope_helpers.h"
 #include "cata_utility.h"
@@ -196,15 +193,15 @@ std::size_t tab_idx_for_category( const char *cat )
 }
 
 // Dimmed-label + plain-value row inside an already-open 2-column table.
-// Caller is responsible for ImGui::BeginTable / EndTable around batches of
+// Caller is responsible for im::BeginTable / EndTable around batches of
 // calls; this routine only advances the row and writes the two cells.
 void kv_row( const char *k, const std::string &v )
 {
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextDisabled( "%s", k );
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted( v.c_str() );
+    im::TableNextRow();
+    im::TableNextColumn();
+    im::TextDisabled( "%s", k );
+    im::TableNextColumn();
+    im::TextUnformatted( v.c_str() );
 }
 
 // Opens a 2-column key/value panel: a 160-px-wide dimmed label column and
@@ -212,16 +209,16 @@ void kv_row( const char *k, const std::string &v )
 // EndTable is paired automatically.
 void kv_panel( const char *id, const std::function<void()> &body )
 {
-    if( ImGui::BeginTable( id, 2, ImGuiTableFlags_SizingStretchProp ) ) {
-        ImGui::TableSetupColumn( "k", ImGuiTableColumnFlags_WidthFixed, 160.0f );
-        ImGui::TableSetupColumn( "v" );
+    if( im::BeginTable( id, 2, im::TableFlags_SizingStretchProp ) ) {
+        im::TableSetupColumn( "k", im::TableColumnFlags_WidthFixed, 160.0f );
+        im::TableSetupColumn( "v" );
         body();
-        ImGui::EndTable();
+        im::EndTable();
     }
 }
 
 // Per-column sizing policy for the managed (clipped) tables. Widths are
-// measured by us, not by ImGui, so a row clipper can never starve the
+// measured by us, not by the table, so a row clipper can never starve the
 // measurement and column widths stay stable frame to frame.
 enum class colw { fit, widget, stretch };
 
@@ -234,7 +231,7 @@ struct colspec {
     float px = 0.0f;          // widget: width; fit: minimum floor
     float weight = 1.0f;      // stretch: weight
     float max_frac = 0.0f;    // fit: cap as fraction of table width (0 = none)
-    ImGuiTableColumnFlags flags = 0;
+    im::flags flags = 0;
 };
 
 struct colw_cache {
@@ -255,16 +252,16 @@ template<typename Row>
 float measure_fit( const colspec<Row> &s, const std::vector<Row> &rows,
                    size_t first, size_t last, bool sortable )
 {
-    float w = ImGui::CalcTextSize( s.header ).x;
-    if( sortable && !( s.flags & ImGuiTableColumnFlags_NoSort ) ) {
-        w += ImGui::GetFontSize();
+    float w = im::CalcTextSize( s.header ).x;
+    if( sortable && !( s.flags & im::TableColumnFlags_NoSort ) ) {
+        w += im::GetFontSize();
     }
     if( s.text ) {
         for( size_t r = first; r < last; r++ ) {
-            w = std::max( w, ImGui::CalcTextSize( s.text( rows[r] ).c_str() ).x );
+            w = std::max( w, im::CalcTextSize( s.text( rows[r] ).c_str() ).x );
         }
     }
-    return w + ImGui::GetStyle().CellPadding.x * 2.0f + 6.0f;
+    return w + im::GetStyle().CellPadding.x * 2.0f + 6.0f;
 }
 
 // Emit TableSetupColumn for every column with an explicit width. fit columns
@@ -273,7 +270,7 @@ float measure_fit( const colspec<Row> &s, const std::vector<Row> &rows,
 // grow_columns sticky-grows it for visible values. The px floor and max_frac
 // cap are applied here each frame so a window resize re-caps without a rebuild.
 // All managed columns are NoResize so the width passed each frame is honored
-// (ImGui treats init width as init-only for resizable columns). Call right
+// (resizable columns treat the width as an initial one only). Call right
 // after BeginTable, before headers and rows.
 template<typename Row>
 void setup_columns( const char *cache_id, uint64_t key,
@@ -294,20 +291,20 @@ void setup_columns( const char *cache_id, uint64_t key,
         c.key = key;
         c.valid = true;
     }
-    const float avail = ImGui::GetContentRegionAvail().x;
+    const float avail = im::GetContentRegionAvail().x;
     for( size_t i = 0; i < specs.size(); i++ ) {
         const colspec<Row> &s = specs[i];
-        const ImGuiTableColumnFlags extra = ImGuiTableColumnFlags_NoResize | s.flags;
+        const im::flags extra = im::TableColumnFlags_NoResize | s.flags;
         if( s.policy == colw::stretch ) {
-            ImGui::TableSetupColumn( s.header,
-                                     ImGuiTableColumnFlags_WidthStretch | extra, s.weight );
+            im::TableSetupColumn( s.header,
+                                     im::TableColumnFlags_WidthStretch | extra, s.weight );
             continue;
         }
         float w = s.policy == colw::widget ? s.px : std::max( c.widths[i], s.px );
         if( s.policy == colw::fit && s.max_frac > 0.0f && avail > 0.0f ) {
             w = std::min( w, s.max_frac * avail );
         }
-        ImGui::TableSetupColumn( s.header, ImGuiTableColumnFlags_WidthFixed | extra, w );
+        im::TableSetupColumn( s.header, im::TableColumnFlags_WidthFixed | extra, w );
     }
 }
 
@@ -346,8 +343,8 @@ uint64_t lk_str( uint64_t h, const std::string &s )
 // submitting the cell's text widget so IsItemHovered refers to it.
 void clip_tooltip( const std::string &full, float cell_w )
 {
-    if( ImGui::IsItemHovered() && ImGui::CalcTextSize( full.c_str() ).x > cell_w ) {
-        ImGui::SetTooltip( "%s", full.c_str() );
+    if( im::IsItemHovered() && im::CalcTextSize( full.c_str() ).x > cell_w ) {
+        im::SetTooltip( "%s", full.c_str() );
     }
 }
 
@@ -521,12 +518,8 @@ struct item_source_ref {
 };
 } // namespace
 
-debug_console::debug_console() : cataimgui::window( "Debug console" )
+debug_console::debug_console() : rml_ui::im::window( "Debug console" )
 {
-    // cataimgui::window::draw() calls BringWindowToDisplayFront each frame
-    // when is_on_top, which sorts combo popups behind the console and
-    // makes dropdowns unclickable. force_to_back lets popups render above.
-    force_to_back = true;
     ctxt = input_context( "DEBUG_CONSOLE", keyboard_mode::keychar );
     ctxt.register_action( "QUIT" );
     ctxt.register_action( "ANY_INPUT" );
@@ -578,14 +571,9 @@ void debug_console::show_items_for_monster( const std::string &type_id,
     }
 }
 
-cataimgui::bounds debug_console::get_bounds()
-{
-    return { persisted_x, persisted_y, persisted_w, persisted_h };
-}
-
 // Step / play / fast-forward state machine. Owns the footer UI and the
 // per-frame turn-drain logic; host calls tick() once per outer-loop frame
-// and draw_footer() once per ImGui frame.
+// and draw_footer() once per redraw.
 class step_controller
 {
     public:
@@ -708,7 +696,7 @@ void omnibox_state::request_focus()
 bool omnibox_state::is_highlight( debug_menu_index action ) const
 {
     return action == highlight_action
-           && ImGui::GetFrameCount() < highlight_until_frame;
+           && im::GetFrameCount() < highlight_until_frame;
 }
 
 bool omnibox_state::take_focus( debug_menu_index action )
@@ -745,25 +733,13 @@ void debug_console::execute()
         save_persisted_state();
     } };
 
-    // Suspend ImGui keyboard nav while the console is open so TAB drives only
-    // the input_context tab switch instead of also cycling widget focus.
-    ImGuiIO &io = ImGui::GetIO();
-    const bool had_kbd_nav = io.ConfigFlags & ImGuiConfigFlags_NavEnableKeyboard;
-    io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
-    on_out_of_scope restore_kbd_nav{ [&io, had_kbd_nav]()
-    {
-        if( had_kbd_nav ) {
-            io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        }
-    } };
-
-    while( is_open ) {
-        // Force a full viewport repaint each frame: otherwise ImGui tooltips
-        // smear the tiles layer and play/step state never updates live.
+    while( true ) {
+        // Force a full viewport repaint each frame, so play/step state
+        // updates live.
         g->invalidate_main_ui_adaptor();
         ui_manager::redraw();
 
-        // Drain one deferred op per frame (must run outside ImGui frame).
+        // Drain one deferred op per frame (must run outside a redraw).
         // FIFO interleaves actions and EOC fires by enqueue order.
         if( !pending.empty() ) {
             deferred_op op = pending.front();
@@ -839,19 +815,17 @@ void debug_console::execute()
                 break;
         }
 
-        std::string action;
-        if( has_button_action() ) {
-            action = get_button_action();
-        } else {
-            action = ctxt.handle_input( 5 );
-        }
+        const std::string raw_action = ctxt.handle_input( 5 );
+        // The close button gives QUIT
+        const std::string action = resolve_click( raw_action );
+        const bool clicked_close = raw_action == "SELECT" && action == "QUIT";
 
         // Only swallow keybinds while typing / dragging / in a popup, so plain
         // TAB still reaches the input_context tab switch.
-        const bool imgui_owns_keys = io.WantTextInput || ImGui::IsAnyItemActive() ||
-                                     ImGui::IsPopupOpen( nullptr,
-                                             ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel );
-        if( imgui_owns_keys ) {
+        const bool ui_owns_keys = im::IsAnyItemActive() ||
+                                  im::IsPopupOpen( nullptr,
+                                          im::PopupFlags_AnyPopupId | im::PopupFlags_AnyPopupLevel );
+        if( ui_owns_keys && !clicked_close ) {
             continue;
         }
 
@@ -938,55 +912,54 @@ void debug_console::draw_tab_views()
         if( sel ) {
             switch_tab_idx_.reset();
         }
-        if( cataimgui::BeginTabItem( view.label(), sel ) ) {
+        if( im::BeginTabItem( view.label(), sel ) ) {
             selected_tab_idx_ = i;
             view.draw_body( *this );
-            ImGui::EndTabItem();
+            im::EndTabItem();
         }
     }
 }
 
-void debug_console::draw()
+void debug_console::draw_im()
 {
-    // Skip the whole base draw() (not just draw_controls) so ImGui::Begin is
-    // never called and the window isn't drawn over a blocking sub-UI.
+    // Hidden, and nothing drawn, while a blocking sub-UI is up
+    set_class( "window", "hidden", suspend_draw_ );
     if( suspend_draw_ ) {
-        button_action.clear();
         return;
     }
-    cataimgui::window::draw();
-}
+    set_size( string_format( "%.0f%%", persisted_w * 100.f ), string_format( "%.0f%%",
+              persisted_h * 100.f ) );
+    set_position( persisted_x < 0.f ? std::string() : string_format( "%.0fpx", persisted_x ),
+                  persisted_y < 0.f ? std::string() : string_format( "%.0fpx", persisted_y ) );
 
-void debug_console::draw_controls()
-{
-    // Ctrl+1..9 / Ctrl+0 jump directly to a tab. ImGui input must be queried
-    // inside a frame, so check here rather than in execute()'s outer loop.
-    if( ImGui::GetIO().KeyCtrl ) {
-        static constexpr ImGuiKey hotkeys[] = {
-            ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4, ImGuiKey_5,
-            ImGuiKey_6, ImGuiKey_7, ImGuiKey_8, ImGuiKey_9, ImGuiKey_0,
+    // Ctrl+1..9 / Ctrl+0 jump directly to a tab. The keys pressed are
+    // gathered per redraw, so check here rather than in execute()'s outer loop.
+    if( im::GetIO().KeyCtrl ) {
+        static constexpr im::key hotkeys[] = {
+            im::Key_1, im::Key_2, im::Key_3, im::Key_4, im::Key_5,
+            im::Key_6, im::Key_7, im::Key_8, im::Key_9, im::Key_0,
         };
         const std::size_t n_keys = sizeof( hotkeys ) / sizeof( hotkeys[0] );
         const std::size_t n = std::min( n_keys, tab_views.size() );
         for( std::size_t i = 0; i < n; i++ ) {
-            if( ImGui::IsKeyPressed( hotkeys[i], false ) ) {
+            if( im::IsKeyPressed( hotkeys[i], false ) ) {
                 switch_tab_idx_ = i;
                 break;
             }
         }
     }
 
-    // '/' focuses the omnibox; '.' steps one turn. Both via ImGui so
+    // '/' focuses the omnibox; '.' steps one turn. Both checked here so
     // they work without user keybinds; guarded against text/slider/
     // popup focus. WAIT input_context path also handled in execute()
     // for users who have it bound; both set pending_steps idempotently.
-    const bool ui_busy = ImGui::GetIO().WantTextInput
-                         || ImGui::IsAnyItemActive();
+    const bool ui_busy = im::GetIO().WantTextInput
+                         || im::IsAnyItemActive();
     if( !ui_busy ) {
-        if( ImGui::IsKeyPressed( ImGuiKey_Slash, false ) ) {
+        if( im::IsKeyPressed( im::Key_Slash, false ) ) {
             omni_->request_focus();
         }
-        if( ImGui::IsKeyPressed( ImGuiKey_Period, false ) ) {
+        if( im::IsKeyPressed( im::Key_Period, false ) ) {
             stepper_->request_step();
         }
     }
@@ -994,12 +967,12 @@ void debug_console::draw_controls()
     // Reserve vertical space for shared footer (two rows + separator).
     // Zero when debug_mode is off (footer hidden).
     const float footer_h = debug_mode
-                           ? ImGui::GetFrameHeightWithSpacing() * 2.0f
-                           + ImGui::GetStyle().ItemSpacing.y
-                           + ImGui::GetStyle().FramePadding.y * 2.0f
+                           ? im::GetFrameHeightWithSpacing() * 2.0f
+                           + im::GetStyle().ItemSpacing.y
+                           + im::GetStyle().FramePadding.y * 2.0f
                            : 0.0f;
 
-    ImGui::BeginChild( "console_body", ImVec2( 0, -footer_h ), 0 );
+    im::BeginChild( "console_body", im::vec2( 0, -footer_h ), 0 );
     if( !debug_mode ) {
         // Picked once per off-state visit so it doesn't reroll every frame.
         // Reset to -1 by the Enable button so the next off-visit rerolls.
@@ -1027,77 +1000,64 @@ void debug_console::draw_controls()
             disclaimer_idx = rng( 0, n_flavors - 1 );
         }
 
-        const ImVec2 avail = ImGui::GetContentRegionAvail();
-        ImGui::Dummy( ImVec2( 0.0f, avail.y * 0.30f ) );
+        const im::vec2 avail = im::GetContentRegionAvail();
+        im::Dummy( im::vec2( 0.0f, avail.y * 0.30f ) );
         const char *msg = "Debug mode is off.";
-        const ImVec2 sz = ImGui::CalcTextSize( msg );
-        ImGui::SetCursorPosX( ( avail.x - sz.x ) * 0.5f );
-        ImGui::TextColored( ImVec4( 0.95f, 0.7f, 0.4f, 1.0f ), "%s", msg );
+        const im::vec2 sz = im::CalcTextSize( msg );
+        im::SetCursorPosX( ( avail.x - sz.x ) * 0.5f );
+        im::TextColored( im::vec4( 0.95f, 0.7f, 0.4f, 1.0f ), "%s", msg );
 
-        ImGui::Dummy( ImVec2( 0.0f, ImGui::GetStyle().ItemSpacing.y ) );
+        im::Dummy( im::vec2( 0.0f, im::GetStyle().ItemSpacing.y ) );
         const std::string flavor = flavors[disclaimer_idx];
         const float wrap_w = avail.x * 0.7f;
         // CalcTextSize with the wrap width returns the wrapped block size;
         // using that to position centers the block as a whole.
-        const ImVec2 flavor_sz = ImGui::CalcTextSize( flavor.c_str(), nullptr,
+        const im::vec2 flavor_sz = im::CalcTextSize( flavor.c_str(), nullptr,
                                  false, wrap_w );
-        ImGui::SetCursorPosX( ( avail.x - flavor_sz.x ) * 0.5f );
-        ImGui::PushTextWrapPos( ImGui::GetCursorPosX() + flavor_sz.x );
-        ImGui::TextDisabled( "%s", flavor.c_str() );
-        ImGui::PopTextWrapPos();
+        im::SetCursorPosX( ( avail.x - flavor_sz.x ) * 0.5f );
+        im::PushTextWrapPos( im::GetCursorPosX() + flavor_sz.x );
+        im::TextDisabled( "%s", flavor.c_str() );
+        im::PopTextWrapPos();
 
-        ImGui::Dummy( ImVec2( 0.0f, ImGui::GetStyle().ItemSpacing.y * 2.0f ) );
+        im::Dummy( im::vec2( 0.0f, im::GetStyle().ItemSpacing.y * 2.0f ) );
         const char *btn = "Enable debug mode";
-        const ImVec2 btn_sz = ImGui::CalcTextSize( btn );
-        const float btn_w = btn_sz.x + ImGui::GetStyle().FramePadding.x * 2.0f;
-        ImGui::SetCursorPosX( ( avail.x - btn_w ) * 0.5f );
-        if( ImGui::Button( btn, ImVec2( btn_w, 0.0f ) ) ) {
+        const im::vec2 btn_sz = im::CalcTextSize( btn );
+        const float btn_w = btn_sz.x + im::GetStyle().FramePadding.x * 2.0f;
+        im::SetCursorPosX( ( avail.x - btn_w ) * 0.5f );
+        if( im::Button( btn, im::vec2( btn_w, 0.0f ) ) ) {
             debug_mode = true;
             disclaimer_idx = -1;
         }
     } else {
         // Right-aligned debug-mode toggle, kept away from the omnibox.
         omni_->draw( *this );
-        ImGui::SameLine();
+        im::SameLine();
         const char *off_btn = "Debug: ON";
-        const float bw = ImGui::CalcTextSize( off_btn ).x
-                         + ImGui::GetStyle().FramePadding.x * 4.0f;
-        ImGui::SameLine( ImGui::GetContentRegionAvail().x
-                         + ImGui::GetCursorPosX() - bw );
-        ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( 0.25f, 0.55f, 0.25f, 1.0f ) );
-        ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( 0.30f, 0.65f, 0.30f, 1.0f ) );
-        if( ImGui::SmallButton( off_btn ) ) {
+        const float bw = im::CalcTextSize( off_btn ).x
+                         + im::GetStyle().FramePadding.x * 4.0f;
+        im::SameLine( im::GetContentRegionAvail().x
+                         + im::GetCursorPosX() - bw );
+        im::PushStyleColor( im::Col_Button, im::vec4( 0.25f, 0.55f, 0.25f, 1.0f ) );
+        im::PushStyleColor( im::Col_ButtonHovered, im::vec4( 0.30f, 0.65f, 0.30f, 1.0f ) );
+        if( im::SmallButton( off_btn ) ) {
             debug_mode = false;
         }
-        ImGui::PopStyleColor( 2 );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s", "Turn debug mode off" );
+        im::PopStyleColor( 2 );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s", "Turn debug mode off" );
         }
-        if( ImGui::BeginTabBar( "debug_console_tabs" ) ) {
+        if( im::BeginTabBar( "debug_console_tabs" ) ) {
             draw_tab_views();
-            ImGui::EndTabBar();
+            im::EndTabBar();
         }
     }
-    ImGui::EndChild();
+    im::EndChild();
 
     // Shared footer: step / fast-forward / pause indicator. Anchored at
     // window bottom; hidden when debug_mode is off.
     if( debug_mode ) {
-        ImGui::Separator();
+        im::Separator();
         stepper_->draw_footer();
-    }
-
-    // Capture pos/size each frame for save_persisted_state. cata_imgui's
-    // Cond_Always SetNextWindowPos defeats ImGui's own .ini round-trip,
-    // so track here. Size normalized to viewport fraction.
-    const ImVec2 wpos = ImGui::GetWindowPos();
-    const ImVec2 wsz = ImGui::GetWindowSize();
-    const ImVec2 vp = ImGui::GetMainViewport()->Size;
-    persisted_x = wpos.x;
-    persisted_y = wpos.y;
-    if( vp.x > 0 && vp.y > 0 ) {
-        persisted_w = wsz.x / vp.x;
-        persisted_h = wsz.y / vp.y;
     }
 }
 
@@ -1108,80 +1068,80 @@ void step_controller::draw_footer()
     avatar &you = get_avatar();
     speed_idx = std::clamp( speed_idx, 0, static_cast<int>( speeds.size() ) - 1 );
 
-    if( ImGui::Button( "Step" ) ) {
+    if( im::Button( "Step" ) ) {
         ff_hp_baseline = you.get_hp();
         pending_steps = 1;
         // Force immediate tick on next loop iteration regardless of slider.
         last_step_at = {};
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Advance one turn at current speed" );
     }
-    ImGui::SameLine();
+    im::SameLine();
     const char *play_label = playing ? "Pause" : "Play";
-    if( ImGui::Button( play_label ) ) {
+    if( im::Button( play_label ) ) {
         playing = !playing;
         if( playing ) {
             ff_hp_baseline = you.get_hp();
             last_step_at = {};
         }
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Run turns continuously at current speed" );
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth( 220.0f );
-    ImGui::SliderInt( "##speed", &speed_idx, 0,
+    im::SameLine();
+    im::SetNextItemWidth( 220.0f );
+    im::SliderInt( "##speed", &speed_idx, 0,
                       static_cast<int>( speeds.size() ) - 1,
                       speeds[speed_idx].label );
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Turns per real second for Play and Step" );
     }
 
-    ImGui::SameLine();
+    im::SameLine();
     if( playing ) {
-        ImGui::TextColored( ImVec4( 1.0f, 0.7f, 0.4f, 1.0f ), "%s", "PLAYING" );
+        im::TextColored( im::vec4( 1.0f, 0.7f, 0.4f, 1.0f ), "%s", "PLAYING" );
     } else if( pending_steps > 0 ) {
-        ImGui::TextDisabled( "%d", pending_steps );
+        im::TextDisabled( "%d", pending_steps );
     } else {
-        ImGui::TextColored( ImVec4( 0.6f, 0.9f, 0.6f, 1.0f ), "%s", "PAUSED" );
+        im::TextColored( im::vec4( 0.6f, 0.9f, 0.6f, 1.0f ), "%s", "PAUSED" );
     }
 
-    ImGui::Checkbox( "Stop on new log entry", &ff_stop_on_dbg_msg );
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    im::Checkbox( "Stop on new log entry", &ff_stop_on_dbg_msg );
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Halts Play/Step whenever a captured trace line lands this turn" );
     }
-    ImGui::SameLine();
-    ImGui::Checkbox( "Stop on player damage", &ff_stop_on_dmg );
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    im::SameLine();
+    im::Checkbox( "Stop on player damage", &ff_stop_on_dmg );
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Stop Play/Step when player HP drops" );
     }
 }
 
 void omnibox_state::draw( debug_console &host )
 {
-    ImGui::SetNextItemWidth( 360.0f );
+    im::SetNextItemWidth( 360.0f );
     if( focus_request ) {
-        ImGui::SetKeyboardFocusHere();
+        im::SetKeyboardFocusHere();
         focus_request = false;
     }
-    ImGui::InputTextWithHint( "##omnibox", "Search actions", &query );
-    ImGui::SameLine();
-    if( ImGui::SmallButton( "Clear##omnibox_clear" ) ) {
+    im::InputTextWithHint( "##omnibox", "Search actions", &query );
+    im::SameLine();
+    if( im::SmallButton( "Clear##omnibox_clear" ) ) {
         query.clear();
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s", "Clear the search query" );
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s", "Clear the search query" );
     }
-    ImGui::SameLine();
-    ImGui::Checkbox( "Activate", &activate_on_select );
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    im::SameLine();
+    im::Checkbox( "Activate", &activate_on_select );
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "On: click runs action.  Off: jumps to its tab" );
     }
     if( query.empty() ) {
@@ -1211,7 +1171,7 @@ void omnibox_state::draw( debug_console &host )
         const int score = cached_hits[i].first;
         const debug_action_entry &e = *cached_hits[i].second;
         std::string label = std::string( e.label ) + "##om" + std::to_string( i );
-        if( ImGui::Selectable( label.c_str() ) ) {
+        if( im::Selectable( label.c_str() ) ) {
             if( activate_on_select ) {
                 host.defer_action( e.id );
             } else {
@@ -1219,7 +1179,7 @@ void omnibox_state::draw( debug_console &host )
                     tab_registry()[tab_idx_for_category( e.category )].id_string );
                 highlight_action = e.id;
                 focus_action = e.id;
-                highlight_until_frame = ImGui::GetFrameCount() + 180;
+                highlight_until_frame = im::GetFrameCount() + 180;
                 // jump_only actions immediately open a uilist and have no
                 // inline control to pulse. Surface that explicitly so the
                 // user isn't waiting for a highlight that will never appear.
@@ -1233,17 +1193,17 @@ void omnibox_state::draw( debug_console &host )
             cached_query.clear();
             cached_hits.clear();
         }
-        ImGui::SameLine();
-        ImGui::TextDisabled( "[%s] %d", e.category, score );
+        im::SameLine();
+        im::TextDisabled( "[%s] %d", e.category, score );
     }
     if( total_hits > limit ) {
-        ImGui::TextDisabled( "(%d more matches)", total_hits - limit );
+        im::TextDisabled( "(%d more matches)", total_hits - limit );
     }
     // jump_only follow-up message stays visible for the same window as the
     // highlight pulse. After the window expires, clear it.
     if( !jump_only_label.empty() ) {
-        if( ImGui::GetFrameCount() < highlight_until_frame ) {
-            ImGui::TextColored( ImVec4( 0.95f, 0.85f, 0.45f, 1.0f ), "%s",
+        if( im::GetFrameCount() < highlight_until_frame ) {
+            im::TextColored( im::vec4( 0.95f, 0.85f, 0.45f, 1.0f ), "%s",
                                 string_format(
                                     "Jumped to tab; \"%s\" opens a dialog and has no inline control to highlight.",
                                     jump_only_label ).c_str() );
@@ -1251,7 +1211,7 @@ void omnibox_state::draw( debug_console &host )
             jump_only_label.clear();
         }
     }
-    ImGui::Separator();
+    im::Separator();
 }
 
 bool debug_console::is_omnibox_highlight( debug_menu_index action ) const
@@ -1266,16 +1226,16 @@ bool debug_console::take_omnibox_focus( debug_menu_index action )
 
 static void draw_action_tooltip( const debug_action_entry &e )
 {
-    ImGui::BeginTooltip();
+    im::BeginTooltip();
     if( e.tooltip != nullptr && e.tooltip[0] != '\0' ) {
-        ImGui::TextUnformatted( e.tooltip );
+        im::TextUnformatted( e.tooltip );
     } else {
-        ImGui::TextColored( ImVec4( 1.0f, 0.85f, 0.35f, 1.0f ), "%s",
+        im::TextColored( im::vec4( 1.0f, 0.85f, 0.35f, 1.0f ), "%s",
                             e.label );
-        ImGui::TextColored( ImVec4( 0.7f, 0.7f, 1.0f, 1.0f ),
+        im::TextColored( im::vec4( 0.7f, 0.7f, 1.0f, 1.0f ),
                             "Category: %s", e.category );
     }
-    ImGui::EndTooltip();
+    im::EndTooltip();
 }
 
 bool debug_console::debug_button( debug_menu_index action )
@@ -1289,11 +1249,11 @@ bool debug_console::debug_button_with_label( const char *label,
         debug_menu_index action )
 {
     if( take_omnibox_focus( action ) ) {
-        ImGui::SetKeyboardFocusHere();
+        im::SetKeyboardFocusHere();
     }
-    const bool clicked = ImGui::Button( label );
+    const bool clicked = im::Button( label );
     const debug_action_entry *e = find_action( action );
-    if( e && ( ImGui::IsItemHovered() || ImGui::IsItemFocused() ) ) {
+    if( e && ( im::IsItemHovered() || im::IsItemFocused() ) ) {
         draw_action_tooltip( *e );
     }
     if( clicked ) {
@@ -1307,28 +1267,28 @@ void debug_console::confirm_button( const char *label, const char *popup_id,
                                     const char *prompt, debug_menu_index action )
 {
     if( take_omnibox_focus( action ) ) {
-        ImGui::SetKeyboardFocusHere();
+        im::SetKeyboardFocusHere();
     }
-    const bool open = ImGui::Button( label );
+    const bool open = im::Button( label );
     if( const debug_action_entry *e = find_action( action ) ) {
-        if( ImGui::IsItemHovered() || ImGui::IsItemFocused() ) {
+        if( im::IsItemHovered() || im::IsItemFocused() ) {
             draw_action_tooltip( *e );
         }
     }
     if( open ) {
-        ImGui::OpenPopup( popup_id );
+        im::OpenPopup( popup_id );
     }
-    if( ImGui::BeginPopupModal( popup_id, nullptr, ImGuiWindowFlags_AlwaysAutoResize ) ) {
-        ImGui::TextUnformatted( prompt );
-        if( ImGui::Button( "Confirm" ) ) {
+    if( im::BeginPopupModal( popup_id, nullptr, im::WindowFlags_AlwaysAutoResize ) ) {
+        im::TextUnformatted( prompt );
+        if( im::Button( "Confirm" ) ) {
             defer_action( action );
-            ImGui::CloseCurrentPopup();
+            im::CloseCurrentPopup();
         }
-        ImGui::SameLine();
-        if( ImGui::Button( "Cancel" ) ) {
-            ImGui::CloseCurrentPopup();
+        im::SameLine();
+        if( im::Button( "Cancel" ) ) {
+            im::CloseCurrentPopup();
         }
-        ImGui::EndPopup();
+        im::EndPopup();
     }
 }
 
@@ -1344,36 +1304,36 @@ bool debug_console::highlight_checkbox( const char *label, bool *value,
 {
     if( pulse_target != debug_menu_index::last
         && take_omnibox_focus( pulse_target ) ) {
-        ImGui::SetKeyboardFocusHere();
+        im::SetKeyboardFocusHere();
     }
-    return ImGui::Checkbox( label, value );
+    return im::Checkbox( label, value );
 }
 
 void debug_console::export_bar( const std::string &name,
                                 const std::function<std::string()> &build_md,
                                 const std::function<std::string()> &build_json )
 {
-    ImGui::PushID( name.c_str() );
-    if( ImGui::SmallButton( "Copy MD" ) ) {
+    im::PushID( name.c_str() );
+    if( im::SmallButton( "Copy MD" ) ) {
         const std::string md = build_md();
-        ImGui::SetClipboardText( md.c_str() );
+        im::SetClipboardText( md.c_str() );
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Copy table as Markdown" );
     }
-    ImGui::SameLine();
-    if( ImGui::SmallButton( "Copy JSON" ) ) {
+    im::SameLine();
+    if( im::SmallButton( "Copy JSON" ) ) {
         const std::string js = build_json();
-        ImGui::SetClipboardText( js.c_str() );
+        im::SetClipboardText( js.c_str() );
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Copy table as JSON" );
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled( "%s", name.c_str() );
-    ImGui::PopID();
+    im::SameLine();
+    im::TextDisabled( "%s", name.c_str() );
+    im::PopID();
 }
 
 
@@ -1384,23 +1344,8 @@ static cata_path persist_state_path()
     return PATH_INFO::config_dir_path() / "debug_console.json";
 }
 
-static cata_path persist_imgui_path()
-{
-    return PATH_INFO::config_dir_path() / "debug_console.imgui.ini";
-}
-
 void debug_console::load_persisted_state()
 {
-    // ImGui ini blob applied first: must precede any window creation, else
-    // cata_imgui's first SetNextWindowPos fights the restored entries.
-    const cata_path ini_path = persist_imgui_path();
-    if( file_exist( ini_path ) ) {
-        const std::string blob = read_entire_file( ini_path.get_unrelative_path() );
-        if( !blob.empty() ) {
-            ImGui::LoadIniSettingsFromMemory( blob.c_str(), blob.size() );
-        }
-    }
-
     read_from_file_optional_json( persist_state_path(), [&]( const JsonValue & jv ) {
         const JsonObject jo = jv.get_object();
         jo.allow_omitted_members();
@@ -1496,16 +1441,6 @@ void debug_console::save_persisted_state() const
 
         jo.end_object();
     }, "debug console state" );
-
-    // ImGui ini blob: column widths/sort, splitter sizes, popup positions,
-    // per-window pos/size for non-console surfaces. Plain text.
-    size_t ini_size = 0;
-    const char *ini_data = ImGui::SaveIniSettingsToMemory( &ini_size );
-    if( ini_data != nullptr && ini_size > 0 ) {
-        write_to_file( persist_imgui_path(), [&]( std::ostream & fout ) {
-            fout.write( ini_data, ini_size );
-        }, "debug console imgui state" );
-    }
 }
 
 void open_console()
@@ -1524,25 +1459,25 @@ void tab_spawn_view::draw_body( debug_console &host )
 {
     framed_section( "s_items", "Items", [&]() {
         host.debug_button( debug_menu_index::WISH );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SPAWN_ITEM_GROUP );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SPAWN_ARTIFACT );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SPAWN_CLAIRVOYANCE );
     } );
 
     framed_section( "s_creatures", "Creatures", [&]() {
         host.debug_button( debug_menu_index::SPAWN_MON );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SPAWN_HORDE );
 
         host.debug_button( debug_menu_index::SPAWN_NPC );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SPAWN_NPC_FOLLOWER );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SPAWN_NAMED_NPC );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SPAWN_OM_NPC );
     } );
 
@@ -1561,40 +1496,38 @@ void tab_game_view::draw_body( debug_console &host )
 {
     framed_section( "g_unlock", "Unlock", [&]() {
         host.debug_button( debug_menu_index::ENABLE_ACHIEVEMENTS );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::UNLOCK_ALL );
     } );
 
     framed_section( "g_quick", "Quick setup", [&]() {
         host.debug_button( debug_menu_index::QUICK_SETUP );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::QUICK_SETUP_FLAG_DIRTY );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::TOGGLE_SETUP_MUTATION );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::NORMALIZE_BODY_STAT );
     } );
 
     framed_section( "g_save", "Save / load", [&]() {
         host.debug_button( debug_menu_index::SAVE_SCREENSHOT );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::GAME_REPORT );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::GAME_MIN_ARCHIVE );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::QUICKLOAD );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::QUIT_NOSAVE );
     } );
 
     framed_section( "g_debug", "Debug", [&]() {
         host.debug_button( debug_menu_index::SHOW_MSG );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::CRASH_GAME );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::TEST_END_SCREEN );
-        ImGui::SameLine();
-        host.debug_button( debug_menu_index::IMGUI_DEMO );
     } );
 }
 
@@ -1608,31 +1541,31 @@ void tab_map_view::draw_body( debug_console &host )
 {
     framed_section( "m_tp", "Teleport", [&]() {
         host.debug_button( debug_menu_index::SHORT_TELEPORT );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::LONG_TELEPORT );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::OM_TELEPORT );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::OM_TELEPORT_COORDINATES );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::OM_TELEPORT_CITY );
     } );
 
     framed_section( "m_edit", "Editing", [&]() {
         host.debug_button( debug_menu_index::MAP_EDITOR );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::OM_EDITOR );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::PALETTE_VIEWER );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::MAP_EXTRA );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::NESTED_MAPGEN );
     } );
 
     framed_section( "m_env", "Environment", [&]() {
         host.debug_button( debug_menu_index::CHANGE_WEATHER );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::CHANGE_TIME );
 
         {
@@ -1654,38 +1587,38 @@ void tab_map_view::draw_body( debug_console &host )
                     break;
                 }
             }
-            ImGui::SetNextItemWidth( 80 );
-            if( ImGui::BeginCombo( "Wind dir",
+            im::SetNextItemWidth( 80 );
+            if( im::BeginCombo( "Wind dir",
                                    combo_idx < 8 ? dirs[combo_idx].label : "Auto" ) ) {
-                if( ImGui::Selectable( "Auto", combo_idx == 8 ) ) {
+                if( im::Selectable( "Auto", combo_idx == 8 ) ) {
                     weather.wind_direction_override.reset();
                     weather.set_nextweather( calendar::turn );
                 }
                 for( int i = 0; i < 8; i++ ) {
-                    if( ImGui::Selectable( dirs[i].label, combo_idx == i ) ) {
+                    if( im::Selectable( dirs[i].label, combo_idx == i ) ) {
                         weather.wind_direction_override = dirs[i].deg;
                         weather.set_nextweather( calendar::turn );
                     }
                 }
-                ImGui::EndCombo();
+                im::EndCombo();
             }
-            ImGui::SameLine();
+            im::SameLine();
 
             int wspeed = weather.windspeed_override.value_or( weather.windspeed );
             bool has_override = weather.windspeed_override.has_value();
-            ImGui::SetNextItemWidth( 120 );
-            if( ImGui::SliderInt( "Wind spd", &wspeed, 0, 100 ) ) {
+            im::SetNextItemWidth( 120 );
+            if( im::SliderInt( "Wind spd", &wspeed, 0, 100 ) ) {
                 weather.windspeed_override = wspeed;
                 weather.set_nextweather( calendar::turn );
             }
             if( has_override ) {
-                ImGui::SameLine();
-                if( ImGui::SmallButton( "Reset##wind" ) ) {
+                im::SameLine();
+                if( im::SmallButton( "Reset##wind" ) ) {
                     weather.windspeed_override.reset();
                     weather.set_nextweather( calendar::turn );
                 }
-                if( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip( "%s",
+                if( im::IsItemHovered() ) {
+                    im::SetTooltip( "%s",
                                        "Restore generator-driven wind speed" );
                 }
             }
@@ -1694,7 +1627,7 @@ void tab_map_view::draw_body( debug_console &host )
         {
             weather_manager &weather = get_weather();
             bool has_forced = weather.forced_temperature.has_value();
-            if( ImGui::Checkbox( "Force temp", &has_forced ) ) {
+            if( im::Checkbox( "Force temp", &has_forced ) ) {
                 if( !has_forced ) {
                     weather.forced_temperature.reset();
                 } else {
@@ -1702,10 +1635,10 @@ void tab_map_view::draw_body( debug_console &host )
                 }
             }
             if( weather.forced_temperature.has_value() ) {
-                ImGui::SameLine();
+                im::SameLine();
                 int temp_c = static_cast<int>( units::to_celsius( *weather.forced_temperature ) );
-                ImGui::SetNextItemWidth( 80 );
-                if( ImGui::InputInt( "C##temp", &temp_c ) ) {
+                im::SetNextItemWidth( 80 );
+                if( im::InputInt( "C##temp", &temp_c ) ) {
                     weather.forced_temperature = units::from_celsius( temp_c );
                 }
             }
@@ -1716,30 +1649,30 @@ void tab_map_view::draw_body( debug_console &host )
         host.confirm_button( "Kill in area", "confirm_kill_area",
                              "Kill every creature in selected area?  Cannot undo.",
                              debug_menu_index::KILL_AREA );
-        ImGui::SameLine();
+        im::SameLine();
         host.confirm_button( "Kill NPCs", "confirm_kill_npcs",
                              "Kill every NPC on the loaded map?  Cannot undo.",
                              debug_menu_index::KILL_NPCS );
-        ImGui::SameLine();
+        im::SameLine();
         host.confirm_button( "Kill monsters", "confirm_kill_mons",
                              "Kill every monster on the loaded map?  Cannot undo.",
                              debug_menu_index::KILL_MONS );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::GEN_SOUND );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::PRINT_OVERMAPS );
     } );
 
     framed_section( "m_overlay_om", "Overmap overlays", [&]() {
         host.debug_button( debug_menu_index::DISPLAY_HORDES );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::DISPLAY_WEATHER );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::DISPLAY_SCENTS );
     } );
 
     framed_section( "m_overlay_local", "Local display overlays", [&]() {
-        ImGui::TextDisabled( "%s",
+        im::TextDisabled( "%s",
                              "Mutually exclusive: enabling one disables the others." );
         game &g_ref = *g;
         // pulse_idx maps each ACTION_DISPLAY_* overlay to its matching
@@ -1752,7 +1685,7 @@ void tab_map_view::draw_body( debug_console &host )
             if( host.highlight_checkbox( label, &active, pulse_idx ) ) {
                 g_ref.display_toggle_overlay( act );
             }
-            ImGui::SameLine();
+            im::SameLine();
         };
         overlay_checkbox( "Scent", ACTION_DISPLAY_SCENT,
                           debug_menu_index::DISPLAY_SCENTS_LOCAL );
@@ -1770,19 +1703,19 @@ void tab_map_view::draw_body( debug_console &host )
                           debug_menu_index::DISPLAY_TRANSPARENCY );
         overlay_checkbox( "NPC attack", ACTION_DISPLAY_NPC_ATTACK_POTENTIAL,
                           debug_menu_index::DISPLAY_NPC_ATTACK );
-        ImGui::NewLine();
+        im::NewLine();
 
         host.debug_button( debug_menu_index::DISPLAY_VISIBILITY );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::DISPLAY_LIGHTING );
-        ImGui::SameLine();
+        im::SameLine();
         bool npc_path = g_ref.debug_pathfinding;
-        if( ImGui::Checkbox( "NPC paths", &npc_path ) ) {
+        if( im::Checkbox( "NPC paths", &npc_path ) ) {
             g_ref.debug_pathfinding = npc_path;
         }
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SHOW_SOUND );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::HOUR_TIMER );
     } );
 }
@@ -1797,35 +1730,35 @@ void tab_vehicle_view::draw_body( debug_console &host )
 {
     framed_section( "v_actions", "Vehicle actions", [&]() {
         host.debug_button( debug_menu_index::VEHICLE_BATTERY_CHARGE );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::VEHICLE_DELETE );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::VEHICLE_EXPORT );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::VEHICLE_EFFECTS );
     } );
 
     framed_section( "v_current", "Current vehicle", [&]() {
         std::optional<current_vehicle_ref> cv = current_vehicle_for_avatar();
         if( !cv ) {
-            ImGui::TextDisabled( "%s", "(not in vehicle)" );
+            im::TextDisabled( "%s", "(not in vehicle)" );
             return;
         }
         vehicle *v = cv->v;
         map &m = *cv->m;
 
         label_value( "Name", "%s", v->name.c_str() );
-        ImGui::SameLine( 0, 20.0f );
+        im::SameLine( 0, 20.0f );
         label_value( "Velocity", "%d", v->velocity );
-        ImGui::SameLine( 0, 20.0f );
+        im::SameLine( 0, 20.0f );
         label_value( "Battery", "%d",
                      static_cast<int>( v->battery_left( m ) ) );
-        ImGui::SameLine();
+        im::SameLine();
         add_monitor_button( "veh_mon_current", "veh:" + v->name,
                             snap::vehicle_under_avatar() );
 
         label_value( "Wheel area", "%d", v->wheel_area() );
-        ImGui::SameLine( 0, 20.0f );
+        im::SameLine( 0, 20.0f );
         label_value( "Wheel config", "%s",
                      v->valid_wheel_config( m ) ? "valid" : "invalid" );
     } );
@@ -1833,7 +1766,7 @@ void tab_vehicle_view::draw_body( debug_console &host )
     framed_section( "v_parts", "Parts", [&]() {
         std::optional<current_vehicle_ref> cv = current_vehicle_for_avatar();
         if( !cv ) {
-            ImGui::TextDisabled( "%s", "(not in vehicle)" );
+            im::TextDisabled( "%s", "(not in vehicle)" );
             return;
         }
         vehicle *v = cv->v;
@@ -1844,71 +1777,71 @@ void tab_vehicle_view::draw_body( debug_console &host )
         // names (wheels, doors, mirrors) better than the part type id alone.
         const vehicle_part_range parts = v->get_all_parts();
         const int visible = static_cast<int>( v->part_count_real_cached() );
-        if( ImGui::BeginTable( "v_parts_table", 7,
-                               ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                               ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp,
-                               ImVec2( 0.0f, fit_table_height( visible, 280.0f ) ) ) ) {
+        if( im::BeginTable( "v_parts_table", 7,
+                               im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                               im::TableFlags_Borders | im::TableFlags_SizingStretchProp,
+                               im::vec2( 0.0f, fit_table_height( visible, 280.0f ) ) ) ) {
             fit_col( "#" );
             fit_col( "Mount" );
-            ImGui::TableSetupColumn( "Name" );
+            im::TableSetupColumn( "Name" );
             fit_col( "Status" );
             fit_col( "Broken" );
             fit_col( "On" );
             fit_col( "Fuel" );
-            ImGui::TableSetupScrollFreeze( 0, 1 );
-            ImGui::TableHeadersRow();
+            im::TableSetupScrollFreeze( 0, 1 );
+            im::TableHeadersRow();
             for( const vpart_reference &vp : parts ) {
                 const vehicle_part &part = vp.part();
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d", static_cast<int>( vp.part_index() ) );
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d,%d", part.mount.x(), part.mount.y() );
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( part.name(), c_white );
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d%%",
+                im::TableNextRow();
+                im::TableNextColumn();
+                im::Text( "%d", static_cast<int>( vp.part_index() ) );
+                im::TableNextColumn();
+                im::Text( "%d,%d", part.mount.x(), part.mount.y() );
+                im::TableNextColumn();
+                im::TextMarkup( part.name(), c_white );
+                im::TableNextColumn();
+                im::Text( "%d%%",
                              static_cast<int>( part.damage_percent() * 100.0 ) );
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
                 if( part.is_broken() ) {
-                    ImGui::TextColored( ImVec4( 0.95f, 0.5f, 0.5f, 1.0f ),
+                    im::TextColored( im::vec4( 0.95f, 0.5f, 0.5f, 1.0f ),
                                         "%s", "yes" );
                 } else {
-                    ImGui::TextDisabled( "%s", "no" );
+                    im::TextDisabled( "%s", "no" );
                 }
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( part.enabled ? "on" : "off" );
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
+                im::TextUnformatted( part.enabled ? "on" : "off" );
+                im::TableNextColumn();
                 const itype_id fuel = part.fuel_current();
                 if( fuel.is_null() ) {
-                    ImGui::TextDisabled( "-" );
+                    im::TextDisabled( "-" );
                 } else {
-                    ImGui::Text( "%s: %d", fuel.str().c_str(),
+                    im::Text( "%s: %d", fuel.str().c_str(),
                                  v->engine_fuel_left( m, part ) );
                 }
             }
-            ImGui::EndTable();
+            im::EndTable();
         }
     } );
 
     framed_section( "v_effects", "Active effects", [&]() {
         std::optional<current_vehicle_ref> cv = current_vehicle_for_avatar();
         if( !cv ) {
-            ImGui::TextDisabled( "%s", "(not in vehicle)" );
+            im::TextDisabled( "%s", "(not in vehicle)" );
             return;
         }
         vehicle *v = cv->v;
         const std::vector<std::reference_wrapper<const effect>> effs = v->get_effects();
         if( effs.empty() ) {
-            ImGui::TextDisabled( "%s", "(none)" );
+            im::TextDisabled( "%s", "(none)" );
             return;
         }
         for( const effect &e : effs ) {
-            ImGui::Bullet();
-            ImGui::SameLine();
-            cataimgui::draw_colored_text( e.disp_name(), c_white );
-            ImGui::SameLine();
-            ImGui::Text( "int=%d", e.get_intensity() );
+            im::Bullet();
+            im::SameLine();
+            im::TextMarkup( e.disp_name(), c_white );
+            im::SameLine();
+            im::Text( "int=%d", e.get_intensity() );
         }
     } );
 }
@@ -1934,9 +1867,9 @@ void tab_tiles_view::draw_body( debug_console &host )
     avatar &you = get_avatar();
     map &here = get_map();
 
-    ImGui::TextUnformatted( "Tile coords (x,y,z -- empty = avatar position)" );
-    ImGui::SetNextItemWidth( 200 );
-    ImGui::InputText( "##tile_coord", &tile_coord_input );
+    im::TextUnformatted( "Tile coords (x,y,z -- empty = avatar position)" );
+    im::SetNextItemWidth( 200 );
+    im::InputText( "##tile_coord", &tile_coord_input );
 
     tripoint_bub_ms target = you.pos_bub( here );
     bool parse_error = false;
@@ -1975,20 +1908,20 @@ void tab_tiles_view::draw_body( debug_console &host )
     }
 
     if( parse_error ) {
-        ImGui::TextColored( ImVec4( 1.0f, 0.4f, 0.4f, 1.0f ),
+        im::TextColored( im::vec4( 1.0f, 0.4f, 0.4f, 1.0f ),
                             "%s", "Invalid coords: expected x,y,z" );
     }
-    ImGui::Text( "Target: %s", target.to_string().c_str() );
-    ImGui::SameLine();
+    im::Text( "Target: %s", target.to_string().c_str() );
+    im::SameLine();
     add_monitor_button( "tile_mon_abs", "tile@" + target.to_string(),
                         snap::tile_at_abs( target ) );
-    ImGui::SameLine();
+    im::SameLine();
     add_monitor_button( "field_mon_abs", "field@" + target.to_string(),
                         snap::field_at_abs( target ) );
-    ImGui::SameLine();
+    im::SameLine();
     add_monitor_button( "light_mon_abs", "light@" + target.to_string(),
                         snap::light_at_abs( target ) );
-    ImGui::Separator();
+    im::Separator();
 
     const ter_id &ter = here.ter( target );
     const furn_id &furn = here.furn( target );
@@ -2140,17 +2073,17 @@ void tab_tiles_view::draw_body( debug_console &host )
     // Inline summary: compact label / value rows.
     framed_section( "tile_basic", "Basics", [&]() {
         label_value( "Position", "%s", target.to_string().c_str() );
-        ImGui::SameLine( 0, 20.0f );
+        im::SameLine( 0, 20.0f );
         label_value( "Move cost", "%d", move_cost );
-        ImGui::SameLine( 0, 20.0f );
+        im::SameLine( 0, 20.0f );
         label_value( "Light", "%d", light_at );
         label_value( "Terrain", "%s", ter.id().str().c_str() );
         if( !ter_flags.empty() ) {
-            ImGui::TextDisabled( "  flags: %s", join( ter_flags, ", " ).c_str() );
+            im::TextDisabled( "  flags: %s", join( ter_flags, ", " ).c_str() );
         }
         label_value( "Furniture", "%s", furn.id().str().c_str() );
         if( !furn_flags.empty() ) {
-            ImGui::TextDisabled( "  flags: %s", join( furn_flags, ", " ).c_str() );
+            im::TextDisabled( "  flags: %s", join( furn_flags, ", " ).c_str() );
         }
         label_value( "Trap", "%s",
                      tr.id != trap_str_id::NULL_ID() ? tr.id.str().c_str() : "none" );
@@ -2160,20 +2093,20 @@ void tab_tiles_view::draw_body( debug_console &host )
 
     framed_section( "tile_fields", "Fields", [&]() {
         if( field_rows.empty() ) {
-            ImGui::TextDisabled( "%s", "(none)" );
+            im::TextDisabled( "%s", "(none)" );
         } else {
             for( const auto &fp : field_rows ) {
-                ImGui::BulletText( "%s  (intensity %d)", fp.first.c_str(), fp.second );
+                im::BulletText( "%s  (intensity %d)", fp.first.c_str(), fp.second );
             }
         }
     } );
 
     framed_section( "tile_items", "Items on tile", [&]() {
         if( item_summary.empty() ) {
-            ImGui::TextDisabled( "%s", "(none)" );
+            im::TextDisabled( "%s", "(none)" );
         } else {
             for( const auto &is : item_summary ) {
-                ImGui::BulletText( "%d x %s", is.second, is.first.c_str() );
+                im::BulletText( "%d x %s", is.second, is.first.c_str() );
             }
         }
     } );
@@ -2266,15 +2199,15 @@ void render_char_vitals( Character &ch )
 void render_char_metabolism( Character &ch )
 {
     framed_section( "p_metab", "Metabolism", [&]() {
-        ImGui::Text( "%s", string_format(
+        im::Text( "%s", string_format(
                          "Hunger: %d  Thirst: %d  kcal: %d/%d  BMI: %.1f  BMR: %d",
                          ch.get_hunger(), ch.get_thirst(),
                          ch.get_stored_kcal(), ch.get_healthy_kcal(),
                          ch.get_bmi_fat(), ch.get_bmr() ).c_str() );
-        ImGui::SameLine();
+        im::SameLine();
         add_monitor_button( "p_metab_mon", ch.get_name() + ":metabolism",
                             snap::char_metabolism( ch.getID() ) );
-        ImGui::Text( "%s", string_format(
+        im::Text( "%s", string_format(
                          "Stomach: %d/%d mL, %d kcal  |  Guts: %d/%d mL, %d kcal",
                          units::to_milliliter( ch.stomach.contains() ),
                          units::to_milliliter( ch.stomach.capacity( ch ) ),
@@ -2282,7 +2215,7 @@ void render_char_metabolism( Character &ch )
                          units::to_milliliter( ch.guts.contains() ),
                          units::to_milliliter( ch.guts.capacity( ch ) ),
                          ch.guts.get_calories() ).c_str() );
-        ImGui::SameLine();
+        im::SameLine();
         add_monitor_button( "p_gi_mon", ch.get_name() + ":gi",
                             snap::char_gi( ch.getID() ) );
     } );
@@ -2290,103 +2223,103 @@ void render_char_metabolism( Character &ch )
 
 void render_char_skills( Character &ch, character_edit_state &st )
 {
-    if( !ImGui::CollapsingHeader( "Skills##p_skills" ) ) {
+    if( !im::CollapsingHeader( "Skills##p_skills" ) ) {
         return;
     }
-    ImGui::Indent();
+    im::Indent();
     const float slider_w = 180.0f;
-    ImGui::SetNextItemWidth( slider_w );
-    ImGui::SliderInt( "Set all theory##bulk", &st.bulk_theory, 0, 10 );
-    ImGui::SameLine();
-    if( ImGui::SmallButton( "Apply##bulk_th" ) ) {
+    im::SetNextItemWidth( slider_w );
+    im::SliderInt( "Set all theory##bulk", &st.bulk_theory, 0, 10 );
+    im::SameLine();
+    if( im::SmallButton( "Apply##bulk_th" ) ) {
         for( const Skill &sk : Skill::skills ) {
             ch.set_knowledge_level( sk.ident(), st.bulk_theory );
         }
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Set the theory (knowledge level of every skill to the slider value)" );
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth( slider_w );
-    ImGui::SliderInt( "Set all practice##bulk", &st.bulk_practice, 0, 10 );
-    ImGui::SameLine();
-    if( ImGui::SmallButton( "Apply##bulk_pr" ) ) {
+    im::SameLine();
+    im::SetNextItemWidth( slider_w );
+    im::SliderInt( "Set all practice##bulk", &st.bulk_practice, 0, 10 );
+    im::SameLine();
+    if( im::SmallButton( "Apply##bulk_pr" ) ) {
         for( const Skill &sk : Skill::skills ) {
             ch.set_skill_level( sk.ident(), st.bulk_practice );
         }
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Set the practice level of every skill to the slider value" );
     }
-    ImGui::Separator();
-    if( ImGui::BeginTable( "p_skills_table", 4,
-                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                           ImGuiTableFlags_SizingStretchProp ) ) {
-        ImGui::TableSetupColumn( "Skill", ImGuiTableColumnFlags_WidthStretch );
+    im::Separator();
+    if( im::BeginTable( "p_skills_table", 4,
+                           im::TableFlags_RowBg | im::TableFlags_Borders |
+                           im::TableFlags_SizingStretchProp ) ) {
+        im::TableSetupColumn( "Skill", im::TableColumnFlags_WidthStretch );
         // Slider cells have no intrinsic width; pin a fixed column so they
         // don't collapse to the header.
-        ImGui::TableSetupColumn( "Theory", ImGuiTableColumnFlags_WidthFixed, 200.0f );
-        ImGui::TableSetupColumn( "Practice", ImGuiTableColumnFlags_WidthFixed, 200.0f );
+        im::TableSetupColumn( "Theory", im::TableColumnFlags_WidthFixed, 200.0f );
+        im::TableSetupColumn( "Practice", im::TableColumnFlags_WidthFixed, 200.0f );
         fit_col( "+M" );
-        ImGui::TableHeadersRow();
+        im::TableHeadersRow();
         for( const Skill &sk : Skill::skills ) {
             const skill_id &sid = sk.ident();
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            cataimgui::draw_colored_text( sk.name(), c_white );
-            ImGui::TableNextColumn();
+            im::TableNextRow();
+            im::TableNextColumn();
+            im::TextMarkup( sk.name(), c_white );
+            im::TableNextColumn();
             int theory = ch.get_knowledge_level( sid );
-            ImGui::SetNextItemWidth( -1.0f );
-            if( ImGui::SliderInt( ( "##th_" + sid.str() ).c_str(), &theory, 0, 10 ) ) {
+            im::SetNextItemWidth( -1.0f );
+            if( im::SliderInt( ( "##th_" + sid.str() ).c_str(), &theory, 0, 10 ) ) {
                 ch.set_knowledge_level( sid, theory );
             }
-            ImGui::TableNextColumn();
+            im::TableNextColumn();
             int practice = static_cast<int>( ch.get_skill_level( sid ) );
-            ImGui::SetNextItemWidth( -1.0f );
-            if( ImGui::SliderInt( ( "##pr_" + sid.str() ).c_str(), &practice, 0, 10 ) ) {
+            im::SetNextItemWidth( -1.0f );
+            if( im::SliderInt( ( "##pr_" + sid.str() ).c_str(), &practice, 0, 10 ) ) {
                 ch.set_skill_level( sid, practice );
             }
-            ImGui::TableNextColumn();
+            im::TableNextColumn();
             add_monitor_button(
                 ( "skill_mon_" + sid.str() ).c_str(),
                 ch.get_name() + " skill:" + sid.str(),
                 snap::char_skill( ch.getID(), sid ) );
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
-    ImGui::Unindent();
+    im::Unindent();
 }
 
 void render_char_proficiencies( Character &ch, character_edit_state &st )
 {
-    if( !ImGui::CollapsingHeader( "Proficiencies##p_profs" ) ) {
+    if( !im::CollapsingHeader( "Proficiencies##p_profs" ) ) {
         return;
     }
-    ImGui::Indent();
-    ImGui::SetNextItemWidth( 220.0f );
-    ImGui::InputTextWithHint( "##prof_filter", "filter", &st.prof_filter );
-    ImGui::SameLine();
-    if( ImGui::SmallButton( "Learn all##profs" ) ) {
+    im::Indent();
+    im::SetNextItemWidth( 220.0f );
+    im::InputTextWithHint( "##prof_filter", "filter", &st.prof_filter );
+    im::SameLine();
+    if( im::SmallButton( "Learn all##profs" ) ) {
         for( const proficiency &pr : proficiency::get_all() ) {
             if( !ch.has_proficiency( pr.prof_id() ) ) {
                 ch.add_proficiency( pr.prof_id(), true );
             }
         }
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Mark every loaded proficiency as learned, bypassing prerequisite chains" );
     }
-    ImGui::SameLine();
-    if( ImGui::SmallButton( "Forget all##profs" ) ) {
+    im::SameLine();
+    if( im::SmallButton( "Forget all##profs" ) ) {
         for( const proficiency_id &pid : ch.known_proficiencies() ) {
             ch.lose_proficiency( pid, true );
         }
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Drop every proficiency this character currently knows" );
     }
     const std::vector<proficiency> &all_profs = proficiency::get_all();
@@ -2398,14 +2331,14 @@ void render_char_proficiencies( Character &ch, character_edit_state &st )
             filtered.push_back( &pr );
         }
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled( "%d / %d", static_cast<int>( filtered.size() ),
+    im::SameLine();
+    im::TextDisabled( "%d / %d", static_cast<int>( filtered.size() ),
                          static_cast<int>( all_profs.size() ) );
-    if( ImGui::BeginTable( "p_profs_table", 4,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings,
-                           ImVec2( 0.0f, 320.0f ) ) ) {
+    if( im::BeginTable( "p_profs_table", 4,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings,
+                           im::vec2( 0.0f, 320.0f ) ) ) {
         const uint64_t key = lk_mix( lk_str( lk_mix( 0u, filtered.size() ),
                                              st.prof_filter ),
                                      static_cast<uint64_t>( ch.getID().get_value() ) );
@@ -2415,36 +2348,36 @@ void render_char_proficiencies( Character &ch, character_edit_state &st )
             { "Progress", colw::widget, {}, 220.0f },
             { "+M", colw::widget, {}, 40.0f },
         }, filtered );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
-        ImGuiListClipper clipper;
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
+        im::ListClipper clipper;
         clipper.Begin( static_cast<int>( filtered.size() ) );
         while( clipper.Step() ) {
             for( int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++ ) {
                 const proficiency &pr = *filtered[i];
                 const proficiency_id pid = pr.prof_id();
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( pr.name(), c_white );
-                ImGui::TableNextColumn();
+                im::TableNextRow();
+                im::TableNextColumn();
+                im::TextMarkup( pr.name(), c_white );
+                im::TableNextColumn();
                 bool known = ch.has_proficiency( pid );
-                if( ImGui::Checkbox( ( "##k_" + pid.str() ).c_str(), &known ) ) {
+                if( im::Checkbox( ( "##k_" + pid.str() ).c_str(), &known ) ) {
                     if( known ) {
                         ch.add_proficiency( pid, true );
                     } else {
                         ch.lose_proficiency( pid, true );
                     }
                 }
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
                 if( known ) {
-                    ImGui::TextDisabled( "%s", "learned" );
+                    im::TextDisabled( "%s", "learned" );
                 } else {
                     const int max_turns = to_turns<int>( pr.time_to_learn() );
                     const int cur_turns = to_turns<int>(
                                               ch.get_proficiency_practiced_time( pid ) );
                     int pct = max_turns > 0 ? cur_turns * 100 / max_turns : 0;
-                    ImGui::SetNextItemWidth( -1.0f );
-                    if( ImGui::SliderInt( ( "##p_" + pid.str() ).c_str(),
+                    im::SetNextItemWidth( -1.0f );
+                    if( im::SliderInt( ( "##p_" + pid.str() ).c_str(),
                                           &pct, 0, 100, "%d%%" ) ) {
                         if( pct >= 100 ) {
                             ch.add_proficiency( pid, true );
@@ -2454,16 +2387,16 @@ void render_char_proficiencies( Character &ch, character_edit_state &st )
                         }
                     }
                 }
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
                 add_monitor_button(
                     ( "prof_mon_" + pid.str() ).c_str(),
                     ch.get_name() + " prof:" + pid.str(),
                     snap::char_proficiency( ch.getID(), pid ) );
             }
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
-    ImGui::Unindent();
+    im::Unindent();
 }
 
 void tab_player_view::draw_body( debug_console &host )
@@ -2476,13 +2409,13 @@ void tab_player_view::draw_body( debug_console &host )
 
     framed_section( "p_char", "Character", [&]() {
         host.debug_button( debug_menu_index::EDIT_PLAYER );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::MUTATE );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SIX_MILLION_DOLLAR_SURVIVOR );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::CHANGE_SPELLS );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::LEARN_MA );
     } );
 
@@ -2491,27 +2424,27 @@ void tab_player_view::draw_body( debug_console &host )
 
     framed_section( "p_recipes", "Recipes / items", [&]() {
         host.debug_button( debug_menu_index::UNLOCK_RECIPES );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::FORGET_ALL_RECIPES );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::FORGET_ALL_ITEMS );
     } );
 
     framed_section( "p_health", "Health", [&]() {
         host.debug_button( debug_menu_index::DAMAGE_SELF );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::BLEED_SELF );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SET_AUTOMOVE );
     } );
 
     framed_section( "p_npcs", "NPCs", [&]() {
         host.debug_button( debug_menu_index::CONTROL_NPC );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::IMPORT_FOLLOWER );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::EXPORT_FOLLOWER );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::EXPORT_SELF );
     } );
 }
@@ -2538,10 +2471,10 @@ void tab_creatures_view::save_state( JsonOut &jo ) const
 
 void tab_creatures_view::draw_body( debug_console &host )
 {
-    ImGui::SetNextItemWidth( 240 );
-    ImGui::InputText( "Filter##creatures", &creature_filter );
-    ImGui::SameLine();
-    ImGui::Checkbox( "Bubble only", &filter_within_bubble );
+    im::SetNextItemWidth( 240 );
+    im::InputText( "Filter##creatures", &creature_filter );
+    im::SameLine();
+    im::Checkbox( "Bubble only", &filter_within_bubble );
 
     avatar &you = get_avatar();
     map &here = get_map();
@@ -2617,7 +2550,7 @@ void tab_creatures_view::draw_body( debug_console &host )
         return a.dist < b.dist;
     } );
 
-    ImGui::Text( "%d creatures", static_cast<int>( rows.size() ) );
+    im::Text( "%d creatures", static_cast<int>( rows.size() ) );
 
     {
         std::vector<export_column<row_data>> cols = {
@@ -2683,15 +2616,15 @@ void tab_creatures_view::draw_body( debug_console &host )
         export_rows( host, "creatures", "creatures", rows, cols );
     }
 
-    const float details_h = ImGui::GetFrameHeightWithSpacing() * 8.0f;
-    const float avail_y = ImGui::GetContentRegionAvail().y;
-    const float table_h = avail_y - details_h - ImGui::GetStyle().ItemSpacing.y;
+    const float details_h = im::GetFrameHeightWithSpacing() * 8.0f;
+    const float avail_y = im::GetContentRegionAvail().y;
+    const float table_h = avail_y - details_h - im::GetStyle().ItemSpacing.y;
 
-    if( ImGui::BeginTable( "creatures_table", 8,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings,
-                           ImVec2( 0.0f, fit_table_height(
+    if( im::BeginTable( "creatures_table", 8,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings,
+                           im::vec2( 0.0f, fit_table_height(
                                        static_cast<int>( rows.size() ),
                                        std::max( table_h, 120.0f ) ) ) ) ) {
         const uint64_t key = lk_str( lk_mix( filter_within_bubble ? 1u : 0u,
@@ -2722,46 +2655,46 @@ void tab_creatures_view::draw_body( debug_console &host )
             { "+M", colw::widget, {}, 40.0f },
         };
         setup_columns<row_data>( "creatures_table", key, specs, rows );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
-        ImGuiListClipper clipper;
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
+        im::ListClipper clipper;
         clipper.Begin( static_cast<int>( rows.size() ) );
         while( clipper.Step() ) {
             grow_columns<row_data>( "creatures_table", specs, rows, clipper.DisplayStart, clipper.DisplayEnd );
             for( int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++ ) {
                 const row_data &r = rows[i];
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
+                im::TableNextRow();
+                im::TableNextColumn();
                 const bool is_selected = creature_selected_id == r.sel_key;
-                if( ImGui::Selectable( ( r.kind + "##sel_" + r.sel_key ).c_str(),
+                if( im::Selectable( ( r.kind + "##sel_" + r.sel_key ).c_str(),
                                        is_selected,
-                                       ImGuiSelectableFlags_SpanAllColumns |
-                                       ImGuiSelectableFlags_AllowOverlap ) ) {
+                                       im::SelectableFlags_SpanAllColumns |
+                                       im::SelectableFlags_AllowOverlap ) ) {
                     creature_selected_id = r.sel_key;
                 }
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( r.name, c_white );
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( r.type_id.c_str() );
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( r.faction.c_str() );
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d/%d", r.hp, r.hp_max );
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d", r.dist );
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( r.pos.c_str() );
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
+                im::TextMarkup( r.name, c_white );
+                im::TableNextColumn();
+                im::TextUnformatted( r.type_id.c_str() );
+                im::TableNextColumn();
+                im::TextUnformatted( r.faction.c_str() );
+                im::TableNextColumn();
+                im::Text( "%d/%d", r.hp, r.hp_max );
+                im::TableNextColumn();
+                im::Text( "%d", r.dist );
+                im::TableNextColumn();
+                im::TextUnformatted( r.pos.c_str() );
+                im::TableNextColumn();
                 add_monitor_button(
                     ( "cre_mon_" + r.sel_key ).c_str(),
                     r.kind + ":" + r.name,
                     snap::creature_named( r.name ) );
             }
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
 
-    ImGui::SeparatorText( creature_selected_id.empty()
+    im::SeparatorText( creature_selected_id.empty()
                           ? "Select a creature to inspect"
                           : creature_selected_id.c_str() );
     if( creature_selected_id.empty() ) {
@@ -2804,7 +2737,7 @@ void tab_creatures_view::draw_body( debug_console &host )
     }
 
     if( !sel ) {
-        ImGui::TextDisabled( "%s", "(no longer present)" );
+        im::TextDisabled( "%s", "(no longer present)" );
         return;
     }
 
@@ -2839,77 +2772,77 @@ void tab_creatures_view::draw_body( debug_console &host )
     // Heal/Kill/Teleport act on a non-avatar target. The avatar uses the
     // Player tab's Health controls and must not be Kill-able from here.
     if( sel_mon || sel_npc ) {
-        if( ImGui::Button( "Heal##cr" ) ) {
+        if( im::Button( "Heal##cr" ) ) {
             if( sel_mon ) {
                 sel_mon->set_hp( sel_mon->get_hp_max() );
             } else if( sel_npc ) {
                 sel_npc->healall( 9999 );
             }
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Restore the selected creature to full HP" );
         }
-        ImGui::SameLine();
-        if( ImGui::Button( "Kill##cr" ) ) {
+        im::SameLine();
+        if( im::Button( "Kill##cr" ) ) {
             sel->die( &here, nullptr );
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Kill the selected creature with no killer attribution" );
         }
-        ImGui::SameLine();
-        if( ImGui::Button( "Teleport here##cr" ) ) {
+        im::SameLine();
+        if( im::Button( "Teleport here##cr" ) ) {
             sel->setpos( here, apos );
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Move the selected creature to the avatar's tile" );
         }
         if( sel_npc ) {
-            ImGui::SameLine();
-            if( ImGui::Button( "Control NPC##cr" ) ) {
+            im::SameLine();
+            if( im::Button( "Control NPC##cr" ) ) {
                 host.defer_action( debug_menu_index::CONTROL_NPC );
             }
-            if( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip( "%s",
+            if( im::IsItemHovered() ) {
+                im::SetTooltip( "%s",
                                    "Launch the legacy Control NPC menu (this NPC may not be preselected)" );
             }
         }
     }
 
-    if( ImGui::CollapsingHeader( "Description##cr" ) ) {
+    if( im::CollapsingHeader( "Description##cr" ) ) {
         const std::vector<std::string> desc = sel->extended_description();
         for( const std::string &line : desc ) {
-            cataimgui::draw_colored_text( line, c_white );
+            im::TextMarkup( line, c_white );
         }
     }
 
-    if( ImGui::CollapsingHeader( "Effects##cr" ) ) {
+    if( im::CollapsingHeader( "Effects##cr" ) ) {
         const std::vector<std::reference_wrapper<const effect>> effs = sel->get_effects();
         if( effs.empty() ) {
-            ImGui::TextDisabled( "%s", "(none)" );
-        } else if( ImGui::BeginTable( "cr_effects", 3,
-                                      ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                                      ImGuiTableFlags_SizingStretchProp ) ) {
-            ImGui::TableSetupColumn( "Effect", ImGuiTableColumnFlags_WidthStretch );
+            im::TextDisabled( "%s", "(none)" );
+        } else if( im::BeginTable( "cr_effects", 3,
+                                      im::TableFlags_RowBg | im::TableFlags_Borders |
+                                      im::TableFlags_SizingStretchProp ) ) {
+            im::TableSetupColumn( "Effect", im::TableColumnFlags_WidthStretch );
             fit_col( "Intensity" );
             fit_col( "Bodypart" );
-            ImGui::TableHeadersRow();
+            im::TableHeadersRow();
             for( const effect &e : effs ) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( e.disp_name(), c_white );
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d", e.get_intensity() );
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( e.get_bp().id().str().c_str() );
+                im::TableNextRow();
+                im::TableNextColumn();
+                im::TextMarkup( e.disp_name(), c_white );
+                im::TableNextColumn();
+                im::Text( "%d", e.get_intensity() );
+                im::TableNextColumn();
+                im::TextUnformatted( e.get_bp().id().str().c_str() );
             }
-            ImGui::EndTable();
+            im::EndTable();
         }
     }
 
-    if( sel_mon && ImGui::CollapsingHeader( "Monster type##cr" ) ) {
+    if( sel_mon && im::CollapsingHeader( "Monster type##cr" ) ) {
         const mtype &mt = *sel_mon->type;
         kv_panel( "cr_mtype", [&]() {
             kv_row( "id", mt.id.str() );
@@ -2925,21 +2858,21 @@ void tab_creatures_view::draw_body( debug_console &host )
         } );
     }
 
-    if( sel_mon && ImGui::CollapsingHeader( "Monster inventory##cr" ) ) {
-        if( ImGui::SmallButton( "Show in Items tab##mon" ) ) {
+    if( sel_mon && im::CollapsingHeader( "Monster inventory##cr" ) ) {
+        if( im::SmallButton( "Show in Items tab##mon" ) ) {
             host.show_items_for_monster( sel_mon->type->id.str(),
                                          sel_mon->pos_bub( here ) );
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Show this monster.s inventory in Items tab" );
         }
         if( sel_mon->inv.empty() ) {
-            ImGui::TextDisabled( "%s", "(empty)" );
+            im::TextDisabled( "%s", "(empty)" );
         } else {
             for( const item &it : sel_mon->inv ) {
-                ImGui::Bullet();
-                cataimgui::draw_colored_text( it.tname(), c_white );
+                im::Bullet();
+                im::TextMarkup( it.tname(), c_white );
             }
         }
     }
@@ -2954,28 +2887,28 @@ void tab_creatures_view::draw_body( debug_console &host )
         render_char_proficiencies( *sel_char, char_edit );
     }
 
-    if( sel_npc && ImGui::CollapsingHeader( "NPC inventory##cr" ) ) {
-        if( ImGui::SmallButton( "Show in Items tab##npc" ) ) {
+    if( sel_npc && im::CollapsingHeader( "NPC inventory##cr" ) ) {
+        if( im::SmallButton( "Show in Items tab##npc" ) ) {
             host.show_items_for_npc( sel_npc->getID() );
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Show this NPC.s inventory in Items tab" );
         }
         const item_location wielded = sel_npc->get_wielded_item();
         if( wielded ) {
-            ImGui::TextDisabled( "%s", "wielded:" );
-            ImGui::SameLine();
-            cataimgui::draw_colored_text( wielded->tname(), c_white );
+            im::TextDisabled( "%s", "wielded:" );
+            im::SameLine();
+            im::TextMarkup( wielded->tname(), c_white );
         } else {
-            ImGui::TextDisabled( "%s", "(empty hands)" );
+            im::TextDisabled( "%s", "(empty hands)" );
         }
         const std::vector<item_location> all = sel_npc->all_items_loc();
-        ImGui::TextDisabled( "%d carried", static_cast<int>( all.size() ) );
+        im::TextDisabled( "%d carried", static_cast<int>( all.size() ) );
         for( const item_location &loc : all ) {
             if( loc ) {
-                ImGui::Bullet();
-                cataimgui::draw_colored_text( loc->tname(), c_white );
+                im::Bullet();
+                im::TextMarkup( loc->tname(), c_white );
             }
         }
     }
@@ -3094,36 +3027,36 @@ void tab_items_view::draw_body( debug_console &host )
     }
     framed_section( "items_spawn", "Spawn", [&]() {
         host.debug_button( debug_menu_index::WISH );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::SPAWN_ITEM_GROUP );
     } );
 
     framed_section( "items_src", "Source", [&]() {
         if( reverted_from_source.has_value() ) {
-            ImGui::TextColored( ImVec4( 0.95f, 0.7f, 0.4f, 1.0f ), "%s",
+            im::TextColored( im::vec4( 0.95f, 0.7f, 0.4f, 1.0f ), "%s",
                                 string_format(
                                     "Previous source \"%s\" no longer present; reverted to Avatar.",
                                     *reverted_from_source ).c_str() );
         }
-        ImGui::SetNextItemWidth( 360.0f );
-        if( ImGui::BeginCombo( "##items_src_combo",
+        im::SetNextItemWidth( 360.0f );
+        if( im::BeginCombo( "##items_src_combo",
                                sources[cur_src_idx].label.c_str() ) ) {
             for( int i = 0; i < static_cast<int>( sources.size() ); i++ ) {
                 const bool sel = i == cur_src_idx;
                 // Same-named sources (e.g. two NPCs) would collide; scope by index.
-                ImGui::PushID( i );
-                if( ImGui::Selectable( sources[i].label.c_str(), sel ) ) {
+                im::PushID( i );
+                if( im::Selectable( sources[i].label.c_str(), sel ) ) {
                     items_source = sources[i].key;
                     selected.reset();
                     reverted_from_source.reset();
                 }
-                ImGui::PopID();
+                im::PopID();
             }
-            ImGui::EndCombo();
+            im::EndCombo();
         }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth( -1.0f );
-        ImGui::InputTextWithHint( "Filter##items",
+        im::SameLine();
+        im::SetNextItemWidth( -1.0f );
+        im::InputTextWithHint( "Filter##items",
                                   "name / type id / category", &item_filter );
     } );
 
@@ -3334,15 +3267,15 @@ void tab_items_view::draw_body( debug_console &host )
         }
     }
 
-    const float details_h = ImGui::GetFrameHeightWithSpacing() * 8.0f;
-    const float avail_y = ImGui::GetContentRegionAvail().y;
-    const float table_h = avail_y - details_h - ImGui::GetStyle().ItemSpacing.y;
+    const float details_h = im::GetFrameHeightWithSpacing() * 8.0f;
+    const float avail_y = im::GetContentRegionAvail().y;
+    const float table_h = avail_y - details_h - im::GetStyle().ItemSpacing.y;
 
-    if( ImGui::BeginTable( "items_table", 10,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings,
-                           ImVec2( 0.0f, fit_table_height(
+    if( im::BeginTable( "items_table", 10,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings,
+                           im::vec2( 0.0f, fit_table_height(
                                        static_cast<int>( rows.size() ),
                                        std::max( table_h, 120.0f ) ) ) ) ) {
         const uint64_t key = lk_str( lk_str( lk_mix( 0u, rows.size() ),
@@ -3390,62 +3323,62 @@ void tab_items_view::draw_body( debug_console &host )
             {  "+M", colw::widget, {}, 40.0f },
         };
         setup_columns<item_row>( "items_table", key, specs, rows );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
-        ImGuiListClipper clipper;
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
+        im::ListClipper clipper;
         clipper.Begin( static_cast<int>( rows.size() ) );
         while( clipper.Step() ) {
             grow_columns<item_row>( "items_table", specs, rows, clipper.DisplayStart, clipper.DisplayEnd );
             for( int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++ ) {
                 const item_row &r = rows[i];
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::PushID( i );
+                im::TableNextRow();
+                im::TableNextColumn();
+                im::PushID( i );
                 const bool sel = selected_row_idx == i;
-                if( ImGui::Selectable( "##sel", sel,
-                                       ImGuiSelectableFlags_SpanAllColumns |
-                                       ImGuiSelectableFlags_AllowOverlap ) ) {
+                if( im::Selectable( "##sel", sel,
+                                       im::SelectableFlags_SpanAllColumns |
+                                       im::SelectableFlags_AllowOverlap ) ) {
                     selected = item_pick{ items_source, r.type_id, r.location, r.instance_rank };
                     selected_row_idx = i;
                 }
-                if( ImGui::BeginPopupContextItem( "item_ctx" ) ) {
-                    if( ImGui::MenuItem( "Copy type id" ) ) {
-                        ImGui::SetClipboardText( r.type_id.c_str() );
+                if( im::BeginPopupContextItem( "item_ctx" ) ) {
+                    if( im::MenuItem( "Copy type id" ) ) {
+                        im::SetClipboardText( r.type_id.c_str() );
                     }
-                    if( ImGui::MenuItem( "Copy full name" ) ) {
-                        ImGui::SetClipboardText( r.plain.c_str() );
+                    if( im::MenuItem( "Copy full name" ) ) {
+                        im::SetClipboardText( r.plain.c_str() );
                     }
-                    ImGui::EndPopup();
+                    im::EndPopup();
                 }
-                ImGui::SameLine();
-                cataimgui::draw_colored_text( r.name, c_white );
-                ImGui::PopID();
-                ImGui::TableNextColumn();
-                ImGui::TextDisabled( "%s", r.type_id.c_str() );
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( r.category.c_str() );
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( r.location.c_str() );
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d", r.count );
-                ImGui::TableNextColumn();
+                im::SameLine();
+                im::TextMarkup( r.name, c_white );
+                im::PopID();
+                im::TableNextColumn();
+                im::TextDisabled( "%s", r.type_id.c_str() );
+                im::TableNextColumn();
+                im::TextUnformatted( r.category.c_str() );
+                im::TableNextColumn();
+                im::TextUnformatted( r.location.c_str() );
+                im::TableNextColumn();
+                im::Text( "%d", r.count );
+                im::TableNextColumn();
                 if( r.charges >= 0 ) {
-                    ImGui::Text( "%d", r.charges );
+                    im::Text( "%d", r.charges );
                 } else {
-                    ImGui::TextDisabled( "-" );
+                    im::TextDisabled( "-" );
                 }
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
                 if( r.damage > 0 ) {
-                    ImGui::TextColored( ImVec4( 0.95f, 0.6f, 0.4f, 1.0f ),
+                    im::TextColored( im::vec4( 0.95f, 0.6f, 0.4f, 1.0f ),
                                         "%d", r.damage );
                 } else {
-                    ImGui::TextDisabled( "0" );
+                    im::TextDisabled( "0" );
                 }
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d", r.weight_g );
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d", r.volume_ml );
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
+                im::Text( "%d", r.weight_g );
+                im::TableNextColumn();
+                im::Text( "%d", r.volume_ml );
+                im::TableNextColumn();
                 const bool by_charges = r.charges >= 0;
                 const itype_id iid( r.type_id );
                 add_monitor_button(
@@ -3454,20 +3387,20 @@ void tab_items_view::draw_body( debug_console &host )
                     by_charges ? snap::item_charges( iid ) : snap::item_count( iid ) );
             }
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
 
-    ImGui::SeparatorText( selected_row_idx < 0
+    im::SeparatorText( selected_row_idx < 0
                           ? _( "Select an item to inspect" )
                           : rows[selected_row_idx].plain.c_str() );
     if( selected_row_idx < 0 ) {
         return;
     }
     const item_row &r = rows[selected_row_idx];
-    if( ImGui::BeginTable( "item_details", 2,
-                           ImGuiTableFlags_SizingStretchProp ) ) {
-        ImGui::TableSetupColumn( "k", ImGuiTableColumnFlags_WidthFixed, 140.0f );
-        ImGui::TableSetupColumn( "v" );
+    if( im::BeginTable( "item_details", 2,
+                           im::TableFlags_SizingStretchProp ) ) {
+        im::TableSetupColumn( "k", im::TableColumnFlags_WidthFixed, 140.0f );
+        im::TableSetupColumn( "v" );
         kv_row( "name", r.plain );
         kv_row( "type", r.type_id );
         kv_row( "category", r.category );
@@ -3490,13 +3423,13 @@ void tab_items_view::draw_body( debug_console &host )
             }
             kv_row( "flags", fl );
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
-    if( ImGui::Button( "Copy type id##it" ) ) {
-        ImGui::SetClipboardText( r.type_id.c_str() );
+    if( im::Button( "Copy type id##it" ) ) {
+        im::SetClipboardText( r.type_id.c_str() );
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Copy this item's itype_id to the clipboard" );
     }
 }
@@ -3559,20 +3492,20 @@ void tab_eoc_view::draw_eval_panel( debug_console &host )
         eval_ok = rv->ok;
     }
 
-    ImGui::SeparatorText( "Eval" );
+    im::SeparatorText( "Eval" );
 
-    if( ImGui::SmallButton( "+##eval_fn_pop" ) ) {
-        ImGui::OpenPopup( "eval_func_popup" );
+    if( im::SmallButton( "+##eval_fn_pop" ) ) {
+        im::OpenPopup( "eval_func_popup" );
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Insert a function template at the end of the input" );
     }
-    if( ImGui::BeginPopup( "eval_func_popup" ) ) {
-        ImGui::SetNextItemWidth( 220.0f );
-        ImGui::InputTextWithHint( "##eval_func_filter", "filter",
+    if( im::BeginPopup( "eval_func_popup" ) ) {
+        im::SetNextItemWidth( 220.0f );
+        im::InputTextWithHint( "##eval_func_filter", "filter",
                                   &func_filter );
-        ImGui::Separator();
+        im::Separator();
         auto matches = [&]( std::string_view name ) {
             return func_filter.empty() ||
                    name.find( func_filter ) != std::string_view::npos;
@@ -3582,11 +3515,11 @@ void tab_eoc_view::draw_eval_panel( debug_console &host )
                 eval_expr += ' ';
             }
             eval_expr += tmpl;
-            ImGui::CloseCurrentPopup();
+            im::CloseCurrentPopup();
         };
-        ImGui::BeginChild( "eval_func_list", ImVec2( 360.0f, 320.0f ),
-                           false, ImGuiWindowFlags_HorizontalScrollbar );
-        ImGui::SeparatorText( "math" );
+        im::BeginChild( "eval_func_list", im::vec2( 360.0f, 320.0f ),
+                           false, im::WindowFlags_HorizontalScrollbar );
+        im::SeparatorText( "math" );
         for( const math_func &f : functions ) {
             const std::string nm( f.symbol );
             if( !matches( nm ) ) {
@@ -3605,11 +3538,11 @@ void tab_eoc_view::draw_eval_panel( debug_console &host )
                 }
                 tmpl += ")";
             }
-            if( ImGui::Selectable( tmpl.c_str() ) ) {
+            if( im::Selectable( tmpl.c_str() ) ) {
                 insert( tmpl );
             }
         }
-        ImGui::SeparatorText( "dialogue" );
+        im::SeparatorText( "dialogue" );
         for( const auto &kv : get_all_diag_funcs() ) {
             const std::string sym( kv.first );
             const dialogue_func &df = kv.second;
@@ -3637,32 +3570,32 @@ void tab_eoc_view::draw_eval_panel( debug_console &host )
                     tmpl += "'" + std::string( kw ) + "': <value>";
                 }
                 tmpl += ")";
-                if( ImGui::Selectable( tmpl.c_str() ) ) {
+                if( im::Selectable( tmpl.c_str() ) ) {
                     insert( tmpl );
                 }
             }
         }
-        ImGui::EndChild();
-        ImGui::EndPopup();
+        im::EndChild();
+        im::EndPopup();
     }
-    ImGui::SameLine();
+    im::SameLine();
 
-    ImGui::SetNextItemWidth( -200.0f );
-    const bool entered = ImGui::InputTextWithHint(
+    im::SetNextItemWidth( -200.0f );
+    const bool entered = im::InputTextWithHint(
                              "##eval_expr",
                              "expression, e.g. 1 + u_skill('cooking')",
                              &eval_expr,
-                             ImGuiInputTextFlags_EnterReturnsTrue );
-    ImGui::SameLine();
-    const bool clicked = ImGui::Button( "Eval##eoc_eval" );
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+                             im::InputTextFlags_EnterReturnsTrue );
+    im::SameLine();
+    const bool clicked = im::Button( "Eval##eoc_eval" );
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Evaluate expression in avatar dialogue" );
     }
-    ImGui::SameLine();
-    ImGui::Checkbox( "auto/turn", &eval_auto );
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    im::SameLine();
+    im::Checkbox( "auto/turn", &eval_auto );
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Re-evaluate the expression every game turn" );
     }
 
@@ -3671,45 +3604,45 @@ void tab_eoc_view::draw_eval_panel( debug_console &host )
                            now_turn != eval_last_turn;
     if( ( entered || clicked || auto_fire ) && !eval_expr.empty() ) {
         // eval() can call debugmsg from the dialogue layer (e.g. when
-        // const_actor is null), which opens a popup mid-ImGui-frame and
+        // const_actor is null), which opens a popup mid-redraw and
         // corrupts state. Defer the actual eval to the outer execute() loop.
         host.request_eval( eval_expr );
         eval_last_turn = now_turn;
     }
     if( !eval_result.empty() ) {
-        const ImVec4 col = eval_ok ? ImVec4( 0.6f, 0.9f, 0.6f, 1.0f )
-                           : ImVec4( 1.0f, 0.5f, 0.5f, 1.0f );
+        const im::vec4 col = eval_ok ? im::vec4( 0.6f, 0.9f, 0.6f, 1.0f )
+                           : im::vec4( 1.0f, 0.5f, 0.5f, 1.0f );
         const char *prefix = eval_ok ? "= " : "Error: ";
-        ImGui::TextColored( col, "%s%s", prefix, eval_result.c_str() );
+        im::TextColored( col, "%s%s", prefix, eval_result.c_str() );
     }
 }
 
 void tab_eoc_view::draw_eoc_browser( debug_console &host )
 {
-    ImGui::SeparatorText( "Browser" );
+    im::SeparatorText( "Browser" );
     const std::vector<effect_on_condition> &all_eocs = effect_on_conditions::get_all();
 
     // Filters
-    ImGui::SetNextItemWidth( 200 );
-    ImGui::InputText( "Filter##eocs", &eoc_filter );
-    ImGui::SameLine();
+    im::SetNextItemWidth( 200 );
+    im::InputText( "Filter##eocs", &eoc_filter );
+    im::SameLine();
 
     static const char *const type_names[] = {
         "all", "activation", "recurring", "avatar_death",
         "npc_death", "prevent_death", "event"
     };
-    ImGui::SetNextItemWidth( 120 );
+    im::SetNextItemWidth( 120 );
     const char *cur_type = eoc_type_filter < 0 ? "all" : type_names[eoc_type_filter + 1];
-    if( ImGui::BeginCombo( "Type##eoc", cur_type ) ) {
-        if( ImGui::Selectable( "all", eoc_type_filter < 0 ) ) {
+    if( im::BeginCombo( "Type##eoc", cur_type ) ) {
+        if( im::Selectable( "all", eoc_type_filter < 0 ) ) {
             eoc_type_filter = -1;
         }
         for( int i = 0; i < static_cast<int>( NUM_EOC_TYPES ); i++ ) {
-            if( ImGui::Selectable( type_names[i + 1], eoc_type_filter == i ) ) {
+            if( im::Selectable( type_names[i + 1], eoc_type_filter == i ) ) {
                 eoc_type_filter = i;
             }
         }
-        ImGui::EndCombo();
+        im::EndCombo();
     }
     // Merge global (game) + character-scoped queued/inactive EOC IDs.
     // Without merge, player-bound recurring EOCs misreport as "loaded".
@@ -3759,15 +3692,15 @@ void tab_eoc_view::draw_eoc_browser( debug_console &host )
         filtered.push_back( i );
     }
 
-    ImGui::SameLine();
-    ImGui::TextDisabled( "%d / %d", static_cast<int>( filtered.size() ),
+    im::SameLine();
+    im::TextDisabled( "%d / %d", static_cast<int>( filtered.size() ),
                          static_cast<int>( all_eocs.size() ) );
 
     // Reserve a fixed strip for the per-EOC details panel so the table fills
     // the remaining height. ~9 lines + spacing covers the field list below.
-    const float details_h = ImGui::GetFrameHeightWithSpacing() * 9.0f;
-    const float avail_y = ImGui::GetContentRegionAvail().y;
-    const float table_h = avail_y - details_h - ImGui::GetStyle().ItemSpacing.y;
+    const float details_h = im::GetFrameHeightWithSpacing() * 9.0f;
+    const float avail_y = im::GetContentRegionAvail().y;
+    const float table_h = avail_y - details_h - im::GetStyle().ItemSpacing.y;
 
     auto add_eoc_monitor = [&host]( const std::string & id_copy ) {
         const std::string label = "eoc:" + id_copy;
@@ -3781,19 +3714,19 @@ void tab_eoc_view::draw_eoc_browser( debug_console &host )
         host.set_eoc_trace_visible( false );
     };
 
-    if( ImGui::BeginTable( "eocs", 7,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings |
-                           ImGuiTableFlags_Sortable | ImGuiTableFlags_SortMulti,
-                           ImVec2( 0.0f, fit_table_height(
+    if( im::BeginTable( "eocs", 7,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings |
+                           im::TableFlags_Sortable | im::TableFlags_SortMulti,
+                           im::vec2( 0.0f, fit_table_height(
                                        static_cast<int>( filtered.size() ),
                                        std::max( table_h, 120.0f ) ) ) ) ) {
         const uint64_t key = lk_str( lk_str( lk_mix( 0u, filtered.size() ),
                                              eoc_filter ),
                                      std::to_string( eoc_type_filter ) );
         const std::vector<colspec<int>> specs = {
-            { "ID", colw::stretch, {}, 0.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_DefaultSort },
+            { "ID", colw::stretch, {}, 0.0f, 1.0f, 0.0f, im::TableColumnFlags_DefaultSort },
             {
                 "Type", colw::fit, [&]( const int &i )
                 {
@@ -3816,19 +3749,19 @@ void tab_eoc_view::draw_eoc_browser( debug_console &host )
                     return it != queued_times.end() ? to_string( it->second - calendar::turn ) : std::string();
                 }
             },
-            { "Run", colw::widget, {}, 50.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_NoSort },
-            { "Mon", colw::widget, {}, 50.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_NoSort },
+            { "Run", colw::widget, {}, 50.0f, 1.0f, 0.0f, im::TableColumnFlags_NoSort },
+            { "Mon", colw::widget, {}, 50.0f, 1.0f, 0.0f, im::TableColumnFlags_NoSort },
         };
         setup_columns<int>( "eocs", key, specs, filtered, true );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
 
-        if( ImGuiTableSortSpecs *sort_specs = ImGui::TableGetSortSpecs() ) {
+        if( im::TableSortSpecs *sort_specs = im::TableGetSortSpecs() ) {
             if( sort_specs->SpecsCount > 0 ) {
                 std::sort( filtered.begin(), filtered.end(),
                 [&]( int a, int b ) {
                     for( int i = 0; i < sort_specs->SpecsCount; i++ ) {
-                        const ImGuiTableColumnSortSpecs &s = sort_specs->Specs[i];
+                        const im::TableColumnSortSpecs &s = sort_specs->Specs[i];
                         const effect_on_condition &ea = all_eocs[a];
                         const effect_on_condition &eb = all_eocs[b];
                         int cmp = 0;
@@ -3868,7 +3801,7 @@ void tab_eoc_view::draw_eoc_browser( debug_console &host )
                                 break;
                         }
                         if( cmp != 0 ) {
-                            return s.SortDirection == ImGuiSortDirection_Ascending
+                            return s.SortDirection == im::SortDirection_Ascending
                                    ? cmp < 0 : cmp > 0;
                         }
                     }
@@ -3877,7 +3810,7 @@ void tab_eoc_view::draw_eoc_browser( debug_console &host )
             }
         }
 
-        ImGuiListClipper clipper;
+        im::ListClipper clipper;
         clipper.Begin( static_cast<int>( filtered.size() ) );
         while( clipper.Step() ) {
             grow_columns<int>( "eocs", specs, filtered, clipper.DisplayStart, clipper.DisplayEnd, true );
@@ -3885,73 +3818,73 @@ void tab_eoc_view::draw_eoc_browser( debug_console &host )
                 const effect_on_condition &eoc = all_eocs[filtered[row]];
                 const std::string &id_str = eoc.id.str();
 
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
+                im::TableNextRow();
+                im::TableNextColumn();
                 const bool is_selected = eoc_selected_id == id_str;
-                if( ImGui::Selectable( id_str.c_str(), is_selected,
-                                       ImGuiSelectableFlags_SpanAllColumns |
-                                       ImGuiSelectableFlags_AllowOverlap ) ) {
+                if( im::Selectable( id_str.c_str(), is_selected,
+                                       im::SelectableFlags_SpanAllColumns |
+                                       im::SelectableFlags_AllowOverlap ) ) {
                     eoc_selected_id = id_str;
                 }
-                if( ImGui::BeginPopupContextItem( ( "eoc_ctx_" + id_str ).c_str() ) ) {
-                    if( ImGui::MenuItem( "Copy id" ) ) {
-                        ImGui::SetClipboardText( id_str.c_str() );
+                if( im::BeginPopupContextItem( ( "eoc_ctx_" + id_str ).c_str() ) ) {
+                    if( im::MenuItem( "Copy id" ) ) {
+                        im::SetClipboardText( id_str.c_str() );
                     }
-                    ImGui::EndPopup();
+                    im::EndPopup();
                 }
 
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( eoc_type_name( eoc.type ) );
+                im::TableNextColumn();
+                im::TextUnformatted( eoc_type_name( eoc.type ) );
 
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
                 if( !eoc.src.empty() ) {
-                    ImGui::TextUnformatted( eoc.src.front().second.str().c_str() );
+                    im::TextUnformatted( eoc.src.front().second.str().c_str() );
                 }
 
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
                 if( queued_ids.count( id_str ) ) {
-                    ImGui::TextColored( ImVec4( 0.4f, 1.0f, 0.4f, 1.0f ), "queued" );
+                    im::TextColored( im::vec4( 0.4f, 1.0f, 0.4f, 1.0f ), "queued" );
                 } else if( inactive_ids.count( id_str ) ) {
-                    ImGui::TextColored( ImVec4( 0.6f, 0.6f, 0.6f, 1.0f ), "inactive" );
+                    im::TextColored( im::vec4( 0.6f, 0.6f, 0.6f, 1.0f ), "inactive" );
                 } else {
-                    ImGui::TextUnformatted( "loaded" );
+                    im::TextUnformatted( "loaded" );
                 }
 
-                ImGui::TableNextColumn();
+                im::TableNextColumn();
                 auto it = queued_times.find( id_str );
                 if( it != queued_times.end() ) {
                     time_duration remaining = it->second - calendar::turn;
-                    ImGui::TextUnformatted( to_string( remaining ).c_str() );
+                    im::TextUnformatted( to_string( remaining ).c_str() );
                 }
 
-                ImGui::TableNextColumn();
-                ImGui::PushID( filtered[row] );
-                if( ImGui::SmallButton( ">" ) ) {
+                im::TableNextColumn();
+                im::PushID( filtered[row] );
+                if( im::SmallButton( ">" ) ) {
                     host.defer_eoc( effect_on_condition_id( id_str ) );
                 }
-                if( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip( "%s",
+                if( im::IsItemHovered() ) {
+                    im::SetTooltip( "%s",
                                        "Trigger this EOC immediately with the avatar as alpha talker" );
                 }
-                ImGui::PopID();
+                im::PopID();
 
-                ImGui::TableNextColumn();
-                ImGui::PushID( filtered[row] + 100000 );
-                const bool mon_clicked = ImGui::SmallButton( "+M" );
-                if( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip( "%s",
+                im::TableNextColumn();
+                im::PushID( filtered[row] + 100000 );
+                const bool mon_clicked = im::SmallButton( "+M" );
+                if( im::IsItemHovered() ) {
+                    im::SetTooltip( "%s",
                                        "Monitor this EOC (Trace > Monitors)" );
                 }
                 if( mon_clicked ) {
                     add_eoc_monitor( id_str );
                 }
-                ImGui::PopID();
+                im::PopID();
             }
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
 
-    ImGui::SeparatorText( eoc_selected_id.empty()
+    im::SeparatorText( eoc_selected_id.empty()
                           ? "Select an EOC to inspect"
                           : eoc_selected_id.c_str() );
     if( !eoc_selected_id.empty() ) {
@@ -3963,7 +3896,7 @@ void tab_eoc_view::draw_eoc_browser( debug_console &host )
             }
         }
         if( !sel ) {
-            ImGui::TextDisabled( "%s", "(no longer loaded)" );
+            im::TextDisabled( "%s", "(no longer loaded)" );
         } else {
             kv_panel( "eoc_details", [&]() {
                 kv_row( "type", eoc_type_name( sel->type ) );
@@ -3993,27 +3926,27 @@ void tab_eoc_view::draw_eoc_browser( debug_console &host )
                 }
             } );
 
-            if( ImGui::Button( "Trigger now##eoc_det" ) ) {
+            if( im::Button( "Trigger now##eoc_det" ) ) {
                 host.defer_eoc( effect_on_condition_id( eoc_selected_id ) );
             }
-            if( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip( "%s",
+            if( im::IsItemHovered() ) {
+                im::SetTooltip( "%s",
                                    "Trigger this EOC immediately with the avatar as alpha talker" );
             }
-            ImGui::SameLine();
-            if( ImGui::Button( "+Monitor##eoc_det" ) ) {
+            im::SameLine();
+            if( im::Button( "+Monitor##eoc_det" ) ) {
                 add_eoc_monitor( eoc_selected_id );
             }
-            if( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip( "%s",
+            if( im::IsItemHovered() ) {
+                im::SetTooltip( "%s",
                                    "Monitor this EOC and mute the raw feed" );
             }
-            ImGui::SameLine();
-            if( ImGui::Button( "Copy id##eoc_det" ) ) {
-                ImGui::SetClipboardText( eoc_selected_id.c_str() );
+            im::SameLine();
+            if( im::Button( "Copy id##eoc_det" ) ) {
+                im::SetClipboardText( eoc_selected_id.c_str() );
             }
-            if( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip( "%s", "Copy the EOC id to the clipboard" );
+            if( im::IsItemHovered() ) {
+                im::SetTooltip( "%s", "Copy the EOC id to the clipboard" );
             }
         }
     }
@@ -4034,15 +3967,15 @@ struct var_table_writer {
 };
 
 // Colored relation int -> green/red/dim grey.
-ImVec4 relation_color( int v )
+im::vec4 relation_color( int v )
 {
     if( v > 0 ) {
-        return ImVec4( 0.4f, 0.9f, 0.4f, 1.0f );
+        return im::vec4( 0.4f, 0.9f, 0.4f, 1.0f );
     }
     if( v < 0 ) {
-        return ImVec4( 0.95f, 0.45f, 0.45f, 1.0f );
+        return im::vec4( 0.95f, 0.45f, 0.45f, 1.0f );
     }
-    return ImVec4( 0.7f, 0.7f, 0.7f, 1.0f );
+    return im::vec4( 0.7f, 0.7f, 0.7f, 1.0f );
 }
 
 const char *timed_event_type_name( timed_event_type t )
@@ -4141,14 +4074,14 @@ constexpr std::array<const char *, static_cast<size_t>( dv_types::last )> var_ty
 
 void draw_edit_val( std::string &val, dv_types &type )
 {
-    ImGui::SetNextItemWidth( 100.0f );
-    if( ImGui::BeginCombo( "##var_type", var_type_names[static_cast<size_t>( type )] ) ) {
+    im::SetNextItemWidth( 100.0f );
+    if( im::BeginCombo( "##var_type", var_type_names[static_cast<size_t>( type )] ) ) {
         for( size_t i = 0; i < var_type_names.size(); i++ ) {
-            if( ImGui::Selectable( var_type_names[i], static_cast<size_t>( type ) == i ) ) {
+            if( im::Selectable( var_type_names[i], static_cast<size_t>( type ) == i ) ) {
                 type = static_cast<dv_types>( i );
             }
         }
-        ImGui::EndCombo();
+        im::EndCombo();
     }
     std::string hint;
     switch( type ) {
@@ -4164,9 +4097,9 @@ void draw_edit_val( std::string &val, dv_types &type )
         case dv_types::last:
             break;
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth( 200.0f );
-    ImGui::InputTextWithHint( "##var_edit_value", hint.c_str(), &val );
+    im::SameLine();
+    im::SetNextItemWidth( 200.0f );
+    im::InputTextWithHint( "##var_edit_value", hint.c_str(), &val );
 }
 
 } // namespace
@@ -4194,14 +4127,14 @@ static void draw_var_table( const char *table_id,
     // Drawn before the empty-list check so a var can be added to an empty
     // scope. PushID keeps widget IDs distinct between tables in one frame.
     if( can_edit ) {
-        ImGui::PushID( table_id );
-        ImGui::SetNextItemWidth( 160.0f );
-        ImGui::InputTextWithHint( "##new_var_key", "new key", &state.new_key );
-        ImGui::SameLine();
+        im::PushID( table_id );
+        im::SetNextItemWidth( 160.0f );
+        im::InputTextWithHint( "##new_var_key", "new key", &state.new_key );
+        im::SameLine();
         draw_edit_val( state.new_val, state.new_var_type );
-        ImGui::SameLine();
-        ImGui::BeginDisabled( state.new_key.empty() );
-        if( ImGui::SmallButton( "Add##var" ) ) {
+        im::SameLine();
+        im::BeginDisabled( state.new_key.empty() );
+        if( im::SmallButton( "Add##var" ) ) {
             diag_value parsed = parse_value( state.new_val, state.new_var_type );
             if( !parsed.is_empty() ) {
                 writer.write( state.new_key, parsed );
@@ -4209,15 +4142,15 @@ static void draw_var_table( const char *table_id,
                 state.new_val.clear();
             }
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s", "Create variable from key + value" );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s", "Create variable from key + value" );
         }
-        ImGui::EndDisabled();
-        ImGui::PopID();
+        im::EndDisabled();
+        im::PopID();
     }
 
     if( vars.empty() ) {
-        ImGui::TextUnformatted( "No variables." );
+        im::TextUnformatted( "No variables." );
         return;
     }
 
@@ -4234,12 +4167,12 @@ static void draw_var_table( const char *table_id,
         }
     }
 
-    if( ImGui::BeginTable( table_id, n_cols,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings |
-                           ImGuiTableFlags_Sortable,
-                           ImVec2( 0.0f, fit_table_height( filtered_count, height ) ) ) ) {
+    if( im::BeginTable( table_id, n_cols,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings |
+                           im::TableFlags_Sortable,
+                           im::vec2( 0.0f, fit_table_height( filtered_count, height ) ) ) ) {
         using var_row = const std::pair<const std::string, diag_value> *;
         std::vector<var_row> rows;
         rows.reserve( vars.size() );
@@ -4251,7 +4184,7 @@ static void draw_var_table( const char *table_id,
         }
 
         std::vector<colspec<var_row>> specs = {
-            { "Key", colw::stretch, {}, 0.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_DefaultSort },
+            { "Key", colw::stretch, {}, 0.0f, 1.0f, 0.0f, im::TableColumnFlags_DefaultSort },
             {
                 "Type", colw::fit, []( const var_row & r )
                 {
@@ -4266,32 +4199,32 @@ static void draw_var_table( const char *table_id,
                 {
                     return r->second.is_dbl() ? to_string( time_duration::from_turns( r->second.dbl() ) ) :
                     std::string();
-                }, 0.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_NoSort
+                }, 0.0f, 1.0f, 0.0f, im::TableColumnFlags_NoSort
             },
             {
                 "As Timepoint", colw::fit, []( const var_row & r )
                 {
                     return r->second.is_dbl() ? to_string( calendar::turn_zero + time_duration::from_turns(
                             r->second.dbl() ) ) : std::string();
-                }, 0.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_NoSort
+                }, 0.0f, 1.0f, 0.0f, im::TableColumnFlags_NoSort
             },
         };
         if( can_monitor ) {
-            specs.push_back( { "Mon", colw::widget, {}, 40.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_NoSort } );
+            specs.push_back( { "Mon", colw::widget, {}, 40.0f, 1.0f, 0.0f, im::TableColumnFlags_NoSort } );
         }
         const uint64_t key = lk_mix( lk_str( lk_mix( 0u, rows.size() ), filter ),
                                      can_monitor ? 1u : 0u );
         setup_columns<var_row>( table_id, key, specs, rows, true );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
 
-        if( ImGuiTableSortSpecs *sort_specs = ImGui::TableGetSortSpecs() ) {
+        if( im::TableSortSpecs *sort_specs = im::TableGetSortSpecs() ) {
             if( sort_specs->SpecsCount > 0 ) {
                 std::sort( rows.begin(), rows.end(),
                            [&]( const std::pair<const std::string, diag_value> *a,
                 const std::pair<const std::string, diag_value> *b ) {
                     for( int i = 0; i < sort_specs->SpecsCount; i++ ) {
-                        const ImGuiTableColumnSortSpecs &s = sort_specs->Specs[i];
+                        const im::TableColumnSortSpecs &s = sort_specs->Specs[i];
                         int cmp = 0;
                         switch( s.ColumnIndex ) {
                             case 0:
@@ -4313,7 +4246,7 @@ static void draw_var_table( const char *table_id,
                                 break;
                         }
                         if( cmp != 0 ) {
-                            return s.SortDirection == ImGuiSortDirection_Ascending
+                            return s.SortDirection == im::SortDirection_Ascending
                                    ? cmp < 0 : cmp > 0;
                         }
                     }
@@ -4328,27 +4261,27 @@ static void draw_var_table( const char *table_id,
             const std::string &key = row->first;
             const diag_value &val = row->second;
 
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::PushID( row_id );
-            if( ImGui::Selectable( key.c_str(), false,
-                                   ImGuiSelectableFlags_SpanAllColumns |
-                                   ImGuiSelectableFlags_AllowOverlap ) ) {
-                ImGui::SetClipboardText( ( key + "=" + val.to_string( true ) ).c_str() );
+            im::TableNextRow();
+            im::TableNextColumn();
+            im::PushID( row_id );
+            if( im::Selectable( key.c_str(), false,
+                                   im::SelectableFlags_SpanAllColumns |
+                                   im::SelectableFlags_AllowOverlap ) ) {
+                im::SetClipboardText( ( key + "=" + val.to_string( true ) ).c_str() );
             }
-            if( ImGui::BeginPopupContextItem( "var_ctx" ) ) {
-                if( ImGui::MenuItem( "Copy key" ) ) {
-                    ImGui::SetClipboardText( key.c_str() );
+            if( im::BeginPopupContextItem( "var_ctx" ) ) {
+                if( im::MenuItem( "Copy key" ) ) {
+                    im::SetClipboardText( key.c_str() );
                 }
-                if( ImGui::MenuItem( "Copy value" ) ) {
-                    ImGui::SetClipboardText( val.to_string( true ).c_str() );
+                if( im::MenuItem( "Copy value" ) ) {
+                    im::SetClipboardText( val.to_string( true ).c_str() );
                 }
-                if( ImGui::MenuItem( "Copy key=value" ) ) {
-                    ImGui::SetClipboardText(
+                if( im::MenuItem( "Copy key=value" ) ) {
+                    im::SetClipboardText(
                         ( key + "=" + val.to_string( true ) ).c_str() );
                 }
                 if( can_edit ) {
-                    if( ImGui::MenuItem( "Edit value" ) ) {
+                    if( im::MenuItem( "Edit value" ) ) {
                         edit_table = table_id;
                         edit_key = key;
                         edit_buf = val.to_string( true );
@@ -4362,47 +4295,47 @@ static void draw_var_table( const char *table_id,
                     }
                 }
                 if( can_delete ) {
-                    ImGui::Separator();
-                    if( ImGui::MenuItem( "Delete" ) ) {
+                    im::Separator();
+                    if( im::MenuItem( "Delete" ) ) {
                         // Defer erase: key and val alias the map node that
                         // erase would free while this row still renders.
                         to_erase = key;
                         do_erase = true;
                     }
                 }
-                ImGui::EndPopup();
+                im::EndPopup();
             }
-            ImGui::PopID();
+            im::PopID();
 
-            ImGui::TableNextColumn();
+            im::TableNextColumn();
             const char *type_str = val.is_dbl() ? "dbl" :
                                    val.is_str() ? "str" :
                                    val.is_array() ? "arr" :
                                    val.is_tripoint() ? "pos" : "?";
-            ImGui::TextUnformatted( type_str );
+            im::TextUnformatted( type_str );
 
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( val.to_string( true ).c_str() );
+            im::TableNextColumn();
+            im::TextUnformatted( val.to_string( true ).c_str() );
 
-            ImGui::TableNextColumn();
+            im::TableNextColumn();
             if( val.is_dbl() ) {
-                ImGui::TextUnformatted(
+                im::TextUnformatted(
                     to_string( time_duration::from_turns( val.dbl() ) ).c_str() );
             }
 
-            ImGui::TableNextColumn();
+            im::TableNextColumn();
             if( val.is_dbl() ) {
-                ImGui::TextUnformatted(
+                im::TextUnformatted(
                     to_string( calendar::turn_zero +
                                time_duration::from_turns( val.dbl() ) ).c_str() );
             }
 
             if( can_monitor ) {
-                ImGui::TableNextColumn();
-                ImGui::PushID( row_id );
-                const bool var_mon_clicked = ImGui::SmallButton( "+M" );
-                if( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip( "%s",
+                im::TableNextColumn();
+                im::PushID( row_id );
+                const bool var_mon_clicked = im::SmallButton( "+M" );
+                if( im::IsItemHovered() ) {
+                    im::SetTooltip( "%s",
                                        "Monitor this variable (Trace > Monitors)" );
                 }
                 if( var_mon_clicked ) {
@@ -4420,11 +4353,11 @@ static void draw_var_table( const char *table_id,
                     debug_capture::instance().push_debug_log(
                         debugmode::DF_MONITOR, "added monitor " + label );
                 }
-                ImGui::PopID();
+                im::PopID();
             }
             row_id++;
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
 
     if( do_erase ) {
@@ -4433,31 +4366,31 @@ static void draw_var_table( const char *table_id,
 
     if( can_edit && edit_table == table_id ) {
         if( editpopup ) {
-            ImGui::OpenPopup( "var_edit_popup" );
+            im::OpenPopup( "var_edit_popup" );
         }
-        ImGui::SetNextWindowSize( ImVec2( 360.0f, 0.0f ) );
-        if( ImGui::BeginPopupModal( "var_edit_popup", nullptr,
-                                    ImGuiWindowFlags_AlwaysAutoResize ) ) {
-            ImGui::TextDisabled( "%s", edit_key.c_str() );
+        im::SetNextWindowSize( im::vec2( 360.0f, 0.0f ) );
+        if( im::BeginPopupModal( "var_edit_popup", nullptr,
+                                    im::WindowFlags_AlwaysAutoResize ) ) {
+            im::TextDisabled( "%s", edit_key.c_str() );
             draw_edit_val( edit_buf, state.edit_type );
-            if( ImGui::Button( "Save##var_edit" ) ) {
+            if( im::Button( "Save##var_edit" ) ) {
                 diag_value parsed = parse_value( edit_buf, state.edit_type );
                 if( !parsed.is_empty() ) {
                     writer.write( edit_key, parsed );
                     edit_table.clear();
                     edit_key.clear();
                     edit_buf.clear();
-                    ImGui::CloseCurrentPopup();
+                    im::CloseCurrentPopup();
                 }
             }
-            ImGui::SameLine();
-            if( ImGui::Button( "Cancel##var_edit" ) ) {
+            im::SameLine();
+            if( im::Button( "Cancel##var_edit" ) ) {
                 edit_table.clear();
                 edit_key.clear();
                 edit_buf.clear();
-                ImGui::CloseCurrentPopup();
+                im::CloseCurrentPopup();
             }
-            ImGui::EndPopup();
+            im::EndPopup();
         }
     }
 }
@@ -4476,41 +4409,41 @@ void tab_data_view::draw_body( debug_console &host )
 {
     framed_section( "data_edit", "Edit & inspect", [&]() {
         host.debug_button( debug_menu_index::EDIT_GLOBAL_VARS );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::ACTIVATE_EOC );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::EDIT_FACTION );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::TALK_TOPIC );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button_with_label( "Mut categories", debug_menu_index::SHOW_MUT_CAT );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::PRINT_NPC_MAGIC );
     } );
 
     framed_section( "data_tests", "Tests & benchmarks", [&]() {
         host.debug_button( debug_menu_index::TEST_IT_GROUP );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::TRAIT_GROUP );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::TEST_MAP_EXTRA_DISTRIBUTION );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::BENCHMARK );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::TEST_WEATHER );
     } );
 
     framed_section( "data_export", "Export & print", [&]() {
         host.debug_button( debug_menu_index::WRITE_GLOBAL_EOCS );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::WRITE_GLOBAL_VARS );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::WRITE_TIMED_EVENTS );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button( debug_menu_index::WRITE_CITY_LIST );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button_with_label( "Effect list", debug_menu_index::GENERATE_EFFECT_LIST );
-        ImGui::SameLine();
+        im::SameLine();
         host.debug_button_with_label( "Faction info", debug_menu_index::PRINT_FACTION_INFO );
     } );
 
@@ -4523,7 +4456,7 @@ void tab_data_view::draw_body( debug_console &host )
 
 void tab_data_view::draw_game_state_panel()
 {
-    if( !ImGui::CollapsingHeader( "Game state", ImGuiTreeNodeFlags_DefaultOpen ) ) {
+    if( !im::CollapsingHeader( "Game state", im::TreeNodeFlags_DefaultOpen ) ) {
         return;
     }
 
@@ -4532,13 +4465,13 @@ void tab_data_view::draw_game_state_panel()
 
     label_value( "Turn", "%d",
                  to_turns<int>( calendar::turn - calendar::turn_zero ) );
-    ImGui::SameLine( 0, 20.0f );
+    im::SameLine( 0, 20.0f );
     label_value( "Position", "%s",
                  player_character.pos_bub( here ).to_string().c_str() );
-    ImGui::SameLine( 0, 20.0f );
+    im::SameLine( 0, 20.0f );
     label_value( "Submap", "%s",
                  here.get_abs_sub().to_string().c_str() );
-    ImGui::SameLine();
+    im::SameLine();
     add_monitor_button( "gs_pos_mon", "avatar:pos", snap::avatar_pos() );
 
     {
@@ -4552,16 +4485,16 @@ void tab_data_view::draw_game_state_panel()
         []( const std::pair<std::string, int> &a, const std::pair<std::string, int> &b ) {
             return a.second > b.second;
         } );
-        ImGui::Text( "%s", string_format( "Creatures: %d total",
+        im::Text( "%s", string_format( "Creatures: %d total",
                                           g->num_creatures() ).c_str() );
-        ImGui::SameLine();
+        im::SameLine();
         add_monitor_button( "gs_creatures_mon", "world:creature_count",
                             snap::world_creature_count() );
-        if( !sorted_creatures.empty() && ImGui::TreeNode( "Breakdown" ) ) {
+        if( !sorted_creatures.empty() && im::TreeNode( "Breakdown" ) ) {
             for( const auto &[name, count] : sorted_creatures ) {
-                ImGui::Text( "  %d x %s", count, name.c_str() );
+                im::Text( "  %d x %s", count, name.c_str() );
             }
-            ImGui::TreePop();
+            im::TreePop();
         }
     }
 
@@ -4573,39 +4506,39 @@ void tab_data_view::draw_game_state_panel()
                                    guy.pos_bub( here ).to_string() );
             npc_count++;
         }
-        ImGui::Text( "%s", string_format( "NPCs: %d", npc_count ).c_str() );
-        ImGui::SameLine();
+        im::Text( "%s", string_format( "NPCs: %d", npc_count ).c_str() );
+        im::SameLine();
         add_monitor_button( "gs_npcs_mon", "world:npc_count",
                             snap::world_npc_count() );
-        if( npc_count > 0 && ImGui::TreeNode(
+        if( npc_count > 0 && im::TreeNode(
                 string_format( "Roster##npcs_tree" ).c_str() ) ) {
             for( const auto &[name, pos] : npc_info ) {
-                ImGui::Text( "  %s @ %s", name.c_str(), pos.c_str() );
+                im::Text( "  %s @ %s", name.c_str(), pos.c_str() );
             }
-            ImGui::TreePop();
+            im::TreePop();
         }
     }
 }
 
 void tab_data_view::draw_var_browser( debug_console &/*host*/ )
 {
-    if( !ImGui::CollapsingHeader( "Variables" ) ) {
+    if( !im::CollapsingHeader( "Variables" ) ) {
         return;
     }
 
 
-    ImGui::SetNextItemWidth( 200 );
-    ImGui::InputText( "Filter##vars", &var_browser.filter );
-    ImGui::SameLine();
-    if( ImGui::SmallButton( "Copy all##vars" ) ) {
+    im::SetNextItemWidth( 200 );
+    im::InputText( "Filter##vars", &var_browser.filter );
+    im::SameLine();
+    if( im::SmallButton( "Copy all##vars" ) ) {
         std::string clipboard;
         for( const auto &[key, val] : get_globals().get_global_values() ) {
             clipboard += key + ";" + val.to_string( true ) + "\n";
         }
-        ImGui::SetClipboardText( clipboard.c_str() );
+        im::SetClipboardText( clipboard.c_str() );
     }
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Copy all global variables to clipboard" );
     }
 
@@ -4641,20 +4574,20 @@ void tab_data_view::draw_var_browser( debug_console &/*host*/ )
         }
     };
 
-    if( ImGui::TreeNodeEx( "Global", ImGuiTreeNodeFlags_DefaultOpen ) ) {
+    if( im::TreeNodeEx( "Global", im::TreeNodeFlags_DefaultOpen ) ) {
         draw_var_table( "global_vars", get_globals().get_global_values(),
                         150.0f, "global", global_provider, global_writer, var_browser );
-        ImGui::TreePop();
+        im::TreePop();
     }
 
     avatar &player_character = get_avatar();
     {
         std::string label = string_format( "Avatar (%s)",
                                            player_character.get_name() );
-        if( ImGui::TreeNode( label.c_str() ) ) {
+        if( im::TreeNode( label.c_str() ) ) {
             draw_var_table( "avatar_vars", player_character.get_values(),
                             120.0f, "avatar", avatar_provider, avatar_writer, var_browser );
-            ImGui::TreePop();
+            im::TreePop();
         }
     }
 
@@ -4665,7 +4598,7 @@ void tab_data_view::draw_var_browser( debug_console &/*host*/ )
             const int nvars = static_cast<int>( guy.get_values().size() );
             const character_id npc_cid = guy.getID();
             std::string label = string_format( "%s (%d vars)##npc%d", nm, nvars, npc_idx );
-            if( ImGui::TreeNode( label.c_str() ) ) {
+            if( im::TreeNode( label.c_str() ) ) {
                 auto npc_provider = [npc_cid]( const std::string & k ) -> std::string {
                     npc *p = g->find_npc( npc_cid );
                     if( !p )
@@ -4695,7 +4628,7 @@ void tab_data_view::draw_var_browser( debug_console &/*host*/ )
                                 guy.get_values(), 120.0f,
                                 string_format( "npc#%d", npc_cid.get_value() ),
                                 npc_provider, npc_writer, var_browser );
-                ImGui::TreePop();
+                im::TreePop();
             }
             npc_idx++;
         }
@@ -4710,11 +4643,11 @@ void tab_data_view::draw_var_browser( debug_console &/*host*/ )
             const std::string nm = mon.get_name();
             const int nvars = static_cast<int>( mon.get_values().size() );
             std::string label = string_format( "%s (%d vars)##mon%d", nm, nvars, mon_idx );
-            if( ImGui::TreeNode( label.c_str() ) ) {
+            if( im::TreeNode( label.c_str() ) ) {
                 draw_var_table( string_format( "mon_vars_%d", mon_idx ).c_str(),
                                 mon.get_values(), 120.0f,
                                 std::string(), {}, {}, var_browser );
-                ImGui::TreePop();
+                im::TreePop();
             }
             mon_idx++;
         }
@@ -4726,19 +4659,19 @@ void tab_data_view::draw_timed_events_table()
     const std::list<timed_event> &events = get_timed_events().get_all();
     std::string header = string_format( "Timed Events (%d)##timed_events_header",
                                         static_cast<int>( events.size() ) );
-    if( !ImGui::CollapsingHeader( header.c_str() ) ) {
+    if( !im::CollapsingHeader( header.c_str() ) ) {
         return;
     }
 
-    ImGui::SetNextItemWidth( 200.0f );
-    ImGui::InputTextWithHint( "##te_filter", "Filter (key or type)",
+    im::SetNextItemWidth( 200.0f );
+    im::InputTextWithHint( "##te_filter", "Filter (key or type)",
                               &timed_events.filter );
-    ImGui::SameLine();
+    im::SameLine();
     add_monitor_button( "te_count_mon", "world:timed_event_count",
                         snap::world_timed_event_count() );
 
     if( events.empty() ) {
-        ImGui::TextUnformatted( "No timed events." );
+        im::TextUnformatted( "No timed events." );
         return;
     }
 
@@ -4755,16 +4688,16 @@ void tab_data_view::draw_timed_events_table()
         rows.push_back( &te );
     }
 
-    if( ImGui::BeginTable( "timed_events", 5,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings |
-                           ImGuiTableFlags_Sortable,
-                           ImVec2( 0.0f, fit_table_height(
+    if( im::BeginTable( "timed_events", 5,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings |
+                           im::TableFlags_Sortable,
+                           im::vec2( 0.0f, fit_table_height(
                                        static_cast<int>( rows.size() ), 240.0f ) ) ) ) {
         const uint64_t key = lk_str( lk_mix( 0u, rows.size() ), timed_events.filter );
         const std::vector<colspec<const timed_event *>> specs = {
-            { "When", colw::fit, []( const timed_event *const & te ) { return to_string( te->when ); }, 0.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_DefaultSort },
+            { "When", colw::fit, []( const timed_event *const & te ) { return to_string( te->when ); }, 0.0f, 1.0f, 0.0f, im::TableColumnFlags_DefaultSort },
             {
                 "Type", colw::fit, []( const timed_event *const & te )
                 {
@@ -4786,15 +4719,15 @@ void tab_data_view::draw_timed_events_table()
             },
         };
         setup_columns<const timed_event *>( "timed_events", key, specs, rows, true );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
 
-        if( ImGuiTableSortSpecs *sort_specs = ImGui::TableGetSortSpecs() ) {
+        if( im::TableSortSpecs *sort_specs = im::TableGetSortSpecs() ) {
             if( sort_specs->SpecsCount > 0 ) {
                 std::sort( rows.begin(), rows.end(),
                 [&]( const timed_event * a, const timed_event * b ) {
                     for( int i = 0; i < sort_specs->SpecsCount; i++ ) {
-                        const ImGuiTableColumnSortSpecs &s = sort_specs->Specs[i];
+                        const im::TableColumnSortSpecs &s = sort_specs->Specs[i];
                         int cmp = 0;
                         switch( s.ColumnIndex ) {
                             case 0:
@@ -4818,7 +4751,7 @@ void tab_data_view::draw_timed_events_table()
                                 break;
                         }
                         if( cmp != 0 ) {
-                            return s.SortDirection == ImGuiSortDirection_Ascending
+                            return s.SortDirection == im::SortDirection_Ascending
                                    ? cmp < 0 : cmp > 0;
                         }
                     }
@@ -4831,39 +4764,39 @@ void tab_data_view::draw_timed_events_table()
                                            true );
         int row_id = 0;
         for( const timed_event *te : rows ) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::PushID( row_id++ );
+            im::TableNextRow();
+            im::TableNextColumn();
+            im::PushID( row_id++ );
             const std::string when_text = to_string( te->when );
-            if( ImGui::Selectable( when_text.c_str(), false,
-                                   ImGuiSelectableFlags_SpanAllColumns |
-                                   ImGuiSelectableFlags_AllowOverlap ) ) {
-                ImGui::SetClipboardText( te->key.c_str() );
+            if( im::Selectable( when_text.c_str(), false,
+                                   im::SelectableFlags_SpanAllColumns |
+                                   im::SelectableFlags_AllowOverlap ) ) {
+                im::SetClipboardText( te->key.c_str() );
             }
-            if( ImGui::BeginPopupContextItem( "te_ctx" ) ) {
-                if( ImGui::MenuItem( "Copy key" ) ) {
-                    ImGui::SetClipboardText( te->key.c_str() );
+            if( im::BeginPopupContextItem( "te_ctx" ) ) {
+                if( im::MenuItem( "Copy key" ) ) {
+                    im::SetClipboardText( te->key.c_str() );
                 }
-                if( ImGui::MenuItem( "Copy summary" ) ) {
-                    ImGui::SetClipboardText( string_format(
+                if( im::MenuItem( "Copy summary" ) ) {
+                    im::SetClipboardText( string_format(
                                                  "when=%s type=%s key=%s strength=%d faction=%d",
                                                  to_string( te->when ),
                                                  timed_event_type_name( te->type ),
                                                  te->key, te->strength, te->faction_id ).c_str() );
                 }
-                ImGui::EndPopup();
+                im::EndPopup();
             }
-            ImGui::PopID();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( timed_event_type_name( te->type ) );
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( te->key.c_str() );
-            ImGui::TableNextColumn();
-            ImGui::Text( "%d", te->strength );
-            ImGui::TableNextColumn();
-            ImGui::Text( "%d", te->faction_id );
+            im::PopID();
+            im::TableNextColumn();
+            im::TextUnformatted( timed_event_type_name( te->type ) );
+            im::TableNextColumn();
+            im::TextUnformatted( te->key.c_str() );
+            im::TableNextColumn();
+            im::Text( "%d", te->strength );
+            im::TableNextColumn();
+            im::Text( "%d", te->faction_id );
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
 }
 
@@ -4873,7 +4806,7 @@ void tab_data_view::draw_item_wakeups_table()
     std::string header = string_format(
                              "Item wakeups (%d)##item_wakeups_header",
                              static_cast<int>( rows.size() ) );
-    if( !ImGui::CollapsingHeader( header.c_str() ) ) {
+    if( !im::CollapsingHeader( header.c_str() ) ) {
         return;
     }
 
@@ -4918,36 +4851,36 @@ void tab_data_view::draw_item_wakeups_table()
         return "?";
     };
 
-    ImGui::SetNextItemWidth( 110.0f );
+    im::SetNextItemWidth( 110.0f );
     static const char *const kind_choices[] = {
         "all", "alarm", "env_check", "ready_check", "fail_check"
     };
     const char *cur_kind = item_wakeups.kind_filter < 0 ? "all"
                            : kind_choices[item_wakeups.kind_filter + 1];
-    if( ImGui::BeginCombo( "Kind##iw", cur_kind ) ) {
-        if( ImGui::Selectable( "all", item_wakeups.kind_filter < 0 ) ) {
+    if( im::BeginCombo( "Kind##iw", cur_kind ) ) {
+        if( im::Selectable( "all", item_wakeups.kind_filter < 0 ) ) {
             item_wakeups.kind_filter = -1;
         }
         for( int i = 0; i < static_cast<int>( item_wakeup_kind::last ); i++ ) {
-            if( ImGui::Selectable( kind_choices[i + 1],
+            if( im::Selectable( kind_choices[i + 1],
                                    item_wakeups.kind_filter == i ) ) {
                 item_wakeups.kind_filter = i;
             }
         }
-        ImGui::EndCombo();
+        im::EndCombo();
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth( 200.0f );
-    ImGui::InputTextWithHint( "##iw_filter", "Filter (uid or hint)",
+    im::SameLine();
+    im::SetNextItemWidth( 200.0f );
+    im::InputTextWithHint( "##iw_filter", "Filter (uid or hint)",
                               &item_wakeups.filter );
-    ImGui::SameLine();
+    im::SameLine();
     add_monitor_button( "iw_count_mon", "world:item_wakeup_count",
                         snap::world_item_wakeup_count() );
 
     if( rows.empty() ) {
-        ImGui::TextUnformatted( "No scheduled item wakeups." );
+        im::TextUnformatted( "No scheduled item wakeups." );
         const item_wakeup_manager::stats s0 = get_item_wakeups().get_stats();
-        ImGui::TextDisabled( "pending=%d  stale=%d  dup=%d  dropped=%d",
+        im::TextDisabled( "pending=%d  stale=%d  dup=%d  dropped=%d",
                              s0.total_pending, s0.stale_resolution,
                              s0.duplicate_event, s0.dropped_on_load );
         return;
@@ -4971,11 +4904,11 @@ void tab_data_view::draw_item_wakeups_table()
         filtered.push_back( &w );
     }
 
-    if( ImGui::BeginTable( "item_wakeups", 5,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings,
-                           ImVec2( 0.0f, fit_table_height(
+    if( im::BeginTable( "item_wakeups", 5,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings,
+                           im::vec2( 0.0f, fit_table_height(
                                        static_cast<int>( filtered.size() ), 240.0f ) ) ) ) {
         const uint64_t key = lk_mix( lk_str( lk_mix( 0u, filtered.size() ),
                                              item_wakeups.filter ),
@@ -5008,54 +4941,54 @@ void tab_data_view::draw_item_wakeups_table()
             { "Where", colw::stretch },
         };
         setup_columns<const scheduled_wakeup_info *>( "item_wakeups", key, specs, filtered );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
 
-        ImGuiListClipper clipper;
+        im::ListClipper clipper;
         clipper.Begin( static_cast<int>( filtered.size() ) );
         while( clipper.Step() ) {
             grow_columns<const scheduled_wakeup_info *>( "item_wakeups", specs, filtered, clipper.DisplayStart,
                     clipper.DisplayEnd );
             for( int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++ ) {
                 const scheduled_wakeup_info &w = *filtered[i];
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::PushID( i );
+                im::TableNextRow();
+                im::TableNextColumn();
+                im::PushID( i );
                 const std::string when_text = to_string( w.when );
-                if( ImGui::Selectable( when_text.c_str(), false,
-                                       ImGuiSelectableFlags_SpanAllColumns |
-                                       ImGuiSelectableFlags_AllowOverlap ) ) {
-                    ImGui::SetClipboardText( std::to_string( w.uid ).c_str() );
+                if( im::Selectable( when_text.c_str(), false,
+                                       im::SelectableFlags_SpanAllColumns |
+                                       im::SelectableFlags_AllowOverlap ) ) {
+                    im::SetClipboardText( std::to_string( w.uid ).c_str() );
                 }
-                if( ImGui::BeginPopupContextItem( "iw_ctx" ) ) {
-                    if( ImGui::MenuItem( "Copy UID" ) ) {
-                        ImGui::SetClipboardText( std::to_string( w.uid ).c_str() );
+                if( im::BeginPopupContextItem( "iw_ctx" ) ) {
+                    if( im::MenuItem( "Copy UID" ) ) {
+                        im::SetClipboardText( std::to_string( w.uid ).c_str() );
                     }
-                    if( ImGui::MenuItem( "Copy where" ) ) {
-                        ImGui::SetClipboardText( hint_text( w.hint ).c_str() );
+                    if( im::MenuItem( "Copy where" ) ) {
+                        im::SetClipboardText( hint_text( w.hint ).c_str() );
                     }
-                    ImGui::Separator();
-                    if( ImGui::MenuItem( "Cancel wakeup" ) ) {
+                    im::Separator();
+                    if( im::MenuItem( "Cancel wakeup" ) ) {
                         get_item_wakeups().cancel( w.uid, w.kind );
                     }
-                    ImGui::EndPopup();
+                    im::EndPopup();
                 }
-                ImGui::PopID();
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( to_string( w.when - calendar::turn ).c_str() );
-                ImGui::TableNextColumn();
-                ImGui::Text( "%lld", static_cast<long long>( w.uid ) );
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( kind_name( w.kind ) );
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted( hint_text( w.hint ).c_str() );
+                im::PopID();
+                im::TableNextColumn();
+                im::TextUnformatted( to_string( w.when - calendar::turn ).c_str() );
+                im::TableNextColumn();
+                im::Text( "%lld", static_cast<long long>( w.uid ) );
+                im::TableNextColumn();
+                im::TextUnformatted( kind_name( w.kind ) );
+                im::TableNextColumn();
+                im::TextUnformatted( hint_text( w.hint ).c_str() );
             }
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
 
     const item_wakeup_manager::stats s = get_item_wakeups().get_stats();
-    ImGui::TextDisabled( "pending=%d  stale=%d  dup=%d  dropped=%d",
+    im::TextDisabled( "pending=%d  stale=%d  dup=%d  dropped=%d",
                          s.total_pending, s.stale_resolution,
                          s.duplicate_event, s.dropped_on_load );
 }
@@ -5065,15 +4998,15 @@ void tab_data_view::draw_faction_browser()
     const auto &factions = g->faction_manager_ptr->all();
     std::string header = string_format( "Factions (%d##factions_header)",
                                         static_cast<int>( factions.size() ) );
-    if( !ImGui::CollapsingHeader( header.c_str() ) ) {
+    if( !im::CollapsingHeader( header.c_str() ) ) {
         return;
     }
 
-    ImGui::SetNextItemWidth( 200.0f );
-    ImGui::InputTextWithHint( "##fac_filter", "Filter (id or name)",
+    im::SetNextItemWidth( 200.0f );
+    im::InputTextWithHint( "##fac_filter", "Filter (id or name)",
                               &faction_browser.filter );
-    ImGui::SameLine();
-    ImGui::TextDisabled( "%s",
+    im::SameLine();
+    im::TextDisabled( "%s",
                          "Right-click row to copy or edit relations" );
 
     std::vector<std::pair<faction_id, const faction *>> rows;
@@ -5090,16 +5023,16 @@ void tab_data_view::draw_faction_browser()
     }
 
     using faction_pair = std::pair<faction_id, const faction *>;
-    if( ImGui::BeginTable( "factions", 8,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings |
-                           ImGuiTableFlags_Sortable,
-                           ImVec2( 0.0f, fit_table_height(
+    if( im::BeginTable( "factions", 8,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings |
+                           im::TableFlags_Sortable,
+                           im::vec2( 0.0f, fit_table_height(
                                        static_cast<int>( rows.size() ), 240.0f ) ) ) ) {
         const uint64_t key = lk_str( lk_mix( 0u, rows.size() ), faction_browser.filter );
         const std::vector<colspec<faction_pair>> specs = {
-            { "ID", colw::fit, []( const faction_pair & r ) { return r.first.str(); }, 0.0f, 1.0f, 0.25f, ImGuiTableColumnFlags_DefaultSort },
+            { "ID", colw::fit, []( const faction_pair & r ) { return r.first.str(); }, 0.0f, 1.0f, 0.25f, im::TableColumnFlags_DefaultSort },
             { "Name", colw::stretch },
             {
                 "Likes", colw::fit, []( const faction_pair & r )
@@ -5125,20 +5058,20 @@ void tab_data_view::draw_faction_browser()
                     return std::to_string( r.second->size );
                 }
             },
-            { "Food", colw::fit, []( const faction_pair & r ) { return r.second->food_supply_text(); }, 0.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_NoSort },
-            { "+M", colw::widget, {}, 40.0f, 1.0f, 0.0f, ImGuiTableColumnFlags_NoSort },
+            { "Food", colw::fit, []( const faction_pair & r ) { return r.second->food_supply_text(); }, 0.0f, 1.0f, 0.0f, im::TableColumnFlags_NoSort },
+            { "+M", colw::widget, {}, 40.0f, 1.0f, 0.0f, im::TableColumnFlags_NoSort },
         };
         setup_columns<faction_pair>( "factions", key, specs, rows, true );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
 
-        if( ImGuiTableSortSpecs *sort_specs = ImGui::TableGetSortSpecs() ) {
+        if( im::TableSortSpecs *sort_specs = im::TableGetSortSpecs() ) {
             if( sort_specs->SpecsCount > 0 ) {
                 std::sort( rows.begin(), rows.end(),
                            [&]( const std::pair<faction_id, const faction *> &a,
                 const std::pair<faction_id, const faction *> &b ) {
                     for( int i = 0; i < sort_specs->SpecsCount; i++ ) {
-                        const ImGuiTableColumnSortSpecs &s = sort_specs->Specs[i];
+                        const im::TableColumnSortSpecs &s = sort_specs->Specs[i];
                         int cmp = 0;
                         switch( s.ColumnIndex ) {
                             case 0:
@@ -5163,7 +5096,7 @@ void tab_data_view::draw_faction_browser()
                                 break;
                         }
                         if( cmp != 0 ) {
-                            return s.SortDirection == ImGuiSortDirection_Ascending
+                            return s.SortDirection == im::SortDirection_Ascending
                                    ? cmp < 0 : cmp > 0;
                         }
                     }
@@ -5176,72 +5109,72 @@ void tab_data_view::draw_faction_browser()
         int row_id = 0;
         for( const auto &[fid, fac_ptr] : rows ) {
             const faction &fac = *fac_ptr;
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::PushID( row_id++ );
-            if( ImGui::Selectable( fid.str().c_str(), false,
-                                   ImGuiSelectableFlags_SpanAllColumns |
-                                   ImGuiSelectableFlags_AllowOverlap ) ) {
-                ImGui::SetClipboardText( fid.str().c_str() );
+            im::TableNextRow();
+            im::TableNextColumn();
+            im::PushID( row_id++ );
+            if( im::Selectable( fid.str().c_str(), false,
+                                   im::SelectableFlags_SpanAllColumns |
+                                   im::SelectableFlags_AllowOverlap ) ) {
+                im::SetClipboardText( fid.str().c_str() );
             }
-            if( ImGui::BeginPopupContextItem( "fac_ctx" ) ) {
-                if( ImGui::MenuItem( "Copy id" ) ) {
-                    ImGui::SetClipboardText( fid.str().c_str() );
+            if( im::BeginPopupContextItem( "fac_ctx" ) ) {
+                if( im::MenuItem( "Copy id" ) ) {
+                    im::SetClipboardText( fid.str().c_str() );
                 }
-                if( ImGui::MenuItem( "Copy name" ) ) {
-                    ImGui::SetClipboardText( fac.get_name().c_str() );
+                if( im::MenuItem( "Copy name" ) ) {
+                    im::SetClipboardText( fac.get_name().c_str() );
                 }
-                ImGui::Separator();
-                if( ImGui::MenuItem( "Edit relations" ) ) {
+                im::Separator();
+                if( im::MenuItem( "Edit relations" ) ) {
                     faction_browser.edit_fid = fid;
                     faction_browser.edit_likes = fac.likes_u;
                     faction_browser.edit_respects = fac.respects_u;
                     faction_browser.edit_trusts = fac.trusts_u;
-                    ImGui::OpenPopup( "fac_edit_popup" );
+                    im::OpenPopup( "fac_edit_popup" );
                 }
-                if( ImGui::MenuItem( "Reset relations to 0" ) ) {
+                if( im::MenuItem( "Reset relations to 0" ) ) {
                     if( faction *f = g->faction_manager_ptr->get( fid, false ) ) {
                         f->likes_u = 0;
                         f->respects_u = 0;
                         f->trusts_u = 0;
                     }
                 }
-                ImGui::EndPopup();
+                im::EndPopup();
             }
-            ImGui::PopID();
-            ImGui::TableNextColumn();
-            cataimgui::draw_colored_text( fac.get_name(), c_white );
-            ImGui::TableNextColumn();
-            ImGui::TextColored( relation_color( fac.likes_u ), "%d", fac.likes_u );
-            ImGui::TableNextColumn();
-            ImGui::TextColored( relation_color( fac.respects_u ), "%d", fac.respects_u );
-            ImGui::TableNextColumn();
-            ImGui::TextColored( relation_color( fac.trusts_u ), "%d", fac.trusts_u );
-            ImGui::TableNextColumn();
-            ImGui::Text( "%d", fac.size );
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( fac.food_supply_text().c_str() );
-            ImGui::TableNextColumn();
+            im::PopID();
+            im::TableNextColumn();
+            im::TextMarkup( fac.get_name(), c_white );
+            im::TableNextColumn();
+            im::TextColored( relation_color( fac.likes_u ), "%d", fac.likes_u );
+            im::TableNextColumn();
+            im::TextColored( relation_color( fac.respects_u ), "%d", fac.respects_u );
+            im::TableNextColumn();
+            im::TextColored( relation_color( fac.trusts_u ), "%d", fac.trusts_u );
+            im::TableNextColumn();
+            im::Text( "%d", fac.size );
+            im::TableNextColumn();
+            im::TextUnformatted( fac.food_supply_text().c_str() );
+            im::TableNextColumn();
             add_monitor_button(
                 ( "fac_mon_" + fid.str() ).c_str(),
                 "faction:" + fid.str(),
                 snap::faction_stats( fid ) );
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
 
     if( !faction_browser.edit_fid.is_empty() ) {
-        ImGui::SetNextWindowSize( ImVec2( 320.0f, 0.0f ) );
-        if( ImGui::BeginPopupModal( "fac_edit_popup", nullptr,
-                                    ImGuiWindowFlags_AlwaysAutoResize ) ) {
-            ImGui::TextDisabled( "%s", faction_browser.edit_fid.str().c_str() );
-            ImGui::SetNextItemWidth( 220.0f );
-            ImGui::InputInt( "Likes##fac_edit", &faction_browser.edit_likes );
-            ImGui::SetNextItemWidth( 220.0f );
-            ImGui::InputInt( "Respect##fac_edit", &faction_browser.edit_respects );
-            ImGui::SetNextItemWidth( 220.0f );
-            ImGui::InputInt( "Trust##fac_edit", &faction_browser.edit_trusts );
-            if( ImGui::Button( "Save##fac_edit" ) ) {
+        im::SetNextWindowSize( im::vec2( 320.0f, 0.0f ) );
+        if( im::BeginPopupModal( "fac_edit_popup", nullptr,
+                                    im::WindowFlags_AlwaysAutoResize ) ) {
+            im::TextDisabled( "%s", faction_browser.edit_fid.str().c_str() );
+            im::SetNextItemWidth( 220.0f );
+            im::InputInt( "Likes##fac_edit", &faction_browser.edit_likes );
+            im::SetNextItemWidth( 220.0f );
+            im::InputInt( "Respect##fac_edit", &faction_browser.edit_respects );
+            im::SetNextItemWidth( 220.0f );
+            im::InputInt( "Trust##fac_edit", &faction_browser.edit_trusts );
+            if( im::Button( "Save##fac_edit" ) ) {
                 if( faction *f = g->faction_manager_ptr->get( faction_browser.edit_fid,
                                  false ) ) {
                     f->likes_u = faction_browser.edit_likes;
@@ -5249,14 +5182,14 @@ void tab_data_view::draw_faction_browser()
                     f->trusts_u = faction_browser.edit_trusts;
                 }
                 faction_browser.edit_fid = faction_id::NULL_ID();
-                ImGui::CloseCurrentPopup();
+                im::CloseCurrentPopup();
             }
-            ImGui::SameLine();
-            if( ImGui::Button( "Cancel##fac_edit" ) ) {
+            im::SameLine();
+            if( im::Button( "Cancel##fac_edit" ) ) {
                 faction_browser.edit_fid = faction_id::NULL_ID();
-                ImGui::CloseCurrentPopup();
+                im::CloseCurrentPopup();
             }
-            ImGui::EndPopup();
+            im::EndPopup();
         }
     }
 }
@@ -5310,46 +5243,46 @@ void tab_trace_view::draw_body( debug_console &host )
     capture_settings &s = cap.settings();
 
     // Collapsed by default so the entries feed below gets most of the height.
-    if( ImGui::CollapsingHeader( "Capture##trace" ) ) {
-        ImGui::PushID( "trace_capture" );
-        ImGui::Indent();
-        ImGui::Checkbox( "Capture", &s.main_enabled );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+    if( im::CollapsingHeader( "Capture##trace" ) ) {
+        im::PushID( "trace_capture" );
+        im::Indent();
+        im::Checkbox( "Capture", &s.main_enabled );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Main capture gate (off freezes everything)" );
         }
-        ImGui::SameLine();
-        ImGui::TextDisabled( "|" );
-        ImGui::SameLine();
-        ImGui::BeginDisabled( !s.main_enabled );
-        ImGui::Checkbox( "add_msg_debug", &s.add_msg_debug_capture );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        im::SameLine();
+        im::TextDisabled( "|" );
+        im::SameLine();
+        im::BeginDisabled( !s.main_enabled );
+        im::Checkbox( "add_msg_debug", &s.add_msg_debug_capture );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Capture add_msg_debug lines (needs debug_mode + filters)" );
         }
-        ImGui::SameLine();
+        im::SameLine();
         const std::string filt_preview = string_format(
                                              "filters: %d / %d",
                                              static_cast<int>( debugmode::enabled_filters.size() ),
                                              static_cast<int>( debugmode::DF_LAST ) );
-        ImGui::SetNextItemWidth( 180.0f );
-        if( ImGui::BeginCombo( "##dbgf_combo", filt_preview.c_str() ) ) {
-            if( ImGui::SmallButton( "All##dbgf" ) ) {
+        im::SetNextItemWidth( 180.0f );
+        if( im::BeginCombo( "##dbgf_combo", filt_preview.c_str() ) ) {
+            if( im::SmallButton( "All##dbgf" ) ) {
                 for( int i = 0; i < static_cast<int>( debugmode::DF_LAST ); i++ ) {
                     debugmode::enabled_filters.insert(
                         static_cast<debugmode::debug_filter>( i ) );
                 }
             }
-            ImGui::SameLine();
-            if( ImGui::SmallButton( "None##dbgf" ) ) {
+            im::SameLine();
+            if( im::SmallButton( "None##dbgf" ) ) {
                 debugmode::enabled_filters.clear();
             }
-            ImGui::Separator();
+            im::Separator();
             for( int i = 0; i < static_cast<int>( debugmode::DF_LAST ); i++ ) {
                 const debugmode::debug_filter cat =
                     static_cast<debugmode::debug_filter>( i );
                 bool on = debugmode::enabled_filters.count( cat ) > 0;
-                if( ImGui::Checkbox( debugmode::filter_name( cat ).c_str(), &on ) ) {
+                if( im::Checkbox( debugmode::filter_name( cat ).c_str(), &on ) ) {
                     if( on ) {
                         debugmode::enabled_filters.insert( cat );
                     } else {
@@ -5357,40 +5290,40 @@ void tab_trace_view::draw_body( debug_console &host )
                     }
                 }
             }
-            ImGui::EndCombo();
+            im::EndCombo();
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Per-category gate for add_msg_debug emission" );
         }
-        ImGui::SameLine();
-        ImGui::Checkbox( "event_bus", &s.event_bus_capture );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        im::SameLine();
+        im::Checkbox( "event_bus", &s.event_bus_capture );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Capture every event_bus emission (no per-category gate)" );
         }
-        ImGui::SameLine();
-        ImGui::Checkbox( "EOC fire trace", &s.eoc_trace_capture );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        im::SameLine();
+        im::Checkbox( "EOC fire trace", &s.eoc_trace_capture );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Capture EOC activations with success, depth and timing" );
         }
         if( !debug_mode ) {
-            ImGui::TextColored( ImVec4( 0.95f, 0.7f, 0.4f, 1.0f ), "%s",
+            im::TextColored( im::vec4( 0.95f, 0.7f, 0.4f, 1.0f ), "%s",
                                 "Debug mode off; add_msg_debug capture inert" );
         }
 
-        ImGui::Spacing();
-        ImGui::Checkbox( "Store on disk", &s.trace_file.enabled );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        im::Spacing();
+        im::Checkbox( "Store on disk", &s.trace_file.enabled );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Mirror every captured line to a file on disk" );
         }
-        ImGui::SameLine();
+        im::SameLine();
         const char *const fmt_items[] = { "JSONL", "CSV" };
         int fmt_idx = static_cast<int>( s.trace_file.format );
-        ImGui::SetNextItemWidth( 80.0f );
-        if( ImGui::Combo( "##disk_fmt", &fmt_idx, fmt_items, IM_ARRAYSIZE( fmt_items ) ) ) {
+        im::SetNextItemWidth( 80.0f );
+        if( im::Combo( "##disk_fmt", &fmt_idx, fmt_items, static_cast<int>( std::size( fmt_items ) ) ) ) {
             const capture_format new_fmt = fmt_idx == 1
                                            ? capture_format::csv
                                            : capture_format::jsonl;
@@ -5410,118 +5343,118 @@ void tab_trace_view::draw_body( debug_console &host )
                 }
             }
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "On-disk format (auto-renames extension)" );
         }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth( 240.0f );
-        ImGui::InputTextWithHint( "##jsonl_path", "path", &s.trace_file.path );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        im::SameLine();
+        im::SetNextItemWidth( 240.0f );
+        im::InputTextWithHint( "##jsonl_path", "path", &s.trace_file.path );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Output path (relative to game working directory)" );
         }
-        ImGui::SameLine();
-        ImGui::Checkbox( "auto-flush", &s.trace_file.auto_flush );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        im::SameLine();
+        im::Checkbox( "auto-flush", &s.trace_file.auto_flush );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Auto-flush each batch (off keeps buffered)" );
         }
-        ImGui::SameLine();
-        if( ImGui::SmallButton( "Flush" ) ) {
+        im::SameLine();
+        if( im::SmallButton( "Flush" ) ) {
             cap.flush_trace_file();
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Flush pending lines to disk now" );
         }
 
-        ImGui::Spacing();
+        im::Spacing();
         const float ring_w = 130.0f;
         int log_n = static_cast<int>( s.log_ring_size );
-        ImGui::SetNextItemWidth( ring_w );
-        if( ImGui::SliderInt( "##ring_log", &log_n, 100, 50000, "Log %d" ) ) {
+        im::SetNextItemWidth( ring_w );
+        if( im::SliderInt( "##ring_log", &log_n, 100, 50000, "Log %d" ) ) {
             cap.resize_log_ring( static_cast<size_t>( log_n ) );
         }
-        ImGui::SameLine();
-        if( ImGui::SmallButton( "Clr##log" ) ) {
+        im::SameLine();
+        if( im::SmallButton( "Clr##log" ) ) {
             cap.clear_logs();
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s", "Drop every entry from the captured-log ring" );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s", "Drop every entry from the captured-log ring" );
         }
-        ImGui::SameLine();
+        im::SameLine();
         int ev_n = static_cast<int>( s.event_ring_size );
-        ImGui::SetNextItemWidth( ring_w );
-        if( ImGui::SliderInt( "##ring_ev", &ev_n, 100, 50000, "Event %d" ) ) {
+        im::SetNextItemWidth( ring_w );
+        if( im::SliderInt( "##ring_ev", &ev_n, 100, 50000, "Event %d" ) ) {
             cap.resize_event_ring( static_cast<size_t>( ev_n ) );
         }
-        ImGui::SameLine();
-        if( ImGui::SmallButton( "Clr##ev" ) ) {
+        im::SameLine();
+        if( im::SmallButton( "Clr##ev" ) ) {
             cap.clear_events();
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s", "Drop every entry from the captured-event ring" );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s", "Drop every entry from the captured-event ring" );
         }
-        ImGui::SameLine();
+        im::SameLine();
         int eoc_n = static_cast<int>( s.eoc_trace_ring_size );
-        ImGui::SetNextItemWidth( ring_w );
-        if( ImGui::SliderInt( "##ring_eoc", &eoc_n, 100, 50000, "EOC %d" ) ) {
+        im::SetNextItemWidth( ring_w );
+        if( im::SliderInt( "##ring_eoc", &eoc_n, 100, 50000, "EOC %d" ) ) {
             cap.resize_eoc_trace_ring( static_cast<size_t>( eoc_n ) );
         }
-        ImGui::SameLine();
-        if( ImGui::SmallButton( "Clr##eoc" ) ) {
+        im::SameLine();
+        if( im::SmallButton( "Clr##eoc" ) ) {
             cap.clear_eoc_traces();
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s", "Drop every entry from the captured-EOC-trace ring" );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s", "Drop every entry from the captured-EOC-trace ring" );
         }
 
-        ImGui::EndDisabled();
+        im::EndDisabled();
 
         const size_t mon_count = cap.monitors().size();
         const std::string mon_header = string_format(
                                            "Monitors (%d)##cap_mon_header",
                                            static_cast<int>( mon_count ) );
-        ImGui::SetNextItemOpen( mon_count > 0, ImGuiCond_Once );
-        if( ImGui::CollapsingHeader( mon_header.c_str() ) ) {
+        im::SetNextItemOpen( mon_count > 0, im::Cond_Once );
+        if( im::CollapsingHeader( mon_header.c_str() ) ) {
             draw_monitors_body();
         }
-        ImGui::Unindent();
-        ImGui::PopID();
+        im::Unindent();
+        im::PopID();
     }
 
     framed_section( "trace_view", "View", [&]() {
-        ImGui::Checkbox( "Log", &trace_show_log );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s", "Show captured debug log lines in the feed" );
+        im::Checkbox( "Log", &trace_show_log );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s", "Show captured debug log lines in the feed" );
         }
-        ImGui::SameLine();
-        ImGui::Checkbox( "Event", &trace_show_event );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s", "Show captured event_bus events in the feed" );
+        im::SameLine();
+        im::Checkbox( "Event", &trace_show_event );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s", "Show captured event_bus events in the feed" );
         }
-        ImGui::SameLine();
+        im::SameLine();
         bool eoc_visible = host.eoc_trace_visible();
-        if( ImGui::Checkbox( "EOC", &eoc_visible ) ) {
+        if( im::Checkbox( "EOC", &eoc_visible ) ) {
             host.set_eoc_trace_visible( eoc_visible );
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s", "Show captured EOC fire traces in the feed" );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s", "Show captured EOC fire traces in the feed" );
         }
-        ImGui::SameLine();
-        ImGui::Checkbox( "Monitor", &trace_show_monitor );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        im::SameLine();
+        im::Checkbox( "Monitor", &trace_show_monitor );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Show monitor snapshots in the feed (independent from the Log toggle)" );
         }
-        ImGui::SameLine();
-        ImGui::Checkbox( "Auto-scroll", &trace_autoscroll );
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        im::SameLine();
+        im::Checkbox( "Auto-scroll", &trace_autoscroll );
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Snap to bottom on new rows (disable to read history)" );
         }
-        ImGui::SameLine();
+        im::SameLine();
         int active_cats = 0;
         for( int i = 0; i < static_cast<int>( debugmode::DF_LAST ); i++ ) {
             if( log_category_mask.test( i ) ) {
@@ -5531,33 +5464,33 @@ void tab_trace_view::draw_body( debug_console &host )
         const std::string cat_preview = string_format(
                                             "cats: %d / %d", active_cats,
                                             static_cast<int>( debugmode::DF_LAST ) );
-        ImGui::SetNextItemWidth( 160.0f );
-        if( ImGui::BeginCombo( "##trace_cats_combo", cat_preview.c_str() ) ) {
-            if( ImGui::SmallButton( "All##trace_cat_all" ) ) {
+        im::SetNextItemWidth( 160.0f );
+        if( im::BeginCombo( "##trace_cats_combo", cat_preview.c_str() ) ) {
+            if( im::SmallButton( "All##trace_cat_all" ) ) {
                 log_category_mask.set();
             }
-            ImGui::SameLine();
-            if( ImGui::SmallButton( "None##trace_cat_none" ) ) {
+            im::SameLine();
+            if( im::SmallButton( "None##trace_cat_none" ) ) {
                 log_category_mask.reset();
             }
-            ImGui::Separator();
+            im::Separator();
             for( int i = 0; i < static_cast<int>( debugmode::DF_LAST ); i++ ) {
                 const debugmode::debug_filter cat =
                     static_cast<debugmode::debug_filter>( i );
                 bool on = log_category_mask.test( i );
-                if( ImGui::Checkbox( debugmode::filter_name( cat ).c_str(), &on ) ) {
+                if( im::Checkbox( debugmode::filter_name( cat ).c_str(), &on ) ) {
                     log_category_mask.set( i, on );
                 }
             }
-            ImGui::EndCombo();
+            im::EndCombo();
         }
-        if( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip( "%s",
+        if( im::IsItemHovered() ) {
+            im::SetTooltip( "%s",
                                "Display-side category gate (capture is not affected)" );
         }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth( -1.0f );
-        ImGui::InputTextWithHint( "##trace_filter", "filter (label or body)",
+        im::SameLine();
+        im::SetNextItemWidth( -1.0f );
+        im::InputTextWithHint( "##trace_filter", "filter (label or body)",
                                   &trace_filter );
     } );
 
@@ -5638,10 +5571,10 @@ void tab_trace_view::draw_body( debug_console &host )
     const std::vector<trace_row> &rows = cached_rows;
 
     static const char *const source_names[] = { "Log", "Event", "EOC" };
-    static const ImVec4 source_colors[] = {
-        ImVec4( 0.6f, 0.9f, 1.0f, 1.0f ),
-        ImVec4( 0.7f, 1.0f, 0.7f, 1.0f ),
-        ImVec4( 1.0f, 0.8f, 0.5f, 1.0f ),
+    static const im::vec4 source_colors[] = {
+        im::vec4( 0.6f, 0.9f, 1.0f, 1.0f ),
+        im::vec4( 0.7f, 1.0f, 0.7f, 1.0f ),
+        im::vec4( 1.0f, 0.8f, 0.5f, 1.0f ),
     };
 
     {
@@ -5681,11 +5614,11 @@ void tab_trace_view::draw_body( debug_console &host )
 
     label_value( "Entries", "%d", static_cast<int>( rows.size() ) );
 
-    if( ImGui::BeginTable( "trace_feed", 4,
-                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                           ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit |
-                           ImGuiTableFlags_NoSavedSettings,
-                           ImVec2( 0.0f, ImGui::GetContentRegionAvail().y ) ) ) {
+    if( im::BeginTable( "trace_feed", 4,
+                           im::TableFlags_ScrollY | im::TableFlags_RowBg |
+                           im::TableFlags_Borders | im::TableFlags_SizingFixedFit |
+                           im::TableFlags_NoSavedSettings,
+                           im::vec2( 0.0f, im::GetContentRegionAvail().y ) ) ) {
         uint64_t key = lk_mix( now_gen, rows.size() );
         key = lk_mix( key, now_mask );
         key = lk_mix( key, eoc_visible ? 1u : 0u );
@@ -5708,47 +5641,47 @@ void tab_trace_view::draw_body( debug_console &host )
             { "Detail", colw::stretch },
         };
         setup_columns<trace_row>( "trace_feed", key, specs, rows );
-        ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableHeadersRow();
-        ImGuiListClipper clipper;
+        im::TableSetupScrollFreeze( 0, 1 );
+        im::TableHeadersRow();
+        im::ListClipper clipper;
         clipper.Begin( static_cast<int>( rows.size() ) );
         while( clipper.Step() ) {
             grow_columns<trace_row>( "trace_feed", specs, rows, clipper.DisplayStart, clipper.DisplayEnd );
             for( int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++ ) {
                 const trace_row &r = rows[i];
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text( "%d", r.turn );
-                ImGui::TableNextColumn();
-                ImGui::TextColored( source_colors[r.source], "%s",
+                im::TableNextRow();
+                im::TableNextColumn();
+                im::Text( "%d", r.turn );
+                im::TableNextColumn();
+                im::TextColored( source_colors[r.source], "%s",
                                     source_names[r.source] );
-                ImGui::TableNextColumn();
-                const float label_cw = ImGui::GetContentRegionAvail().x;
+                im::TableNextColumn();
+                const float label_cw = im::GetContentRegionAvail().x;
                 if( r.source == 0 && r.log_cat >= 0 ) {
-                    ImGui::TextColored( category_color( r.log_cat ), "%s", r.label.c_str() );
+                    im::TextColored( category_color( r.log_cat ), "%s", r.label.c_str() );
                 } else {
-                    ImGui::TextUnformatted( r.label.c_str() );
+                    im::TextUnformatted( r.label.c_str() );
                 }
                 clip_tooltip( r.label, label_cw );
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( r.body, c_white );
+                im::TableNextColumn();
+                im::TextMarkup( r.body, c_white );
             }
         }
         if( trace_autoscroll && rows.size() > trace_prev_row_count ) {
-            ImGui::SetScrollHereY( 1.0f );
+            im::SetScrollHereY( 1.0f );
         }
         trace_prev_row_count = rows.size();
-        ImGui::EndTable();
+        im::EndTable();
     }
 }
 
 void tab_trace_view::draw_monitors_body()
 {
-    ImGui::TextWrapped( "%s", _(
+    im::TextWrapped( "%s", _(
                             "Snapshots fire every turn / on change / manually and are written to the "
                             "Trace tab under the DF_MONITOR category (and JSONL when enabled)." ) );
 
-    ImGui::SeparatorText( "Add monitor" );
+    im::SeparatorText( "Add monitor" );
 
     // Table-driven dispatch: each entry carries the combo label, input
     // hint, optional validator, and snap-closure factory.
@@ -5756,41 +5689,41 @@ void tab_trace_view::draw_monitors_body()
     const int n_targets = static_cast<int>( targets.size() );
     monitor_target_type = std::clamp( monitor_target_type, 0, n_targets - 1 );
 
-    // ImGui::Combo wants a raw const char ** of options. Build a per-frame
+    // im::Combo wants a raw const char ** of options. Build a per-frame
     // label vector from the table; the table itself is rebuilt only once.
     std::vector<const char *> combo_labels;
     combo_labels.reserve( targets.size() );
     for( const monitor_target_entry &e : targets ) {
         combo_labels.push_back( e.label );
     }
-    ImGui::SetNextItemWidth( 320 );
-    ImGui::Combo( "Target##mon_target", &monitor_target_type,
+    im::SetNextItemWidth( 320 );
+    im::Combo( "Target##mon_target", &monitor_target_type,
                   combo_labels.data(), n_targets );
 
     const monitor_target_entry &target = targets[monitor_target_type];
     const bool needs_input = target.hint[0] != '\0';
 
-    ImGui::SetNextItemWidth( 240 );
-    ImGui::InputTextWithHint( "##mon_input",
+    im::SetNextItemWidth( 240 );
+    im::InputTextWithHint( "##mon_input",
                               needs_input ? target.hint : "(no input)",
                               &monitor_target_input,
-                              needs_input ? 0 : ImGuiInputTextFlags_ReadOnly );
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth( 200 );
-    ImGui::InputTextWithHint( "##mon_label", "label…", &monitor_label );
-    ImGui::SameLine();
+                              needs_input ? 0 : im::InputTextFlags_ReadOnly );
+    im::SameLine();
+    im::SetNextItemWidth( 200 );
+    im::InputTextWithHint( "##mon_label", "label…", &monitor_label );
+    im::SameLine();
     static const char *const mode_labels[] = { "every_turn", "on_change", "manual" };
-    ImGui::SetNextItemWidth( 100 );
-    ImGui::Combo( "##mon_mode", &monitor_mode_idx, mode_labels,
-                  IM_ARRAYSIZE( mode_labels ) );
-    ImGui::SameLine();
+    im::SetNextItemWidth( 100 );
+    im::Combo( "##mon_mode", &monitor_mode_idx, mode_labels,
+                  static_cast<int>( std::size( mode_labels ) ) );
+    im::SameLine();
     const bool input_present = !needs_input || !monitor_target_input.empty();
     const bool input_valid = target.validate == nullptr ||
                              target.validate( monitor_target_input );
-    ImGui::BeginDisabled( monitor_label.empty() || !input_present ||
+    im::BeginDisabled( monitor_label.empty() || !input_present ||
                           !input_valid );
-    const bool add_clicked = ImGui::Button( "Add" );
-    ImGui::EndDisabled();
+    const bool add_clicked = im::Button( "Add" );
+    im::EndDisabled();
     if( add_clicked ) {
         const monitor_mode mode = static_cast<monitor_mode>( monitor_mode_idx );
         std::function<std::string()> snap = target.make_snap( monitor_target_input );
@@ -5802,62 +5735,62 @@ void tab_trace_view::draw_monitors_body()
         }
     }
 
-    ImGui::SeparatorText( "Active monitors" );
+    im::SeparatorText( "Active monitors" );
     std::vector<monitor_entry> &mons = debug_capture::instance().monitors();
     if( mons.empty() ) {
-        ImGui::TextDisabled( "%s", "(none)" );
-    } else if( ImGui::BeginTable( "monitors_table", 6,
-                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                                  ImGuiTableFlags_Resizable |
-                                  ImGuiTableFlags_SizingStretchProp ) ) {
+        im::TextDisabled( "%s", "(none)" );
+    } else if( im::BeginTable( "monitors_table", 6,
+                                  im::TableFlags_RowBg | im::TableFlags_Borders |
+                                  im::TableFlags_Resizable |
+                                  im::TableFlags_SizingStretchProp ) ) {
         fit_col( "On" );
-        ImGui::TableSetupColumn( "Label" );
+        im::TableSetupColumn( "Label" );
         fit_col( "Mode" );
-        ImGui::TableSetupColumn( "Last snapshot" );
+        im::TableSetupColumn( "Last snapshot" );
         fit_col( "Snap" );
         fit_col( "Remove" );
-        ImGui::TableHeadersRow();
+        im::TableHeadersRow();
         int remove_id = -1;
         int snap_id = -1;
         const int now_turn = to_turns<int>( calendar::turn - calendar::turn_zero );
         for( monitor_entry &m : mons ) {
-            ImGui::PushID( m.id );
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Checkbox( "##en", &m.enabled );
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( m.label.c_str() );
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( mode_labels[static_cast<int>( m.mode )] );
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted( m.last_snapshot.c_str() );
+            im::PushID( m.id );
+            im::TableNextRow();
+            im::TableNextColumn();
+            im::Checkbox( "##en", &m.enabled );
+            im::TableNextColumn();
+            im::TextUnformatted( m.label.c_str() );
+            im::TableNextColumn();
+            im::TextUnformatted( mode_labels[static_cast<int>( m.mode )] );
+            im::TableNextColumn();
+            im::TextUnformatted( m.last_snapshot.c_str() );
             if( m.mode != monitor_mode::manual && m.last_snapshot_turn >= 0 ) {
                 const int stale = now_turn - m.last_snapshot_turn;
                 if( stale > 10 ) {
-                    ImGui::SameLine();
-                    ImGui::TextColored( ImVec4( 0.95f, 0.7f, 0.4f, 1.0f ),
+                    im::SameLine();
+                    im::TextColored( im::vec4( 0.95f, 0.7f, 0.4f, 1.0f ),
                                         " (stale %d)", stale );
                 }
             }
-            ImGui::TableNextColumn();
-            if( ImGui::SmallButton( "Snap" ) ) {
+            im::TableNextColumn();
+            if( im::SmallButton( "Snap" ) ) {
                 snap_id = m.id;
             }
-            if( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip( "%s",
+            if( im::IsItemHovered() ) {
+                im::SetTooltip( "%s",
                                    "Take a snapshot of this monitor right now and log it" );
             }
-            ImGui::TableNextColumn();
-            if( ImGui::SmallButton( "Remove" ) ) {
+            im::TableNextColumn();
+            if( im::SmallButton( "Remove" ) ) {
                 remove_id = m.id;
             }
-            if( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip( "%s",
+            if( im::IsItemHovered() ) {
+                im::SetTooltip( "%s",
                                    "Delete this monitor permanently from the registry" );
             }
-            ImGui::PopID();
+            im::PopID();
         }
-        ImGui::EndTable();
+        im::EndTable();
         if( snap_id >= 0 ) {
             debug_capture::instance().snapshot_monitor( snap_id );
         }
@@ -5882,29 +5815,29 @@ std::vector<tab_registry_view_entry> tab_registry_snapshot()
 void framed_section( const char *id, const char *label,
                      const std::function<void()> &body )
 {
-    ImGui::SeparatorText( label );
-    ImGui::PushID( id );
-    ImGui::Indent();
+    im::SeparatorText( label );
+    im::PushID( id );
+    im::Indent();
     body();
-    ImGui::Unindent();
-    ImGui::PopID();
+    im::Unindent();
+    im::PopID();
 }
 
 float fit_table_height( int n_rows, float cap_h )
 {
-    const float row_h = ImGui::GetTextLineHeightWithSpacing();
-    const float header_h = ImGui::GetFrameHeightWithSpacing();
+    const float row_h = im::GetTextLineHeightWithSpacing();
+    const float header_h = im::GetFrameHeightWithSpacing();
     const float content_h = header_h
                             + row_h * static_cast<float>( std::max( 1, n_rows ) )
                             + 4.0f;
     return std::min( content_h, cap_h );
 }
 
-void fit_col( const char *label, ImGuiTableColumnFlags extra_flags )
+void fit_col( const char *label, im::flags extra_flags )
 {
-    // init width 0 => ImGui auto-sizes the fixed column to the wider of its
+    // init width 0 => the table sizes the fixed column to the wider of its
     // header and its submitted (visible, under a clipper) cells.
-    ImGui::TableSetupColumn( label, ImGuiTableColumnFlags_WidthFixed | extra_flags, 0.0f );
+    im::TableSetupColumn( label, im::TableColumnFlags_WidthFixed | extra_flags, 0.0f );
 }
 
 void scalar_slider_table( const char *id, const std::vector<slider_row> &rows,
@@ -5916,46 +5849,46 @@ void scalar_slider_table( const char *id, const std::vector<slider_row> &rows,
     // Shared label-column width so all slider tracks start at the same x.
     float label_w = 0.0f;
     for( const slider_row &r : rows ) {
-        label_w = std::max( label_w, ImGui::CalcTextSize( r.label.c_str() ).x );
+        label_w = std::max( label_w, im::CalcTextSize( r.label.c_str() ).x );
     }
     label_w += 8.0f;
-    ImGui::PushID( id );
-    if( ImGui::BeginTable( "scalar_sliders", pairs_per_row * 2,
-                           ImGuiTableFlags_SizingStretchProp ) ) {
+    im::PushID( id );
+    if( im::BeginTable( "scalar_sliders", pairs_per_row * 2,
+                           im::TableFlags_SizingStretchProp ) ) {
         for( int p = 0; p < pairs_per_row; p++ ) {
-            ImGui::TableSetupColumn( "l", ImGuiTableColumnFlags_WidthFixed, label_w );
-            ImGui::TableSetupColumn( "s", ImGuiTableColumnFlags_WidthStretch );
+            im::TableSetupColumn( "l", im::TableColumnFlags_WidthFixed, label_w );
+            im::TableSetupColumn( "s", im::TableColumnFlags_WidthStretch );
         }
         for( size_t i = 0; i < rows.size(); i++ ) {
             if( i % static_cast<size_t>( pairs_per_row ) == 0 ) {
-                ImGui::TableNextRow();
+                im::TableNextRow();
             }
             const slider_row &r = rows[i];
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted( r.label.c_str() );
-            ImGui::TableNextColumn();
+            im::TableNextColumn();
+            im::AlignTextToFramePadding();
+            im::TextUnformatted( r.label.c_str() );
+            im::TableNextColumn();
             int v = r.get();
-            ImGui::PushID( static_cast<int>( i ) );
-            ImGui::SetNextItemWidth( -1.0f );
-            if( ImGui::SliderInt( "##v", &v, r.lo, r.hi ) ) {
+            im::PushID( static_cast<int>( i ) );
+            im::SetNextItemWidth( -1.0f );
+            if( im::SliderInt( "##v", &v, r.lo, r.hi ) ) {
                 r.set( v );
             }
-            ImGui::PopID();
+            im::PopID();
         }
-        ImGui::EndTable();
+        im::EndTable();
     }
-    ImGui::PopID();
+    im::PopID();
 }
 
 void add_monitor_button( const char *id, const std::string &label,
                          std::function<std::string()> snap,
                          monitor_mode mode )
 {
-    ImGui::PushID( id );
-    const bool clicked = ImGui::SmallButton( "+M" );
-    if( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip( "%s",
+    im::PushID( id );
+    const bool clicked = im::SmallButton( "+M" );
+    if( im::IsItemHovered() ) {
+        im::SetTooltip( "%s",
                            "Add monitor (visible in Trace > Monitors)" );
     }
     if( clicked ) {
@@ -5963,18 +5896,18 @@ void add_monitor_button( const char *id, const std::string &label,
         debug_capture::instance().push_debug_log(
             debugmode::DF_MONITOR, "added monitor " + label );
     }
-    ImGui::PopID();
+    im::PopID();
 }
 
-ImVec4 category_color( int cat )
+im::vec4 category_color( int cat )
 {
     const float golden = 137.508f;
     float hue = std::fmod( static_cast<float>( cat ) * golden, 360.0f ) / 360.0f;
     float r = 0.0f;
     float gv = 0.0f;
     float b = 0.0f;
-    ImGui::ColorConvertHSVtoRGB( hue, 0.55f, 0.95f, r, gv, b );
-    return ImVec4( r, gv, b, 1.0f );
+    im::ColorConvertHSVtoRGB( hue, 0.55f, 0.95f, r, gv, b );
+    return im::vec4( r, gv, b, 1.0f );
 }
 
 int fuzzy_score( std::string_view haystack, std::string_view needle )

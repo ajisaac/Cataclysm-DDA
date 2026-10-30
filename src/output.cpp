@@ -18,14 +18,12 @@
 #include <vector>
 
 #include "cached_options.h" // IWYU pragma: keep
-#include "cata_imgui.h"
 #include "cata_utility.h"
 #include "catacharset.h"
 #include "color.h"
 #include "cursesport.h" // IWYU pragma: keep
 #include "cursesdef.h"
 #include "game_constants.h"
-#include "imgui/imgui.h"
 #include "input.h"
 #include "input_context.h"
 #include "item.h"
@@ -34,6 +32,7 @@
 #include "options.h"
 #include "point.h"
 #include "popup.h"
+#include "rml_markup.h"
 #include "rng.h"
 #include "sdltiles.h" // IWYU pragma: keep
 #include "string_formatter.h"
@@ -1315,114 +1314,101 @@ static int get_num_cols( std::vector<std::string> &rows )
     return cols;
 }
 
-static void draw_table( std::string_view s )
+// A table from item info: rows split by newlines and cells by semicolons,
+// the first row the header.
+static std::string table_rml( std::string_view s )
 {
     std::vector<std::string> rows = string_split( s, '\n' );
-    int num_cols = get_num_cols( rows );
-
-    if( rows.empty() || num_cols == 0 ) {
-        return;
+    if( rows.empty() || get_num_cols( rows ) == 0 ) {
+        return std::string();
     }
 
-    if( ImGui::BeginTable( "##ITEMINFO_TABLE", num_cols,
-                           ImGuiTableFlags_BordersH | ImGuiTableFlags_BordersV ) ) {
-        const std::vector<std::string> chopped_up = string_split( rows.front(), ';' );
-        for( const std::string &cell_text : chopped_up ) {
-            // this prefix prevents imgui from drawing the text. We still have color tags, which imgui won't parse, so we don't want those exposed to the user.
-            // But we still want proper column IDs. So we put them in, but we *hide them* with this.
-            // This results in a column with an ID of e.g.
-            // ##<color_white>Protection:</color>
-            //
-            // Not great for debugging, but better than having a column with default (randomly generated number) ID!
-            const std::string invisible_ID_label = "##" + cell_text;
-            ImGui::TableSetupColumn( invisible_ID_label.c_str(), ImGuiTableColumnFlags_WidthStretch );
-        }
-        ImGui::TableHeadersRow();
-        // After putting in the invisible labels in the last for-loop, this writes the actual text. Just the same text without the ## marker, and
-        // with our native functions doing the drawing. (So we parse color tags)
-        for( size_t i = 0; i < chopped_up.size(); i++ ) {
-            ImGui::TableSetColumnIndex( i );
-            cataimgui::draw_colored_text( chopped_up[i], c_unset );
-        }
-
-        for( size_t i = 1; i < rows.size(); i++ ) {
-            if( rows[i].empty() ) {
-                continue;
-            }
-            ImGui::TableNextRow();
-            const std::vector<std::string> delimited_strings = string_split( rows[i], ';' );
-            for( const std::string &text : delimited_strings ) {
-                ImGui::TableNextColumn();
-                cataimgui::draw_colored_text( text, c_unset );
-            }
-        }
-
-        ImGui::EndTable();
+    std::string rml = "<table class=\"grid bordered\"><thead><tr>";
+    for( const std::string &cell_text : string_split( rows.front(), ';' ) ) {
+        rml += "<th>" + rml_ui::markup_to_rml( cell_text ) + "</th>";
     }
+    rml += "</tr></thead><tbody>";
+    for( size_t i = 1; i < rows.size(); i++ ) {
+        if( rows[i].empty() ) {
+            continue;
+        }
+        rml += "<tr>";
+        for( const std::string &text : string_split( rows[i], ';' ) ) {
+            rml += "<td>" + rml_ui::markup_to_rml( text ) + "</td>";
+        }
+        rml += "</tr>";
+    }
+    return rml + "</tbody></table>";
 }
 
-void display_item_info( const std::vector<iteminfo> &vItemDisplay,
-                        const std::vector<iteminfo> &vItemCompare )
+// Item info text in this color, with the value, if any, where it says <num>
+static std::string info_text_rml( const std::string &text, const nc_color &color,
+                                  const std::string &value_rml )
 {
+    std::string rml = rml_ui::markup_to_rml( text, color );
+    // markup_to_rml() leaves tags it does not know as literal text
+    static const std::string num_tag = "&lt;num&gt;";
+    const size_t pos = rml.find( num_tag );
+    if( !value_rml.empty() && pos != std::string::npos ) {
+        rml.replace( pos, num_tag.size(), value_rml );
+    }
+    return rml;
+}
+
+std::string item_info_rml( const std::vector<iteminfo> &vItemDisplay,
+                           const std::vector<iteminfo> &vItemCompare )
+{
+    std::string rml;
     bool bAlreadyHasNewLine = true;
     for( const iteminfo &i : vItemDisplay ) {
-        if( i.bIsArt ) {
-            cataimgui::PushMonoFont();
-        }
+        std::string part;
         if( i.isTable ) {
-            draw_table( i.sName );
+            // A table starts and ends a line of its own
+            part = table_rml( i.sName );
+            bAlreadyHasNewLine = true;
         } else if( i.sType == "DESCRIPTION" ) {
             if( i.bDrawName ) {
                 if( i.sName == "--" ) {
-                    if( !bAlreadyHasNewLine ) {
-                        ImGui::NewLine();
-                        bAlreadyHasNewLine = true;
-                    }
-                    ImGui::Separator();
+                    part = "<div class=\"sep\"></div>";
+                    bAlreadyHasNewLine = true;
                 } else {
-                    if( i.sName.find( '\n' ) != std::string::npos ) {
-                        std::vector<std::string> lines = string_split( i.sName, '\n' );
-                        for( std::string &line : lines ) {
-                            cataimgui::TextColoredParagraph( c_white, line );
-                            ImGui::NewLine();
-                        }
-                        ImGui::SameLine();
-                    } else {
-                        cataimgui::TextColoredParagraph( c_white, i.sName );
+                    part = rml_ui::markup_to_rml( i.sName, c_white );
+                    // Text over several lines ends with a line break
+                    if( i.sName.find( '\n' ) != std::string::npos && i.sName.back() != '\n' ) {
+                        part += "<br/>";
                     }
                     bAlreadyHasNewLine = false;
                 }
             }
         } else {
             if( i.bDrawName ) {
-                cataimgui::TextColoredParagraph( c_light_gray, i.sName );
+                part += rml_ui::markup_to_rml( i.sName, c_light_gray );
                 bAlreadyHasNewLine = false;
             }
 
+            const std::string value_rml = i.sValue != "-999" ?
+                                          rml_ui::markup_to_rml( i.sValue, get_comparison_color( i, vItemCompare ) ) :
+                                          std::string();
             if( !i.sFmt.empty() ) {
-                std::optional<cataimgui::Segment> value = std::nullopt;
-                if( i.sValue != "-999" ) {
-                    value = std::make_optional( cataimgui::Segment( i.sValue, get_comparison_color( i,
-                                                vItemCompare ) ) );
-                }
-                cataimgui::TextColoredParagraph( c_light_gray, i.sFmt, value );
+                part += info_text_rml( i.sFmt, c_light_gray, value_rml );
                 bAlreadyHasNewLine = false;
-            } else if( i.sValue != "-999" ) {
-                cataimgui::TextColoredParagraph( get_comparison_color( i, vItemCompare ),
-                                                 i.sValue );
+            } else if( !value_rml.empty() ) {
+                part += value_rml;
                 bAlreadyHasNewLine = false;
             }
         }
 
         if( i.bIsArt ) {
-            ImGui::PopFont();
+            part = "<span class=\"mono\">" + part + "</span>";
         }
+        rml += part;
 
         if( i.bNewLine && !bAlreadyHasNewLine ) {
-            ImGui::NewLine();
+            rml += "<br/>";
             bAlreadyHasNewLine = true;
         }
     }
+    return rml;
 }
 
 input_event draw_item_info( const catacurses::window &win, item_info_data &data )

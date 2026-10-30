@@ -12,12 +12,9 @@
 #include <utility>
 #include <vector>
 
-#include <imgui/imgui_internal.h>
-
 #include "avatar.h"
 #include "basecamp.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "character.h"
 #include "character_id.h"
 #include "color.h"
@@ -40,6 +37,7 @@
 #include "overmapbuffer.h"
 #include "pimpl.h"
 #include "point.h"
+#include "rml_markup.h"
 #include "skill.h"
 #include "stomach.h"
 #include "string_formatter.h"
@@ -188,6 +186,7 @@ bool faction_ui::execute()
     ctxt.register_action( "NEXT_TAB" );
     ctxt.register_action( "PREV_TAB" );
     ctxt.register_action( "MOUSE_MOVE" );
+    ctxt.register_action( "SELECT" );
     ctxt.register_action( "CONFIRM" );
     ctxt.register_action( "QUIT" );
     ctxt.register_action( "HELP_KEYBINDINGS" );
@@ -195,12 +194,45 @@ bool faction_ui::execute()
 
     while( true ) {
         ui_manager::redraw_invalidated();
-        last_action = ctxt.handle_input();
-        if( last_action == "QUIT" || !get_is_open() ) {
-            break;
+        std::string action = ctxt.handle_input();
+        if( action == "SELECT" ) {
+            const int tab = hovered_tab();
+            const int row = hovered_index( "data-row" );
+            if( tab >= 0 ) {
+                selected_tab = static_cast<tab_mode>( tab );
+                continue;
+            } else if( row >= 0 ) {
+                pending_click = row;
+                continue;
+            }
+            action = resolve_click( action );
         }
 
-        if( last_action == "CONFIRM" ) {
+        if( action == "QUIT" ) {
+            break;
+        } else if( action == "NEXT_TAB" || action == "RIGHT" ) {
+            ++selected_tab;
+            reveal_selected = true;
+        } else if( action == "PREV_TAB" || action == "LEFT" ) {
+            --selected_tab;
+            reveal_selected = true;
+        } else if( action == "UP" ) {
+            pending_move = -1;
+            reveal_selected = true;
+        } else if( action == "DOWN" ) {
+            pending_move = 1;
+            reveal_selected = true;
+        } else if( action == "PAGE_UP" ) {
+            scroll( "info", rml_ui::scroll::page_up );
+        } else if( action == "PAGE_DOWN" ) {
+            scroll( "info", rml_ui::scroll::page_down );
+        } else if( action == "HOME" ) {
+            scroll( "info", rml_ui::scroll::top );
+        } else if( action == "END" ) {
+            scroll( "info", rml_ui::scroll::bottom );
+        }
+
+        if( action == "CONFIRM" ) {
 
             if( selected_tab == tab_mode::TAB_FOLLOWERS && picked_follower != nullptr ) {
                 const bool interactable = can_contact( get_avatar(), *picked_follower );
@@ -237,37 +269,67 @@ bool faction_ui::execute()
     return false;
 }
 
-void faction_ui::draw_hint_section() const
+// A line of the info pane
+static std::string text_rml( const std::string &text )
+{
+    return "<div class=\"pre\">" + rml_ui::markup_to_rml( text ) + "</div>";
+}
+
+static std::string text_rml( const std::string &text, const nc_color &color )
+{
+    return "<div class=\"pre\">" + rml_ui::markup_to_rml( text, color ) + "</div>";
+}
+
+// A list beside the info about what it has selected, each scrolling on its own
+static std::string panes_rml( const std::string &list, const std::string &info )
+{
+    return "<div class=\"panes\"><div class=\"pane\" style=\"flex: 0 0 35%;\">" + list +
+           "</div><div id=\"info\" class=\"pane\">" + info + "</div></div>";
+}
+
+int faction_ui::apply_pending( int selected, int count )
+{
+    const int last_entry = count == 0 ? 0 : count - 1;
+    selected += pending_move;
+    pending_move = 0;
+    if( pending_click >= 0 && pending_click < count ) {
+        selected = pending_click;
+    }
+    pending_click = -1;
+    if( selected < 0 ) {
+        selected = last_entry;
+    } else if( selected > last_entry ) {
+        selected = 0;
+    }
+    return selected;
+}
+
+std::string faction_ui::list_rml( const std::vector<std::string> &names, int selected )
+{
+    selected_row = selected;
+    std::string rml;
+    for( size_t i = 0; i < names.size(); i++ ) {
+        rml += string_format( "<div id=\"entry-%d\" class=\"item%s\" data-row=\"%d\">", i,
+                              static_cast<int>( i ) == selected ? " selected" : "", i ) +
+               rml_ui::markup_to_rml( names[i] ) + "</div>";
+    }
+    return rml;
+}
+
+std::string faction_ui::hint_rml() const
 {
     const std::string desc = string_format(
                                  _( "[<color_yellow>%s</color>] Keybindings" ), ctxt.get_desc( "HELP_KEYBINDINGS" ) );
-    cataimgui::draw_colored_text( desc, c_unset );
-    ImGui::Separator();
+    return rml_ui::markup_to_rml( desc );
 }
 
-void faction_ui::draw_your_faction_tab()
+std::string faction_ui::your_faction_tab_rml()
 {
-    if( ImGui::BeginTable( "##Your_Faction", 2, ImGuiTableFlags_SizingFixedFit ) ) {
-        ImGui::TableSetupColumn( "##Your camp list", ImGuiTableColumnFlags_WidthFixed,
-                                 get_table_column_width() );
-
-        ImGui::TableSetupColumn( "##Picked camp", ImGuiTableColumnFlags_WidthStretch );
-
-        ImGui::TableNextColumn();
-        draw_your_factions_list();
-
-        ImGui::TableNextColumn();
-        ImGui::BeginChild( "##Camp_Info" );
-
-        cataimgui::set_scroll( s );
-
-        your_faction_display();
-        ImGui::EndChild();
-        ImGui::EndTable();
-    }
+    const std::string list = your_factions_list_rml();
+    return panes_rml( list, your_faction_display() );
 }
 
-void faction_ui::draw_your_factions_list()
+std::string faction_ui::your_factions_list_rml()
 {
     Character &player_character = get_player_character();
     std::vector<basecamp *> camps;
@@ -286,59 +348,31 @@ void faction_ui::draw_your_factions_list()
     }
 
     size_t num_entries = camps.size();
-    const int last_entry = num_entries == 0 ? 0 : ( static_cast<int>( num_entries ) - 1 );
 
     // initialize selected_camp either from already set camp, or from zero if not set
     auto it = std::find( camps.begin(), camps.end(), picked_camp );
     int selected_camp = ( it != camps.end() ) ? std::distance( camps.begin(), it ) : 0;
-    if( last_action == "UP" ) {
-        selected_camp--;
-    } else if( last_action == "DOWN" ) {
-        selected_camp++;
-    }
-
-    if( selected_camp < 0 ) {
-        selected_camp = last_entry;
-    } else if( selected_camp > last_entry ) {
-        selected_camp = 0;
-    };
+    selected_camp = apply_pending( selected_camp, static_cast<int>( num_entries ) );
 
     if( !camps.empty() ) {
         picked_camp = camps[selected_camp];
     }
 
-    if( ImGui::BeginListBox( "##LISTBOX", ImGui::GetContentRegionAvail() ) ) {
-
-        for( size_t i = 0; i < camps.size(); i++ ) {
-            basecamp *it_camp = camps[i];
-            const bool is_selected = picked_camp != nullptr && picked_camp == it_camp;
-            ImGui::PushID( i );
-
-            if( ImGui::Selectable( "", is_selected ) ) {
-                // if true, the option was selected, so set bp to what was selected
-                picked_camp = it_camp;
-            }
-
-            if( is_selected ) {
-                ImGui::SetScrollHereY();
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::SameLine();
-            cataimgui::draw_colored_text( it_camp->camp_name(), ImGui::GetContentRegionAvail().x );
-
-            ImGui::PopID();
-        }
-        ImGui::EndListBox();
+    std::vector<std::string> names;
+    names.reserve( camps.size() );
+    for( const auto *it_camp : camps ) {
+        names.emplace_back( it_camp->camp_name() );
     }
+    return list_rml( names, camps.empty() ? -1 : selected_camp );
 }
 
-void faction_ui::your_faction_display() const
+std::string faction_ui::your_faction_display() const
 {
-    const float col_width = ImGui::GetContentRegionAvail().x;
+    std::string rml;
 
     if( picked_camp == nullptr ) {
-        cataimgui::draw_colored_text( _( "You have no camps" ), c_red, col_width );
-        return;
+        rml += text_rml( _( "You have no camps" ), c_red );
+        return rml;
     }
 
     Character &player_character = get_player_character();
@@ -350,115 +384,72 @@ void faction_ui::your_faction_display() const
     // Hint
     const std::string hint_desc = string_format(
                                       _( "Press [%s] to rename this camp" ), ctxt.get_desc( "CONFIRM" ) );
-    cataimgui::draw_colored_text( hint_desc, c_light_gray, col_width );
+    rml += text_rml( hint_desc, c_light_gray );
 
     if( direction != "center" ) {
         const std::string desc_dir = string_format( _( "Direction: to the %s" ), direction );
-        cataimgui::draw_colored_text( desc_dir, col_width );
+        rml += text_rml( desc_dir );
     }
 
     const std::string desc_loc = string_format( _( "Location: %s" ), camp_pos.to_string() );
-    cataimgui::draw_colored_text( desc_loc, col_width );
+    rml += text_rml( desc_loc );
 
     const std::string food_text = string_format( _( "Food Supply: %s (%d kcal)" ),
                                   yours->food_supply_text(), yours->food_supply().kcal() );
     const nc_color food_col = yours->food_supply_color();
-    cataimgui::draw_colored_text( food_text, food_col, col_width );
+    rml += text_rml( food_text, food_col );
 
     const auto &[vit_color, vit] = yours->vitamin_stores( vitamin_type::VITAMIN );
     const std::string worst_vitamin = string_format( "%s: %s", _( "Worst vitamin" ), vit );
-    cataimgui::draw_colored_text( worst_vitamin, vit_color, col_width );
+    rml += text_rml( worst_vitamin, vit_color );
 
     const auto &[toxin_color, toxin] = yours->vitamin_stores( vitamin_type::TOXIN );
     const std::string worst_toxin = string_format( "%s: %s", _( "Worst toxin" ), toxin );
-    cataimgui::draw_colored_text( worst_toxin, toxin_color, col_width );
+    rml += text_rml( worst_toxin, toxin_color );
 
     const std::string bldg = picked_camp->next_upgrade( base_camps::base_dir, 1 );
     const std::string bldg_full = string_format( "%s: %s", _( "Next Upgrade" ), bldg );
-    cataimgui::draw_colored_text( bldg_full, col_width );
+    rml += text_rml( bldg_full );
+    return rml;
 }
 
-void faction_ui::draw_your_followers_tab()
+std::string faction_ui::your_followers_tab_rml()
 {
-    if( ImGui::BeginTable( "##Your_Followers", 2, ImGuiTableFlags_SizingFixedFit ) ) {
-        ImGui::TableSetupColumn( "##Follower list", ImGuiTableColumnFlags_WidthFixed,
-                                 get_table_column_width() );
-
-        ImGui::TableSetupColumn( "##Picked follower", ImGuiTableColumnFlags_WidthStretch );
-        ImGui::TableNextColumn();
-
-        draw_your_followers_list();
-
-        ImGui::TableNextColumn();
-        ImGui::BeginChild( "##Camp_Info" );
-
-        cataimgui::set_scroll( s );
-
-        your_follower_display();
-        ImGui::EndChild();
-        ImGui::EndTable();
-    }
+    const std::string list = your_followers_list_rml();
+    return panes_rml( list, your_follower_display() );
 }
 
-void faction_ui::draw_your_followers_list()
+std::string faction_ui::your_followers_list_rml()
 {
     std::vector<npc *> followers;
     overmap_buffer.populate_followers_vec( followers );
 
     size_t num_entries = followers.size();
-    const int last_entry = num_entries == 0 ? 0 : ( static_cast<int>( num_entries ) - 1 );
 
     // initialize selected_camp either from already set camp, or from zero if not set
     auto it = std::find( followers.begin(), followers.end(), picked_follower );
     int selected_npc = ( it != followers.end() ) ? std::distance( followers.begin(), it ) : 0;
-    if( last_action == "UP" ) {
-        selected_npc--;
-    } else if( last_action == "DOWN" ) {
-        selected_npc++;
-    }
-
-    if( selected_npc < 0 ) {
-        selected_npc = last_entry;
-    } else if( selected_npc > last_entry ) {
-        selected_npc = 0;
-    };
+    selected_npc = apply_pending( selected_npc, static_cast<int>( num_entries ) );
 
     if( !followers.empty() ) {
         picked_follower = followers[selected_npc];
     }
 
-    if( ImGui::BeginListBox( "##LISTBOX", ImGui::GetContentRegionAvail() ) ) {
-
-        for( size_t i = 0; i < followers.size(); i++ ) {
-            npc *it_npc = followers[i];
-            const bool is_selected = picked_follower != nullptr && picked_follower == it_npc;
-            ImGui::PushID( i );
-
-            if( ImGui::Selectable( "", is_selected ) ) {
-                // if true, the option was selected, so set bp to what was selected
-                picked_follower = it_npc;
-            }
-
-            if( is_selected ) {
-                ImGui::SetScrollHereY();
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::SameLine();
-            cataimgui::draw_colored_text( it_npc->get_name(), ImGui::GetContentRegionAvail().x );
-
-            ImGui::PopID();
-        }
-        ImGui::EndListBox();
+    std::vector<std::string> names;
+    names.reserve( followers.size() );
+    for( const auto *it_npc : followers ) {
+        names.emplace_back( it_npc->get_name() );
     }
+    return list_rml( names, followers.empty() ? -1 : selected_npc );
 }
 
-void faction_ui::your_follower_display()
+std::string faction_ui::your_follower_display()
 {
-    const float col_width = ImGui::GetContentRegionAvail().x;
+    std::string rml;
 
     if( picked_follower == nullptr ) {
-        cataimgui::draw_colored_text( _( "You have no followers." ), c_red, col_width );
-        return;
+        rml += text_rml( _( "You have no followers." ), c_red );
+        return rml;
     }
 
     Character &player_character = get_player_character();
@@ -484,7 +475,7 @@ void faction_ui::your_follower_display()
             mission_string = _( "Current Mission: " ) + action_of( c_mission.miss_id.id );
         }
 
-        cataimgui::draw_colored_text( mission_string, col_width );
+        rml += text_rml( mission_string );
 
         // Determine remaining time in mission, and display it
         std::string mission_eta;
@@ -495,7 +486,7 @@ void faction_ui::your_follower_display()
                                                     calendar::turn );
         }
 
-        cataimgui::draw_colored_text( mission_eta, col_width );
+        rml += text_rml( mission_eta );
     }
 
     tripoint_abs_omt guy_abspos = picked_follower->pos_abs_omt();
@@ -517,7 +508,7 @@ void faction_ui::your_follower_display()
     } else {
         dir_text = _( "Direction: Nearby" );
     }
-    cataimgui::draw_colored_text( dir_text, col_width );
+    rml += text_rml( dir_text );
 
     // Location
     std::string stationed_text;
@@ -527,7 +518,7 @@ void faction_ui::your_follower_display()
     } else {
         stationed_text = string_format( _( "Location: %s" ), guy_abspos.to_string() );
     }
-    cataimgui::draw_colored_text( stationed_text, col_width );
+    rml += text_rml( stationed_text );
 
     // Can be radio-ed
     std::string can_see;
@@ -567,11 +558,11 @@ void faction_ui::your_follower_display()
         }
     }
 
-    cataimgui::draw_colored_text( colorize( can_see, see_color ), col_width );
+    rml += text_rml( colorize( can_see, see_color ) );
     if( see_color == c_light_green ) {
         const std::string hint_desc = string_format(
                                           _( "Press [%s] to talk to this follower" ), ctxt.get_desc( "CONFIRM" ) );
-        cataimgui::draw_colored_text( hint_desc, c_light_gray, col_width );
+        rml += text_rml( hint_desc, c_light_gray );
     }
 
 
@@ -582,19 +573,19 @@ void faction_ui::your_follower_display()
     }
     const std::string status_text = string_format( _( "Status: %s" ),
                                     picked_follower->get_current_status() );
-    cataimgui::draw_colored_text( colorize( status_text, status_col ), col_width );
+    rml += text_rml( colorize( status_text, status_col ) );
 
     // Job and station
     if( is_stationed && picked_follower->has_job() ) {
-        cataimgui::draw_colored_text( _( "Working at camp" ), col_width );
+        rml += text_rml( _( "Working at camp" ) );
     } else if( is_stationed ) {
-        cataimgui::draw_colored_text( _( "Idling at camp" ), col_width );
+        rml += text_rml( _( "Idling at camp" ) );
     }
 
     // HP description
     const auto &[hp_desc, hp_color] = picked_follower->hp_description();
     const std::string cond_text = string_format( _( "%s: %s" ), _( "Condition" ), hp_desc );
-    cataimgui::draw_colored_text( cond_text, hp_color, col_width );
+    rml += text_rml( cond_text, hp_color );
 
     // Hunger, thirst, sleepiness
     const auto &[hunger, hunger_color] = display::hunger_text_color( *picked_follower );
@@ -607,14 +598,14 @@ void faction_ui::your_follower_display()
         string_format( "%s: %s", _( "Thirst" ), thirst.empty() ? nominal : thirst );
     const std::string sleepiness_text =
         string_format( _( "%s: %s" ), _( "Sleepiness" ), sleepiness.empty() ? nominal : sleepiness );
-    cataimgui::draw_colored_text( hunger_text, hunger_color, col_width );
-    cataimgui::draw_colored_text( thirst_text, thirst_color, col_width );
-    cataimgui::draw_colored_text( sleepiness_text, sleepiness_color, col_width );
+    rml += text_rml( hunger_text, hunger_color );
+    rml += text_rml( thirst_text, thirst_color );
+    rml += text_rml( sleepiness_text, sleepiness_color );
 
     // Wield
     const std::string wielding_text = string_format( _( "Wielding: %s" ),
                                       picked_follower->weapname_simple() );
-    cataimgui::draw_colored_text( wielding_text, col_width );
+    rml += text_rml( wielding_text );
 
     const auto skillslist = Skill::get_skills_sorted_by( [&]( const Skill & a, const Skill & b ) {
         const int level_a = picked_follower->get_skill_level( a.ident() );
@@ -638,38 +629,23 @@ void faction_ui::your_follower_display()
 
     const std::string space = std::string( "  " );
 
-    cataimgui::draw_colored_text( _( "Best combat skill" ) + std::string( ": " ), col_width );
-    cataimgui::draw_colored_text( space + best_combat_skill_text, col_width );
+    rml += text_rml( _( "Best combat skill" ) + std::string( ": " ) );
+    rml += text_rml( space + best_combat_skill_text );
 
-    cataimgui::draw_colored_text( _( "Best other skills" ) + std::string( ": " ), col_width );
-    cataimgui::draw_colored_text( space + skill_strs[0], col_width );
-    cataimgui::draw_colored_text( space + skill_strs[1], col_width );
-    cataimgui::draw_colored_text( space + skill_strs[2], col_width );
+    rml += text_rml( _( "Best other skills" ) + std::string( ": " ) );
+    rml += text_rml( space + skill_strs[0] );
+    rml += text_rml( space + skill_strs[1] );
+    rml += text_rml( space + skill_strs[2] );
+    return rml;
 }
 
-void faction_ui::draw_other_factions_tab()
+std::string faction_ui::other_factions_tab_rml()
 {
-    if( ImGui::BeginTable( "##Other_Factions", 2, ImGuiTableFlags_SizingFixedFit ) ) {
-        ImGui::TableSetupColumn( "##Faction list", ImGuiTableColumnFlags_WidthFixed,
-                                 get_table_column_width() );
-
-        ImGui::TableSetupColumn( "##Picked faction", ImGuiTableColumnFlags_WidthStretch );
-        ImGui::TableNextColumn();
-
-        draw_other_factions_list();
-
-        ImGui::TableNextColumn();
-        ImGui::BeginChild( "##Camp_Info" );
-
-        cataimgui::set_scroll( s );
-
-        other_faction_display();
-        ImGui::EndChild();
-        ImGui::EndTable();
-    }
+    const std::string list = other_factions_list_rml();
+    return panes_rml( list, other_faction_display() );
 }
 
-void faction_ui::draw_other_factions_list()
+std::string faction_ui::other_factions_list_rml()
 {
     std::vector<const faction *> factions;
     for( const auto &elem : g->faction_manager_ptr->all() ) {
@@ -681,110 +657,67 @@ void faction_ui::draw_other_factions_list()
     }
 
     size_t num_entries = factions.size();
-    const int last_entry = num_entries == 0 ? 0 : ( static_cast<int>( num_entries ) - 1 );
 
     // initialize selected_camp either from already set camp, or from zero if not set
     auto it = std::find( factions.begin(), factions.end(), picked_faction );
     int selected_faction = ( it != factions.end() ) ? std::distance( factions.begin(), it ) : 0;
-    if( last_action == "UP" ) {
-        selected_faction--;
-    } else if( last_action == "DOWN" ) {
-        selected_faction++;
-    }
-
-    if( selected_faction < 0 ) {
-        selected_faction = last_entry;
-    } else if( selected_faction > last_entry ) {
-        selected_faction = 0;
-    };
+    selected_faction = apply_pending( selected_faction, static_cast<int>( num_entries ) );
 
     if( !factions.empty() ) {
         picked_faction = factions[selected_faction];
     }
 
-    if( ImGui::BeginListBox( "##LISTBOX", ImGui::GetContentRegionAvail() ) ) {
-
-        for( size_t i = 0; i < factions.size(); i++ ) {
-            const faction *it_faction = factions[i];
-            const bool is_selected = picked_faction != nullptr && picked_faction == it_faction;
-            ImGui::PushID( i );
-
-            if( ImGui::Selectable( "", is_selected ) ) {
-                // if true, the option was selected, so set bp to what was selected
-                picked_faction = it_faction;
-            }
-
-            if( is_selected ) {
-                ImGui::SetScrollHereY();
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::SameLine();
-            cataimgui::draw_colored_text( it_faction->get_name(), ImGui::GetContentRegionAvail().x );
-
-            ImGui::PopID();
-        }
-        ImGui::EndListBox();
+    std::vector<std::string> names;
+    names.reserve( factions.size() );
+    for( const auto *it_faction : factions ) {
+        names.emplace_back( it_faction->get_name() );
     }
+    return list_rml( names, factions.empty() ? -1 : selected_faction );
 }
 
-void faction_ui::other_faction_display()
+std::string faction_ui::other_faction_display()
 {
-    const float col_width = ImGui::GetContentRegionAvail().x;
+    std::string rml;
 
     if( picked_faction == nullptr ) {
-        cataimgui::draw_colored_text( _( "You don't know of any factions." ), col_width );
-        return;
+        rml += text_rml( _( "You don't know of any factions." ) );
+        return rml;
     }
 
     // Attitude towards you
     const std::string attitude_text = string_format( _( "Attitude to you: %s" ),
                                       fac_ranking_text( picked_faction->likes_u ) );
-    cataimgui::draw_colored_text( attitude_text, col_width );
+    rml += text_rml( attitude_text );
 
 
     // Can you contact them by radio
     const std::vector<npc *> applicable_repres = get_known_faction_radio_representative(
                 picked_faction );
     if( !applicable_repres.empty() ) {
-        cataimgui::draw_colored_text( _( "You know someone from this faction you can contact by radio." ),
-                                      c_green, col_width );
+        rml += text_rml( _( "You know someone from this faction you can contact by radio." ),
+                         c_green );
         if( !has_radio( get_avatar() ) ) {
-            cataimgui::draw_colored_text( _( "Even if you do not have a radio right now." ),
-                                          c_red, col_width );
+            rml += text_rml( _( "Even if you do not have a radio right now." ),
+                             c_red );
         } else {
             const std::string hint_desc = string_format(
                                               _( "Press [%s] to radio the faction representative" ), ctxt.get_desc( "CONFIRM" ) );
-            cataimgui::draw_colored_text( hint_desc, c_light_gray, col_width );
+            rml += text_rml( hint_desc, c_light_gray );
         }
     }
 
     // Description
-    cataimgui::draw_colored_text( picked_faction->desc.translated(), col_width );
+    rml += text_rml( picked_faction->desc.translated() );
+    return rml;
 }
 
-void faction_ui::draw_creatures_tab()
+std::string faction_ui::creatures_tab_rml()
 {
-    if( ImGui::BeginTable( "##Creatures", 2, ImGuiTableFlags_SizingFixedFit ) ) {
-        ImGui::TableSetupColumn( "##Creature list", ImGuiTableColumnFlags_WidthFixed,
-                                 get_table_column_width() );
-
-        ImGui::TableSetupColumn( "##Picked creature", ImGuiTableColumnFlags_WidthStretch );
-        ImGui::TableNextColumn();
-
-        draw_creature_list();
-
-        ImGui::TableNextColumn();
-        ImGui::BeginChild( "##Creature info" );
-
-        cataimgui::set_scroll( s );
-
-        creature_display();
-        ImGui::EndChild();
-        ImGui::EndTable();
-    }
+    const std::string list = creature_list_rml();
+    return panes_rml( list, creature_display() );
 }
 
-void faction_ui::draw_creature_list()
+std::string faction_ui::creature_list_rml()
 {
     Character &player_character = get_player_character();
     std::vector<const mtype_id *> creatures;
@@ -798,72 +731,41 @@ void faction_ui::draw_creature_list()
     } );
 
     size_t num_entries = creatures.size();
-    const int last_entry = num_entries == 0 ? 0 : ( static_cast<int>( num_entries ) - 1 );
 
     // initialize selected_creature either from already set camp, or from zero if not set
     auto it = std::find( creatures.begin(), creatures.end(), picked_creature );
     int selected_creature = ( it != creatures.end() ) ? std::distance( creatures.begin(), it ) : 0;
-    if( last_action == "UP" ) {
-        selected_creature--;
-    } else if( last_action == "DOWN" ) {
-        selected_creature++;
-    }
-
-    if( selected_creature < 0 ) {
-        selected_creature = last_entry;
-    } else if( selected_creature > last_entry ) {
-        selected_creature = 0;
-    };
+    selected_creature = apply_pending( selected_creature, static_cast<int>( num_entries ) );
 
     if( !creatures.empty() ) {
         picked_creature = creatures[selected_creature];
     }
 
-    if( ImGui::BeginListBox( "##LISTBOX", ImGui::GetContentRegionAvail() ) ) {
-
-        for( size_t i = 0; i < creatures.size(); i++ ) {
-            const mtype_id *it_creature = creatures[i];
-            const bool is_selected = picked_creature != nullptr && picked_creature == it_creature;
-            ImGui::PushID( i );
-
-            if( ImGui::Selectable( "", is_selected ) ) {
-                // if true, the option was selected, so set bp to what was selected
-                picked_creature = it_creature;
-            }
-
-            if( is_selected ) {
-                ImGui::SetScrollHereY();
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::SameLine();
-            cataimgui::draw_colored_text( it_creature->obj().nname(), ImGui::GetContentRegionAvail().x );
-
-            ImGui::PopID();
-        }
-        ImGui::EndListBox();
+    std::vector<std::string> names;
+    names.reserve( creatures.size() );
+    for( const auto *it_creature : creatures ) {
+        names.emplace_back( it_creature->obj().nname() );
     }
+    return list_rml( names, creatures.empty() ? -1 : selected_creature );
 }
 
-void faction_ui::creature_display() const
+std::string faction_ui::creature_display() const
 {
-    const float col_width = ImGui::GetContentRegionAvail().x;
+    std::string rml;
 
     if( picked_creature == nullptr ) {
-        cataimgui::draw_colored_text(
-            _( "You haven't recorded sightings of any creatures.  Taking photos can be a good way to keep track of them." ),
-            col_width );
-        return;
+        rml += text_rml( _( "You haven't recorded sightings of any creatures.  Taking photos can be a good way to keep track of them." ) );
+        return rml;
     }
 
     const mtype &cr = picked_creature->obj();
 
     // Name & symbol
-    cataimgui::draw_colored_text( string_format( "%s  %s", colorize( cr.sym, cr.color ), cr.nname() ),
-                                  col_width );
+    rml += text_rml( string_format( "%s  %s", colorize( cr.sym, cr.color ), cr.nname() ) );
 
     // Difficulty
     const std::string diff_str = cr.get_difficulty_description();
-    cataimgui::draw_colored_text( string_format( "%s: %s", _( "Difficulty" ), diff_str ), col_width );
+    rml += text_rml( string_format( "%s: %s", _( "Difficulty" ), diff_str ) );
 
     // Origin
     const std::string origin_list = string_format( "%s: %s", _( "Origin" ),
@@ -871,18 +773,18 @@ void faction_ui::creature_display() const
     []( const std::pair<mtype_id, mod_id> &source ) {
         return string_format( "'%s'", source.second->name() );
     }, enumeration_conjunction::arrow ) );
-    cataimgui::draw_colored_text( origin_list, c_light_gray, col_width );
+    rml += text_rml( origin_list, c_light_gray );
 
     // Size
-    cataimgui::draw_colored_text( string_format( "%s: %s", _( "Size" ), colorize( cr.get_size_name(),
-                                  c_light_gray ) ), col_width );
+    rml += text_rml( string_format( "%s: %s", _( "Size" ), colorize( cr.get_size_name(),
+                     c_light_gray ) ) );
 
     // Species
     const std::string species_list = string_format( "%s: %s", colorize( _( "Species" ), c_white ),
     enumerate_as_string( cr.species_descriptions(), []( const std::string & sp ) {
         return colorize( sp, c_yellow );
     } ) );
-    cataimgui::draw_colored_text( species_list, c_light_gray, col_width );
+    rml += text_rml( species_list, c_light_gray );
 
     // Senses
     std::vector<std::string> senses_str;
@@ -898,94 +800,71 @@ void faction_ui::creature_display() const
     const std::string senses_text =
         string_format( "%s: %s", colorize( _( "Senses" ), c_white ),
                        enumerate_as_string( senses_str ) );
-    cataimgui::draw_colored_text( senses_text, c_light_gray, col_width );
+    rml += text_rml( senses_text, c_light_gray );
 
     // Abilities
     if( cr.has_flag( mon_flag_SWIMS ) || cr.move_skills.swim.has_value() ) {
-        cataimgui::draw_colored_text( _( "It can swim." ), col_width );
+        rml += text_rml( _( "It can swim." ) );
     }
     if( cr.has_flag( mon_flag_FLIES ) ) {
-        cataimgui::draw_colored_text( _( "It can fly." ), col_width );
+        rml += text_rml( _( "It can fly." ) );
     }
     if( cr.has_flag( mon_flag_DIGS ) || cr.move_skills.dig.has_value() ) {
-        cataimgui::draw_colored_text( _( "It can burrow underground." ), col_width );
+        rml += text_rml( _( "It can burrow underground." ) );
     }
     if( cr.has_flag( mon_flag_CLIMBS ) || cr.move_skills.climb.has_value() ) {
-        cataimgui::draw_colored_text( _( "It can climb." ), col_width );
+        rml += text_rml( _( "It can climb." ) );
     }
     if( cr.has_flag( mon_flag_GRABS ) ) {
-        cataimgui::draw_colored_text( _( "It can grab." ), col_width );
+        rml += text_rml( _( "It can grab." ) );
     }
     if( cr.has_flag( mon_flag_VENOM ) ) {
-        cataimgui::draw_colored_text( _( "It can inflict poison." ), col_width );
+        rml += text_rml( _( "It can inflict poison." ) );
     }
     if( cr.has_flag( mon_flag_PARALYZEVENOM ) ) {
-        cataimgui::draw_colored_text( _( "It can inflict paralysis." ), col_width );
+        rml += text_rml( _( "It can inflict paralysis." ) );
     }
 
-    ImGui::NewLine();
+    rml += "<br/>";
     // Description
-    cataimgui::draw_colored_text( cr.get_description(), c_light_gray, col_width );
+    rml += text_rml( cr.get_description(), c_light_gray );
+    return rml;
 }
 
-void faction_ui::draw_controls()
+void faction_ui::on_redraw()
 {
-    if( hide_ui ) {
-        ImGuiWindow *w = ImGui::GetCurrentWindowRead();
-        ImGui::SetWindowHiddenAndSkipItemsForCurrentFrame( w );
-    }
+    // At least half the screen, as the old window was
+    set_size( "70%", "80%" );
+    set_class( "window", "hidden", hide_ui );
 
-    // no need to draw anything if we are exiting
-    if( last_action == "QUIT" ) {
-        return;
-    } else if( last_action == "NEXT_TAB" || last_action == "RIGHT" ) {
-        s = cataimgui::scroll::begin;
-        ++selected_tab;
-    } else if( last_action == "PREV_TAB" || last_action == "LEFT" ) {
-        s = cataimgui::scroll::begin;
-        --selected_tab;
+    set_header( hint_rml() );
+    set_tabs( { _( "Your Faction" ), _( "Your Followers" ), _( "Other Factions" ), _( "Creatures" ) },
+              static_cast<size_t>( selected_tab ) );
+    set_body_scrolls( false );
+    switch( selected_tab ) {
+        case tab_mode::TAB_MYFACTION:
+            set_body( your_faction_tab_rml() );
+            break;
+        case tab_mode::TAB_FOLLOWERS:
+            set_body( your_followers_tab_rml() );
+            break;
+        case tab_mode::TAB_OTHERFACTIONS:
+            set_body( other_factions_tab_rml() );
+            break;
+        case tab_mode::TAB_CREATURES:
+            set_body( creatures_tab_rml() );
+            break;
+        case tab_mode::NUM_TABS:
+            break;
     }
-
-    if( last_action == "PAGE_UP" || last_action == "SCROLL_UP" ) {
-        s = cataimgui::scroll::page_up;
-    } else if( last_action == "PAGE_DOWN" || last_action == "SCROLL_DOWN" ) {
-        s = cataimgui::scroll::page_down;
-    } else if( last_action == "HOME" ) {
-        s = cataimgui::scroll::begin;
-    } else if( last_action == "END" ) {
-        s = cataimgui::scroll::end;
+    if( reveal_selected ) {
+        reveal_selected = false;
+        scroll_into_view( "entry-" + std::to_string( selected_row ) );
+        scroll( "info", rml_ui::scroll::top );
+    } else if( shown_tab != selected_tab ) {
+        scroll( "info", rml_ui::scroll::top );
     }
-
-    draw_hint_section();
-
-    if( ImGui::BeginTabBar( "##Tabs" ) ) {
-        if( cataimgui::BeginTabItem( _( "Your Faction" ), selected_tab == tab_mode::TAB_MYFACTION ) ) {
-            // if we picked the tab via mouse imput, update selected_tab
-            // TODO there seems to be some lag appearing when you pick it with mouse?
-            selected_tab = ImGui::IsItemActive() ? tab_mode::TAB_MYFACTION : selected_tab;
-            draw_your_faction_tab();
-            ImGui::EndTabItem();
-        }
-        if( cataimgui::BeginTabItem( _( "Your Followers" ),
-                                     selected_tab == tab_mode::TAB_FOLLOWERS ) ) {
-            selected_tab = ImGui::IsItemActive() ? tab_mode::TAB_FOLLOWERS : selected_tab;
-            draw_your_followers_tab();
-            ImGui::EndTabItem();
-        }
-        if( cataimgui::BeginTabItem( _( "Other Factions" ),
-                                     selected_tab == tab_mode::TAB_OTHERFACTIONS ) ) {
-            selected_tab = ImGui::IsItemActive() ? tab_mode::TAB_OTHERFACTIONS : selected_tab;
-            draw_other_factions_tab();
-            ImGui::EndTabItem();
-        }
-        if( cataimgui::BeginTabItem( _( "Creatures" ),
-                                     selected_tab == tab_mode::TAB_CREATURES ) ) {
-            selected_tab = ImGui::IsItemActive() ? tab_mode::TAB_CREATURES : selected_tab;
-            draw_creatures_tab();
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-    }
+    shown_tab = selected_tab;
 }
 
 void faction_ui::radio_the_faction()

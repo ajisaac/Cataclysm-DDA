@@ -1,10 +1,8 @@
-#include <imgui/imgui.h>
 #include <algorithm>
 #include <memory>
 
 #include "avatar.h"
 #include "ascii_art.h"
-#include "cata_imgui.h"
 #include "condition.h"
 #include "dialogue.h"
 #include "end_screen.h"
@@ -12,9 +10,10 @@
 #include "event_bus.h"
 #include "game.h"
 #include "generic_factory.h"
-#include "imgui/imgui_stdlib.h"
 #include "input_context.h"
 #include "npc.h" // for parse_tags()! Why!
+#include "rml_markup.h"
+#include "string_formatter.h"
 #include "talker.h"
 #include "ui_manager.h"
 
@@ -62,24 +61,28 @@ void end_screen_data::draw_end_screen_ui( bool actually_dead )
 {
     input_context ctxt;
     ctxt.register_action( "TEXT.CONFIRM" );
+    // For the close button
+    ctxt.register_action( "SELECT" );
     ctxt.set_timeout( 50 );
     end_screen_ui_impl p_impl;
 
     while( true ) {
         ui_manager::redraw_invalidated();
-        std::string action = ctxt.handle_input();
-        if( action == "TEXT.CONFIRM" || !p_impl.get_is_open() ) {
+        const std::string action = p_impl.resolve_click( ctxt.handle_input() );
+        if( action == "TEXT.CONFIRM" || action == "QUIT" ) {
             break;
         }
     }
     if( actually_dead ) {
         avatar &u = get_avatar();
         const bool is_suicide = g->uquit == QUIT_SUICIDE;
-        get_event_bus().send<event_type::game_avatar_death>( u.getID(), u.name, is_suicide, p_impl.text );
+        get_event_bus().send<event_type::game_avatar_death>( u.getID(), u.name, is_suicide,
+                p_impl.last_words() );
     }
 }
 
-void end_screen_ui_impl::draw_controls()
+end_screen_ui_impl::end_screen_ui_impl() :
+    rml_ui::window( _( "The End" ), "end_screen.rml" )
 {
     avatar &u = get_avatar();
     ascii_art_id art = ascii_art_ascii_tombstone;
@@ -107,32 +110,33 @@ void end_screen_ui_impl::draw_controls()
         }
     }
 
+    // The picture, with the added info laid over it at the column and row
+    // each asks for; see .art in end_screen.rml
+    std::string rml;
     if( art.is_valid() ) {
-        cataimgui::PushMonoFont();
-        int row = 1;
+        rml += "<div class=\"art\">";
         for( const std::string &line : art->picture ) {
-            cataimgui::draw_colored_text( line );
-
-            for( const std::pair<std::pair<int, int>, std::string> &info : added_info ) {
-                if( row == info.first.second ) {
-                    std::string translated_info = _( info.second );
-                    parse_tags( translated_info, u, u );
-                    ImGui::SameLine( str_width_to_pixels( info.first.first ), 0 );
-                    cataimgui::draw_colored_text( translated_info );
-                }
-            }
-            row++;
+            rml += "<div class=\"art-line\">" + rml_ui::markup_to_rml( line ) + "</div>";
         }
-        ImGui::PopFont();
+        for( const std::pair<std::pair<int, int>, std::string> &info : added_info ) {
+            std::string translated_info = _( info.second );
+            parse_tags( translated_info, u, u );
+            rml += string_format( "<div class=\"art-info\" style=\"left: %.1fem; top: %dem;\">",
+                                  info.first.first * 0.5f, info.first.second - 1 ) +
+                   rml_ui::markup_to_rml( translated_info ) + "</div>";
+        }
+        rml += "</div>";
     }
+    set_body( rml );
 
     if( !input_label.empty() ) {
-        ImGui::NewLine();
-        ImGui::AlignTextToFramePadding();
-        cataimgui::draw_colored_text( _( input_label ) );
-        ImGui::SameLine( str_width_to_pixels( input_label.size() + 2 ), 0 );
-        ImGui::InputText( "##LAST_WORD_BOX", &text );
-        ImGui::SetKeyboardFocusHere( -1 );
+        set_footer( rml_ui::markup_to_rml( _( input_label ) ) );
+        set_class( "last-words-row", "hidden", false );
+        focus( "last-words" );
     }
+}
 
+std::string end_screen_ui_impl::last_words() const
+{
+    return get_value( "last-words" ).value_or( std::string() );
 }

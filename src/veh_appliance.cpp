@@ -1,3 +1,5 @@
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <initializer_list>
 #include <map>
@@ -10,7 +12,6 @@
 #include "activity_actor_definitions.h"
 #include "cached_options.h"
 #include "calendar.h"
-#include "cata_imgui.h"
 #include "cata_utility.h"
 #include "character.h"
 #include "color.h"
@@ -220,14 +221,10 @@ void veh_app_interact::init_ui_windows( map &here )
     // NOTE: This offset is retained even though the header moved to uilist itself.
     point topleft( TERMX / 2 - win_width / 2, TERMY / 2 - full_height / 2 );
 
-    // Try to align the imgui window to be below the header.
-    // to that end, we have some awkward math translating character positions to screen positions here:
-    ImVec2 text_metrics = { ImGui::CalcTextSize( "X" ).x, ImGui::GetTextLineHeight() };
-    ImVec2 origin = text_metrics * ImVec2{ static_cast<float>( topleft.x ), static_cast<float>( topleft.y + win_height ) };
-    ImVec2 size = text_metrics * ImVec2{ static_cast<float>( win_width ), static_cast<float>( height_input ) };
-    imenu.desired_bounds = { origin.x,
-                             origin.y,
-                             size.x,  // align the width of the input to be the same as the header
+    // Try to align the menu to be below the header, in terminal cells.
+    imenu.desired_bounds = { static_cast<float>( topleft.x ),
+                             static_cast<float>( topleft.y + win_height ),
+                             static_cast<float>( win_width ),  // align the width of the input to be the same as the header
                              -1,      // but let uilist choose the height as it pleases.
                            };
 
@@ -236,29 +233,52 @@ void veh_app_interact::init_ui_windows( map &here )
     imenu.setup();
 }
 
-static void draw_imgui_line( point start, point end, uint32_t line_color, float width )
+// A line, as a quad drawn straight into the display buffer, over the map that
+// was drawn into it before
+static void draw_line( point start, point end, const SDL_FColor &line_color, float width )
 {
-    ImGui::GetBackgroundDrawList()->AddLine(
-    {static_cast<float>( start.x ), static_cast<float>( start.y )},
-    {static_cast<float>( end.x ), static_cast<float>( end.y )},
-    line_color,
-    width
-    );
+    display_buffer_draw_scope draw_scope;
+    if( !draw_scope.should_draw() ) {
+        return;
+    }
+    const float dx = static_cast<float>( end.x - start.x );
+    const float dy = static_cast<float>( end.y - start.y );
+    const float length = std::sqrt( dx * dx + dy * dy );
+    if( length <= 0.0f ) {
+        return;
+    }
+    // Half the width to either side of the line
+    const float nx = -dy / length * width / 2.0f;
+    const float ny = dx / length * width / 2.0f;
+    const auto vertex = [&]( point p, float side ) {
+        SDL_Vertex v{};
+        v.position = SDL_FPoint{ p.x + nx * side, p.y + ny * side };
+        v.color = line_color;
+        return v;
+    };
+    const std::array<SDL_Vertex, 4> vertices = {
+        vertex( start, 1.0f ), vertex( start, -1.0f ), vertex( end, 1.0f ), vertex( end, -1.0f )
+    };
+    const std::array<int, 6> indices = { 0, 1, 2, 2, 1, 3 };
+    SDL_Renderer *renderer = get_sdl_renderer().get();
+    SDL_SetRenderDrawBlendMode( renderer, SDL_BLENDMODE_BLEND );
+    SDL_RenderGeometry( renderer, nullptr, vertices.data(), static_cast<int>( vertices.size() ),
+                        indices.data(), static_cast<int>( indices.size() ) );
 }
 
 static void draw_connection_lines( point start, point end )
 {
 
     // Yellow-ish. TODO: Expose to styles or inherit from one of our yellows?
-    const uint32_t line_color = IM_COL32( 245, 255, 55, 200 );
+    const SDL_FColor line_color = { 245 / 255.0f, 1.0f, 55 / 255.0f, 200 / 255.0f };
 
     //black (used as bordered outline)
-    const uint32_t line_border_color = IM_COL32( 0, 0, 0, 255 );
+    const SDL_FColor line_border_color = { 0.0f, 0.0f, 0.0f, 1.0f };
 
     const float line_width = 4.0f;
 
-    draw_imgui_line( start, end, line_border_color, line_width * 3 );
-    draw_imgui_line( start, end, line_color, line_width );
+    draw_line( start, end, line_border_color, line_width * 3 );
+    draw_line( start, end, line_color, line_width );
 }
 
 static void draw_appliance_connections( vehicle *veh )
@@ -290,7 +310,7 @@ static void draw_appliance_connections( vehicle *veh )
     }
 }
 
-std::string veh_app_interact::draw_info_imgui_header( map &here )
+std::string veh_app_interact::draw_info_header( map &here )
 {
     // Always print this warning and only this warning if we don't have a grid.
     // We should not pretend anything is functional without a battery, because it's not!
@@ -617,7 +637,7 @@ void veh_app_interact::populate_app_actions( map &here )
     const std::string ctxt_letters = ctxt.get_available_single_char_hotkeys();
     imenu.entries.clear();
     imenu.title = veh->name;
-    imenu.text = draw_info_imgui_header( here );
+    imenu.text = draw_info_header( here );
     app_actions.clear();
 
     /******************** General actions ********************/
